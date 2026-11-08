@@ -1,0 +1,882 @@
+/* =====================================================================
+   AuraBox - Views, Lists, Grids, A-Z Index & Queue Styles
+   Responsive Thumb-First Ergonomics (360px-430px Mobile & Desktop)
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   1. Sub-Navegación Superior en Biblioteca
+   --------------------------------------------------------------------- */
+.sub-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sub-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.sub-tab-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.sub-tab-btn.active {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border-color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------------
+   2. Grid de Álbumes
+   --------------------------------------------------------------------- */
+/* Barra de herramientas de Álbumes (Selección múltiple, vistas) */
+.albums-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+
+.albums-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.albums-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+/* Modo móvil estándar: 4 columnas para evitar carátulas gigantes */
+@media (max-width: 500px) {
+  .albums-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+  }
+
+  .album-card {
+    padding: 3px !important;
+    border-radius: 6px !important;
+  }
+
+  .album-card-cover {
+    border-radius: 4px !important;
+    margin-bottom: 3px !important;
+  }
+
+  .album-card-title {
+    font-size: 0.68rem !important;
+    line-height: 1.15 !important;
+  }
+
+  .album-card-artist {
+    font-size: 0.58rem !important;
+    line-height: 1.1 !important;
+  }
+}
+
+/* Modos de densidad forzados por el usuario */
+.albums-grid.density-4col {
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 5px !important;
+}
+
+.albums-grid.density-3col {
+  grid-template-columns: repeat(3, 1fr) !important;
+  gap: 8px !important;
+}
+
+@media (min-width: 768px) {
+  .albums-grid {
+    grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+    gap: 12px;
+  }
+  .albums-grid.density-4col {
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)) !important;
+  }
+  .albums-grid.density-3col {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  }
+}
+
+.album-card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  cursor: pointer;
+  transition: transform var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+  user-select: none;
+}
+
+.album-card:hover {
+  background: var(--bg-surface-elevated);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.album-card:active {
+  transform: scale(0.97);
+}
+
+.album-card.selected {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.album-card-checkbox {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #ffffff;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  z-index: 5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.selection-mode .album-card-checkbox {
+  display: flex;
+}
+
+.album-card.selected .album-card-checkbox {
+  background: var(--accent);
+  border-color: #ffffff;
+}
+
+.album-card-cover {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  object-fit: cover;
+  background-color: var(--bg-surface-elevated);
+  margin-bottom: 5px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+}
+
+.album-card-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.album-card-artist {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.album-card-meta {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Modo Lista de Álbumes */
+.albums-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.album-list-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.album-list-row:hover {
+  background: var(--bg-surface-elevated);
+}
+
+.album-list-row.selected {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.15);
+}
+
+.album-list-cover {
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
+.album-list-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.album-list-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.album-list-artist {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Barra Flotante de Acción para Selección Múltiple */
+.multi-select-bar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--dock-height) + var(--safe-bottom) + 8px);
+  background: rgba(22, 27, 46, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.8), 0 0 20px var(--accent-glow);
+  z-index: 50;
+  animation: slideUp 0.25s ease-out;
+}
+
+.multi-select-bar.hidden {
+  display: none !important;
+}
+
+/* Estilos de la Pestaña Mixes */
+.mix-search-wrapper {
+  position: relative;
+  margin-top: 10px;
+}
+
+.mix-suggestions-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 40;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: none;
+}
+
+.mix-suggestions-dropdown.open {
+  display: block;
+}
+
+.mix-suggestion-item {
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.mix-suggestion-item:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.mix-chips-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.mix-chip {
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mix-chip:hover,
+.mix-chip.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.mix-results-card {
+  margin-top: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------------
+   3. Lista de Artistas
+   --------------------------------------------------------------------- */
+.artists-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.artist-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.artist-row:active {
+  background: var(--bg-surface-elevated);
+  transform: scale(0.98);
+}
+
+.artist-row-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.artist-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: #ffffff;
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.artist-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.artist-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------------
+   4. Índice Alfabético Vertical (A-Z Slider)
+   --------------------------------------------------------------------- */
+.az-index-slider {
+  position: fixed;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  z-index: 30;
+  background: rgba(14, 16, 23, 0.7);
+  backdrop-filter: blur(10px);
+  padding: 6px 3px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  user-select: none;
+}
+
+.az-letter {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  width: 18px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.az-letter:active, .az-letter.active {
+  color: var(--accent-light);
+  font-size: 0.8rem;
+}
+
+/* ---------------------------------------------------------------------
+   5. Lista de Canciones & Explorador de Carpetas
+   --------------------------------------------------------------------- */
+.tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.track-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  gap: 12px;
+  transition: all var(--transition-fast);
+}
+
+.track-row:active {
+  background: var(--bg-surface-elevated);
+}
+
+.track-number {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  width: 20px;
+  text-align: center;
+}
+
+.track-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-artist {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.track-duration {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------
+   6. Vista de Cola (Jukebox Queue con Drag & Drop y Swipe-to-delete)
+   --------------------------------------------------------------------- */
+.queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.queue-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-secondary {
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.btn-secondary:active {
+  background: rgba(255, 255, 255, 0.16);
+  transform: scale(0.95);
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  gap: 12px;
+  touch-action: pan-y;
+  position: relative;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.queue-item.active {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.queue-drag-handle {
+  color: var(--text-muted);
+  cursor: grab;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+}
+
+/* ---------------------------------------------------------------------
+   7. Vista de Ajustes (Hardware, Audio Hi-Fi & Conectividad)
+   --------------------------------------------------------------------- */
+.settings-section {
+  margin-bottom: 24px;
+}
+
+.settings-section-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-light);
+  margin-bottom: 12px;
+}
+
+.settings-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.output-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.output-option.active {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.15);
+}
+
+.output-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------
+   8. Menú Contextual Rápido (Bottom Sheet)
+   --------------------------------------------------------------------- */
+.context-menu-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.7);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+}
+
+.context-menu-modal.active {
+  display: flex;
+}
+
+.context-menu-sheet {
+  width: 100%;
+  max-width: 500px;
+  background: var(--bg-surface-elevated);
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px 16px calc(var(--safe-bottom) + 20px) 16px;
+  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.context-menu-header {
+  margin-bottom: 14px;
+  text-align: center;
+}
+
+.context-menu-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.context-menu-action {
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.context-menu-action:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---------------------------------------------------------------------
+   8. Vista de Radios Web Hi-Fi
+   --------------------------------------------------------------------- */
+.radios-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.radios-genre-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  scrollbar-width: none;
+}
+.radios-genre-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.radio-genre-chip {
+  padding: 5px 12px;
+  font-size: 0.76rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.radio-genre-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.radios-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 500px) {
+  .radios-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+.radio-station-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.radio-station-card:hover {
+  background: var(--bg-surface-elevated);
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+}
+
+.radio-station-card:active {
+  transform: scale(0.98);
+}
+
+.radio-card-icon {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(139, 92, 246, 0.25) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  color: var(--accent-light);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.radio-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.radio-card-title {
+  font-size: 0.90rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.radio-card-sub {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.radio-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.radio-badge-genre {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+.radio-badge-format {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--accent-light);
+  font-weight: 600;
+}
+
+.radio-play-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: transform var(--transition-fast);
+}
+
+.radio-play-btn:hover {
+  transform: scale(1.08);
+}
+
+

@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+  <title>AuraBox — Hi-Fi Audio Jukebox</title>
+  
+  <!-- Configuración PWA y Navegadores Móviles -->
+  <meta name="theme-color" content="#08090d"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="AuraBox"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="icon" type="image/svg+xml" href="/assets/default-cover.svg"/>
+  <link rel="apple-touch-icon" href="/assets/default-cover.svg"/>
+
+  <!-- Hojas de estilo CSS modulares -->
+  <link rel="stylesheet" href="/css/app.css?v=9"/>
+  <link rel="stylesheet" href="/css/player.css?v=9"/>
+  <link rel="stylesheet" href="/css/views.css?v=9"/>
+</head>
+<body>
+  <div id="app">
+    <!-- Cabecera de la Aplicación -->
+    <header class="app-header">
+      <div class="brand-wrapper">
+        <div class="brand-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+        </div>
+        <span class="brand-title">AuraBox</span>
+      </div>
+
+      <div class="header-badges">
+        <button id="btnHeaderNowPlaying" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; border-radius:var(--radius-full); gap:4px; height:32px; background:rgba(99,102,241,0.2); border-color:var(--accent); font-weight:700;" title="Ver reproductor a pantalla completa">
+          <span>🎵</span> <span>Ahora Suena</span>
+        </button>
+        <button id="btnToggleWebStream" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; border-radius:var(--radius-full); gap:4px; height:32px;" title="Escuchar la música en este móvil o PC">
+          <span id="streamIndicatorIcon">📻</span> <span id="streamButtonText">Móvil</span>
+        </button>
+        <div class="badge-output" id="headerOutputBadge" title="Salida activa">
+          <span class="badge-status" id="headerStatusDot"></span>
+          <span id="headerActiveOutput">Jack 3.5mm</span>
+        </div>
+      </div>
+      <!-- Reproductor de audio embebido para transmisión directa al smartphone -->
+      <audio id="webAudioPlayer" preload="none"></audio>
+    </header>
+
+    <!-- Contenido Principal Dinámico -->
+    <main class="main-content">
+      <!-- 1. Vista Biblioteca -->
+      <section id="viewLibrary" class="view-container active">
+        <!-- Sub-pestañas superiores -->
+        <div class="sub-tabs">
+          <button class="sub-tab-btn active" data-subtab="albums">Álbumes</button>
+          <button class="sub-tab-btn" data-subtab="recent">Recientes</button>
+          <button class="sub-tab-btn" data-subtab="artists">Artistas</button>
+          <button class="sub-tab-btn" data-subtab="favorites">Favoritos ♥</button>
+          <button class="sub-tab-btn" data-subtab="radios">Radios</button>
+          <button class="sub-tab-btn" data-subtab="folders">Carpetas</button>
+        </div>
+
+        <div id="libraryContent">
+          <!-- Renderizado dinámico desde views.js -->
+        </div>
+      </section>
+
+      <!-- 2. Vista Buscar -->
+      <section id="viewSearch" class="view-container">
+        <div style="position:relative; margin-bottom:16px;">
+          <input type="text" id="searchInput" placeholder="Buscar canciones, álbumes o artistas..." 
+                 style="width:100%; height:46px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 16px 0 44px; font-size:0.95rem; outline:none;"/>
+          <svg style="position:absolute; left:16px; top:13px; color:var(--text-muted);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
+        <div id="searchResults"></div>
+      </section>
+
+      <!-- 3. Vista Smart Mix -->
+      <section id="viewMixes" class="view-container">
+        <div class="settings-card" style="background:linear-gradient(135deg, rgba(79,70,229,0.2) 0%, rgba(124,58,237,0.1) 100%); border-color:rgba(99,102,241,0.3);">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+            <div style="font-size:1.8rem;">⚡</div>
+            <div>
+              <h2 style="font-size:1.15rem; font-weight:700;">Motor Smart Mix</h2>
+              <p style="font-size:0.8rem; color:var(--text-secondary);">Elige cualquier grupo: busca 10 artistas similares y remezcla 10 temas de cada uno</p>
+            </div>
+          </div>
+
+          <div style="margin-top:14px;">
+            <label style="font-size:0.75rem; font-weight:700; color:var(--accent-light); text-transform:uppercase;">Escribe o busca cualquier Grupo / Artista:</label>
+            <div class="mix-search-wrapper">
+              <input type="text" id="inputMixArtist" placeholder="Ej: Queen, Rosalía, The Cure, Linkin Park, The Beatles, Nirvana..." 
+                     style="width:100%; height:44px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 12px; font-size:0.95rem; outline:none;"/>
+              <div id="mixSuggestions" class="mix-suggestions-dropdown"></div>
+            </div>
+
+            <div style="margin-top:10px;">
+              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">Sugerencias de tu biblioteca:</span>
+              <div class="mix-chips-wrapper" id="mixArtistChips">
+                <!-- Chips inyectados dinámicamente -->
+              </div>
+            </div>
+
+            <button type="button" id="btnGenerateMix" class="btn-secondary" style="width:100%; height:46px; margin-top:14px; background:var(--accent-gradient); border:none; color:#ffffff; font-size:0.95rem; font-weight:700; justify-content:center; box-shadow:0 4px 16px var(--accent-glow);">
+              ⚡ Crear y Remezclar Smart Mix
+            </button>
+          </div>
+        </div>
+
+        <!-- Área de Resultados y Previsualización del Mix -->
+        <div id="mixResultsArea"></div>
+
+        <div style="margin-top:20px;">
+          <h3 class="settings-section-title">Algoritmo de Remezcla</h3>
+          <div class="settings-card" style="font-size:0.85rem; color:var(--text-secondary); line-height:1.6;">
+            • <b>10 Artistas Relacionados:</b> Cruce online con Last.fm/MusicBrainz + acústica offline de tu colección.<br/>
+            • <b>Hasta 10 pistas por artista:</b> Balance equilibrado extraído de tus álbumes y canciones locales/NAS.<br/>
+            • <b>Remezcla Anti-repetición:</b> Intercalado round-robin para que ningún artista suene 2 veces seguidas.
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Vista Cola (Jukebox Queue) -->
+      <section id="viewQueue" class="view-container">
+        <div class="queue-header">
+          <div>
+            <div class="queue-title">Cola de Reproducción</div>
+            <div id="queueTotalCount" style="font-size:0.8rem; color:var(--text-muted);">0 temas</div>
+          </div>
+          <div class="queue-actions">
+            <button id="btnQueueShuffle" class="btn-secondary" title="Barajado anti-repetición">
+              🔀 Shuffle
+            </button>
+            <button id="btnQueueClear" class="btn-secondary" title="Vaciar cola">
+              🗑️ Vaciar
+            </button>
+          </div>
+        </div>
+        <div id="queueList"></div>
+      </section>
+
+      <!-- 5. Vista Ajustes -->
+      <section id="viewSettings" class="view-container">
+        <!-- Salidas de Audio -->
+        <div class="settings-section">
+          <div class="settings-section-title">Salida de Audio Conmutable (Hardware)</div>
+          <div class="settings-card">
+            <div class="output-option active" data-outputid="0">
+              <div>
+                <div class="output-name">Jack 3.5mm Analógico</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">snd_bcm2835 integrado en Raspberry Pi</div>
+              </div>
+              <span class="badge-format">ALSA</span>
+            </div>
+
+            <div class="output-option" data-outputid="1">
+              <div>
+                <div class="output-name">DAC USB Externo</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">Interfaz Plug & Play (hw:1,0)</div>
+              </div>
+              <span class="badge-format">USB</span>
+            </div>
+
+            <div class="output-option" data-outputid="2">
+              <div>
+                <div class="output-name">DAC I2S HAT</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">HiFiBerry / Allo Boss / IQaudio</div>
+              </div>
+              <span class="badge-format">I2S</span>
+            </div>
+
+            <div class="output-option" data-outputid="3">
+              <div>
+                <div class="output-name">Transmisión Web HTTP</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">Stream Hi-Fi 320kbps en puerto 4082</div>
+              </div>
+              <span class="badge-format">STREAM</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Salvaguarda y Hi-Fi -->
+        <div class="settings-section">
+          <div class="settings-section-title">Protección Acústica y Opciones Hi-Fi</div>
+          <div class="settings-card">
+            <div style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:600; margin-bottom:4px;">
+                <span>Límite de Volumen de Salvaguarda</span>
+                <span id="labelMaxVol">85%</span>
+              </div>
+              <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:8px;">Evita picos accidentales al 100% que puedan dañar oídos o altavoces.</p>
+              <input type="range" id="settingMaxVol" min="50" max="100" value="85" style="width:100%; accent-color:var(--accent);"/>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+              <div style="font-size:0.85rem; font-weight:600; margin-bottom:4px;">Normalización de Volumen ReplayGain</div>
+              <p style="font-size:0.75rem; color:var(--text-muted);">Modo pista / álbum automático activado en MPD.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Temporizador de Apagado (Sleep Timer) -->
+        <div class="settings-section">
+          <div class="settings-section-title">Temporizador de Apagado (Sleep Timer)</div>
+          <div class="settings-card">
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+              <button class="btn-secondary btn-sleep-timer" data-minutes="15">15 min</button>
+              <button class="btn-secondary btn-sleep-timer" data-minutes="30">30 min</button>
+              <button class="btn-secondary btn-sleep-timer" data-minutes="45">45 min</button>
+              <button class="btn-secondary btn-sleep-timer" data-minutes="60">60 min</button>
+            </div>
+            <div style="margin-top:8px;">
+              <button class="btn-secondary btn-sleep-timer" data-minutes="0" style="width:100%; justify-content:center; color:var(--color-danger);">
+                Cancelar Temporizador
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fuentes de Almacenamiento en Red (NAS) -->
+        <div class="settings-section">
+          <div class="settings-section-title">Fuentes de Almacenamiento en Red (NAS)</div>
+          
+          <!-- Tarjeta de Estado Activo -->
+          <div class="settings-card" id="nasStatusCard" style="border-left:4px solid var(--color-success); margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+              <div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span style="color:var(--color-success); font-size:1.1rem;">✔</span>
+                  <span style="font-weight:700; font-size:0.95rem;" id="nasCardAlias">Almacenamiento NAS</span>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-secondary); margin-top:3px;" id="nasCardPath">Leyendo configuración...</div>
+              </div>
+              <span class="badge-format" id="nasCardBadge" style="background:rgba(16,185,129,0.15); color:var(--color-success); border-color:rgba(16,185,129,0.3);">SMB / NFS</span>
+            </div>
+          </div>
+
+          <!-- Formulario de Configuración del NAS -->
+          <div class="settings-card">
+            <div style="margin-bottom:10px;">
+              <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Alias</label>
+              <input type="text" id="nasInputAlias" value="" placeholder="mi-nas" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;"/>
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Dirección IP Del NAS</label>
+              <input type="text" id="nasInputHost" value="" placeholder="Ej: 192.168.1.100" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;"/>
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Ruta (Nombre de recurso de red)</label>
+              <input type="text" id="nasInputShare" value="" placeholder="music" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;"/>
+            </div>
+
+            <div style="margin-bottom:10px;">
+              <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Tipo de Recurso Compartido</label>
+              <select id="nasInputType" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;">
+                <option value="cifs" selected>cifs (SMB)</option>
+                <option value="nfs">nfs</option>
+              </select>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+              <div>
+                <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Nombre de Usuario</label>
+                <input type="text" id="nasInputUser" value="" placeholder="Usuario del NAS" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;"/>
+              </div>
+              <div>
+                <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Contraseña</label>
+                <input type="password" id="nasInputPass" value="" placeholder="Contraseña (oculto)" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 10px; font-size:0.9rem;"/>
+              </div>
+            </div>
+
+            <div style="margin-bottom:14px;">
+              <label style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Opciones de Montaje</label>
+              <input type="text" id="nasInputOptions" value="vers=3.0,sec=ntlmssp,ro,iocharset=utf8" style="width:100%; height:38px; margin-top:4px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-secondary); padding:0 10px; font-size:0.8rem;"/>
+            </div>
+
+            <div style="display:flex; gap:8px;">
+              <button id="btnSaveNAS" class="btn-secondary" style="flex:1; height:42px; background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; justify-content:center;">
+                💾 Guardar Configuración NAS
+              </button>
+              <button id="btnRescanNAS" class="btn-secondary" style="height:42px; padding:0 14px; justify-content:center;">
+                🔄 Re-escanear
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Almacenamiento & Biblioteca -->
+        <div class="settings-section">
+          <div class="settings-section-title">Almacenamiento y Medios</div>
+          <div class="settings-card">
+            <button id="btnRescanLibrary" class="btn-secondary" style="width:100%; height:40px; justify-content:center; margin-bottom:8px;">
+              🔄 Re-escanear Toda la Música (Local, NAS, USB)
+            </button>
+            <p style="font-size:0.75rem; color:var(--text-muted);">
+              Soporta pendrives USB con auto-montaje (`udev`), y carpetas compartidas SMB/NFS en <code>/music/nas</code>.
+            </p>
+          </div>
+        </div>
+
+        <!-- Emisoras de Radio Streaming -->
+        <div class="settings-section">
+          <div class="settings-section-title">Emisoras de Radio Web Hi-Fi</div>
+          <div class="settings-card" id="radioStationsList">
+            <!-- Cargado dinámicamente -->
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Índice Alfabético Vertical Flotante -->
+    <nav class="az-index-slider" id="azIndexSlider" aria-label="Índice alfabético"></nav>
+
+    <!-- Mini-Player Persistente Flotante -->
+    <div class="mini-player" id="miniPlayer">
+      <img id="miniCover" class="mini-cover-thumb" src="/assets/default-cover.svg" alt="Carátula"/>
+      <div class="mini-info">
+        <div id="miniTitle" class="mini-title">AuraBox Jukebox</div>
+        <div id="miniArtist" class="mini-artist">Listo para reproducir</div>
+      </div>
+      <div class="mini-controls">
+        <button id="miniBtnPlay" class="btn-mini-play" title="Reproducir/Pausar">
+          <svg id="miniPlayIcon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="8 5 19 12 8 19 8 5"/>
+          </svg>
+        </button>
+        <button id="btnMiniExpand" class="btn-mini-expand" title="Ver en grande a pantalla completa">
+          <span>⛶</span> <span>Ver</span>
+        </button>
+      </div>
+      <div class="mini-progress-track">
+        <div id="miniProgressFill" class="mini-progress-fill"></div>
+      </div>
+    </div>
+
+    <!-- Barra Flotante de Selección Múltiple (Álbumes / Canciones) -->
+    <div class="multi-select-bar hidden" id="multiSelectBar">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:700; font-size:0.88rem; color:#ffffff;" id="multiSelectCount">0 álbumes seleccionados</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button id="btnMultiPlayNow" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; padding:6px 12px; font-size:0.8rem; font-weight:700;">
+          ▶ Reproducir
+        </button>
+        <button id="btnMultiAppend" class="btn-secondary" style="padding:6px 12px; font-size:0.8rem;">
+          ➕ Cola
+        </button>
+        <button id="btnMultiCancel" class="btn-secondary" style="padding:6px 10px; font-size:0.8rem; color:var(--text-muted);" title="Cancelar selección">
+          ✕
+        </button>
+      </div>
+    </div>
+
+    <!-- Barra de Navegación Inferior Fija (Dock Thumb-First) -->
+    <nav class="bottom-dock">
+      <button class="dock-item active" data-tab="library">
+        <div class="dock-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 18V5l12-2v13"/>
+            <circle cx="6" cy="18" r="3"/>
+            <circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <span class="dock-label">Biblioteca</span>
+      </button>
+
+      <button class="dock-item" data-tab="search">
+        <div class="dock-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
+        <span class="dock-label">Buscar</span>
+      </button>
+
+      <button class="dock-item" data-tab="mixes">
+        <div class="dock-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+        </div>
+        <span class="dock-label">Mixes</span>
+      </button>
+
+      <button class="dock-item" data-tab="queue">
+        <div class="dock-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+        </div>
+        <span class="dock-label">Cola</span>
+      </button>
+
+      <button class="dock-item" data-tab="settings">
+        <div class="dock-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </div>
+        <span class="dock-label">Ajustes</span>
+      </button>
+    </nav>
+
+    <!-- Vista Now Playing Envolvente (Fullscreen Modal) -->
+    <div class="now-playing-modal" id="nowPlayingModal">
+      <div class="np-ambient-bg" id="npAmbientBg"></div>
+      
+      <div class="np-content">
+        <div class="np-grabber" id="npGrabber" title="Desliza hacia abajo para cerrar"></div>
+
+        <div class="np-header">
+          <button class="np-header-btn" id="npBtnClose" title="Cerrar">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          
+          <div class="np-badges">
+            <span class="badge-format" id="npHifiBadge">FLAC 96kHz</span>
+            <button type="button" class="badge-format" id="npBadgeLyrics" style="cursor:pointer; background:rgba(99,102,241,0.25); border:1px solid var(--accent); color:var(--accent-light); font-weight:700;">🎤 Letras</button>
+          </div>
+
+          <button class="np-header-btn" id="npBtnLyrics" title="Ver Letras (LRCLIB)">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Carátula Dominante -->
+        <div class="np-artwork-container" id="npArtworkContainer">
+          <img id="npCover" class="np-artwork-img" src="/assets/default-cover.svg" alt="Carátula Now Playing"/>
+        </div>
+
+        <!-- Letras Sincronizadas Conmutables (LRCLIB) -->
+        <div class="np-lyrics-container" id="npLyricsContainer"></div>
+
+        <!-- Título y Artista -->
+        <div class="np-meta-row">
+          <div class="np-track-details">
+            <div id="npTitle" class="np-track-title">Canción</div>
+            <div id="npArtist" class="np-track-artist">Artista</div>
+          </div>
+          <button id="npBtnFav" class="btn-favorite" title="Marcar Favorito">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Barra de Progreso y Tiempo -->
+        <div class="np-timeline">
+          <input type="range" class="timeline-scrubber" id="npTimelineScrubber" min="0" max="100" value="0" step="0.5"/>
+          <div class="timeline-labels">
+            <span id="npTimeElapsed">0:00</span>
+            <span id="npTimeDuration">0:00</span>
+          </div>
+        </div>
+
+        <!-- Controles Principales -->
+        <div class="np-controls-row">
+          <button id="npBtnShuffle" class="btn-np-ctrl" title="Shuffle Anti-repetición">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="16 3 21 3 21 8"/>
+              <line x1="4" y1="20" x2="21" y2="3"/>
+              <polyline points="21 16 21 21 16 21"/>
+              <line x1="15" y1="15" x2="21" y2="21"/>
+              <line x1="4" y1="4" x2="9" y2="9"/>
+            </svg>
+          </button>
+
+          <button id="npBtnPrev" class="btn-np-ctrl" title="Anterior">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="19 20 9 12 19 4 19 20"/>
+              <line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </button>
+
+          <button id="npBtnPlay" class="btn-np-play" title="Play / Pausa">
+            <svg id="npPlayIcon" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="8 5 19 12 8 19 8 5"/>
+            </svg>
+          </button>
+
+          <button id="npBtnNext" class="btn-np-ctrl" title="Siguiente">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 4 15 12 5 20 5 4"/>
+              <line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </button>
+
+          <button id="npBtnRepeat" class="btn-np-ctrl" title="Repetir">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="17 1 21 5 17 9"/>
+              <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+              <polyline points="7 23 3 19 7 15"/>
+              <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Salvaguarda de Volumen con Botones por Pasos -->
+        <div class="np-volume-section">
+          <button id="btnVolMinus" class="btn-vol-step" title="Bajar volumen">-</button>
+          <input type="range" class="volume-slider" id="npVolumeSlider" min="0" max="85" value="65"/>
+          <button id="btnVolPlus" class="btn-vol-step" title="Subir volumen">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Menú Contextual Inferior (Bottom Sheet ⋯) -->
+    <div class="context-menu-modal" id="contextMenuModal">
+      <div class="context-menu-sheet">
+        <div class="context-menu-header">
+          <div class="context-menu-title" id="contextMenuTitle">Opciones de la canción</div>
+        </div>
+
+        <button class="context-menu-action" id="cmenuPlayNow">
+          ▶ <span>Reproducir ahora</span>
+        </button>
+        <button class="context-menu-action" id="cmenuPlayNext">
+          ⏭ <span>Reproducir siguiente</span>
+        </button>
+        <button class="context-menu-action" id="cmenuAppend">
+          ➕ <span>Añadir al final de la cola</span>
+        </button>
+        <button class="context-menu-action" id="cmenuSmartMix">
+          ⚡ <span>Crear Smart Mix de este artista</span>
+        </button>
+        <button class="context-menu-action" id="cmenuToggleFav">
+          <span id="cmenuFavIcon" style="color:#ff4b72;">♥</span> <span id="cmenuToggleFavText">Marcar como favorita</span>
+        </button>
+
+        <button class="btn-secondary" id="btnCloseContextMenu" style="width:100%; height:44px; margin-top:12px; justify-content:center;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
+  <script type="module" src="/js/app.js?v=12"></script>
+</body>
+</html>
+

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="gradBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b" />
+      <stop offset="50%" stop-color="#312e81" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <radialGradient id="vinylGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.8" />
+      <stop offset="60%" stop-color="#4338ca" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="48" fill="url(#gradBg)" />
+  <circle cx="256" cy="256" r="190" fill="#090d16" stroke="#3730a3" stroke-width="4" />
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#1e293b" stroke-width="3" stroke-dasharray="12 8" />
+  <circle cx="256" cy="256" r="110" fill="none" stroke="#334155" stroke-width="2" />
+  <circle cx="256" cy="256" r="70" fill="url(#vinylGlow)" />
+  <circle cx="256" cy="256" r="40" fill="#4f46e5" />
+  <circle cx="256" cy="256" r="16" fill="#090d16" />
+  <!-- Aura Sound Wave Accents -->
+  <path d="M 176 390 Q 256 340 336 390" fill="none" stroke="#818cf8" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+  <path d="M 156 410 Q 256 360 356 410" fill="none" stroke="#a5b4fc" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+</svg>
+

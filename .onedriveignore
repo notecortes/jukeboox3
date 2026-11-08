@@ -1,0 +1,7 @@
+# Ignorar bases de datos locales y archivos temporales de AuraBox
+data/
+*.db
+*.db-wal
+*.db-shm
+music/
+

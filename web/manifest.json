@@ -1,0 +1,19 @@
+{
+  "name": "AuraBox Hi-Fi Jukebox",
+  "short_name": "AuraBox",
+  "description": "Reproductor audiófilo y Jukebox inteligente para Raspberry Pi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0b0e",
+  "theme_color": "#0a0b0e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/default-cover.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

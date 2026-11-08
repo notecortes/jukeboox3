@@ -1,0 +1,33 @@
+# Base de datos y estado generado por los contenedores en ejecución
+data/
+
+# Archivos de música local o montados
+music/local/*
+!music/local/.gitkeep
+music/usb/*
+!music/usb/.gitkeep
+music/nas/*
+!music/nas/.gitkeep
+
+# Credenciales sensibles (contraseña de NAS, tokens)
+.env
+.env.local
+.env.*.local
+*.secret
+
+# Binarios compilados
+aurabox
+aurabox-bin
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Registros y archivos temporales
+*.log
+*.tmp
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+

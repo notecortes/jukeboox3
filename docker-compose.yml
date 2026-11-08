@@ -1,0 +1,92 @@
+services:
+  # =====================================================================
+  # AuraBox - Servidor Web PWA, API REST y Motor Smart Mix
+  # =====================================================================
+  aurabox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aurabox-core
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    ports:
+      - "4080:4080"  # Interfaz Web Principal PWA y API REST
+      - "4081:4081"  # Métricas del Sistema y Panel de Administración
+    devices:
+      - "/dev/snd:/dev/snd"
+    group_add:
+      - "audio"
+    environment:
+      - PORT=4080
+      - ADMIN_PORT=4081
+      - MPD_HOST=mpd
+      - MPD_PORT=6600
+      - MUSIC_LOCAL=/music/local
+      - MUSIC_NAS=/music/nas
+      - MUSIC_USB=/music/usb
+      - DATA_DIR=/app/data
+      - NAS_ALIAS=${NAS_ALIAS:-mi-nas}
+      - NAS_HOST=${NAS_HOST:-}
+      - NAS_SHARE=${NAS_SHARE:-music}
+      - NAS_USER=${NAS_USER:-guest}
+      - NAS_PASS=${NAS_PASS:-}
+      - NAS_OPTIONS=${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8}
+    volumes:
+      # Puntos de montaje de almacenamiento de música
+      - ./music/local:/music/local:ro
+      - nas_music:/music/nas:ro
+      - ./music/usb:/music/usb:ro
+      # Persistencia de base de datos SQLite y caché de carátulas
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./web:/app/web:ro
+    depends_on:
+      - mpd
+    networks:
+      - aurabox-net
+
+  # =====================================================================
+  # MPD - Music Player Daemon (Motor de audio Hi-Fi y ALSA directo)
+  # =====================================================================
+  mpd:
+    build:
+      context: .
+      dockerfile: docker/mpd/Dockerfile
+    container_name: aurabox-mpd
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    ports:
+      - "4600:6600"  # Puerto de control MPD en rango 4000 (evita colisión con 6600)
+      - "4082:4082"  # Transmisión Web HTTP Hi-Fi para smartphones o navegadores
+    devices:
+      - "/dev/snd:/dev/snd"
+    group_add:
+      - "audio"
+    volumes:
+      - ./config/mpd.conf:/etc/mpd.conf:ro
+      - ./data/mpd:/var/lib/mpd
+      - ./music/local:/music/local:ro
+      - nas_music:/music/nas:ro
+      - ./music/usb:/music/usb:ro
+      - ${PULSE_SOCKET:-/dev/null}:/tmp/pulse-socket:ro
+      - ${PULSE_COOKIE:-/dev/null}:/root/.config/pulse/cookie:ro
+    networks:
+      - aurabox-net
+
+volumes:
+  nas_music:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_HOST:-192.168.1.100}/${NAS_SHARE:-music}"
+      o: "username=${NAS_USER:-guest},password=${NAS_PASS:-},${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8}"
+
+networks:
+  aurabox-net:
+    driver: bridge

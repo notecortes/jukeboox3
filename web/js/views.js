@@ -1,0 +1,1549 @@
+// =====================================================================
+// AuraBox - Views, Catalogs, A-Z Index & Context Menu Controller
+// Album Grids, Artists, Search, Smart Mix Generator & Settings
+// =====================================================================
+
+import * as api from './api.js';
+import { state, subscribe, notifyListeners } from './state.js';
+import { formatTime, showToast } from './player.js';
+import { openNowPlaying } from './gestures.js';
+
+// debounce retrasa la ejecución de una función para no sobrecargar el hilo UI con entradas continuas.
+function debounce(fn, wait = 150) {
+  let timeout;
+  return function (...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
+
+// Estado reactivo de selección múltiple y vistas de biblioteca
+let isSelectingAlbums = false;
+let selectedAlbumIds = new Set();
+let albumViewMode = localStorage.getItem('aurabox_album_view') || 'grid-4'; // 'grid-4' | 'grid-3' | 'list'
+let albumFilterQuery = '';
+let radioFilterQuery = '';
+let radioGenreFilter = 'Todos';
+let cachedRadios = [];
+let isGeneratingMix = false;
+
+// initViews inicializa sub-pestañas, índice A-Z, buscador y panel de ajustes.
+export function initViews() {
+  bindSubTabs();
+  bindAZIndex();
+  bindSearch();
+  bindSmartMixView();
+  bindSettingsView();
+  bindContextMenu();
+  bindMultiSelectBar();
+
+  // Cargar catálogo inicial
+  loadLibraryData();
+
+  subscribe((event) => {
+    if (event === 'library_updated') {
+      loadLibraryData();
+      showToast('Biblioteca musical actualizada');
+    }
+  });
+}
+
+// loadLibraryData descarga álbumes, artistas y pistas recientes desde la API Go.
+export async function loadLibraryData() {
+  try {
+    const [albums, artists, recent] = await Promise.all([
+      api.getLibraryAlbums(),
+      api.getLibraryArtists(),
+      api.getLibraryRecent(20)
+    ]);
+    state.library.albums = albums || [];
+    state.library.artists = artists || [];
+    state.library.recentTracks = recent || [];
+
+    renderActiveSubTab();
+    populateSmartMixArtists();
+  } catch (err) {
+    console.error('[Views] Error al cargar biblioteca:', err);
+  }
+}
+
+// bindSubTabs gestiona la navegación entre Álbumes, Artistas, Recientes y Carpetas.
+function bindSubTabs() {
+  const tabs = document.querySelectorAll('.sub-tab-btn');
+  tabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      tabs.forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      state.ui.activeSubTab = tab.dataset.subtab;
+      renderActiveSubTab();
+    });
+  });
+}
+
+// renderActiveSubTab dibuja la vista correspondiente a la sub-pestaña activa.
+function renderActiveSubTab() {
+  const container = document.getElementById('libraryContent');
+  if (!container) return;
+
+  switch (state.ui.activeSubTab) {
+    case 'albums':
+      renderAlbumsGrid(container);
+      break;
+    case 'artists':
+      renderArtistsList(container);
+      break;
+    case 'recent':
+      renderRecentTracks(container);
+      break;
+    case 'favorites':
+      renderFavoritesView(container);
+      break;
+    case 'radios':
+      renderRadiosView(container);
+      break;
+    case 'folders':
+      renderFolderBrowser(container, '');
+      break;
+  }
+}
+
+// cleanDisplayAlbumTitle simplifica nombres cargados de etiquetas técnicas para la interfaz.
+function cleanDisplayAlbumTitle(raw) {
+  if (!raw) return 'Álbum';
+  return raw
+    .replace(/\[(?:FLAC|PMEDIA|Lossless|Hunter|FRG|320kbps|24Bit[^\s]*|[^\]]*)\]/gi, '')
+    .replace(/\((?:19|20)\d{2}[^)]*\)/gi, '')
+    .replace(/⭐️/g, '')
+    .trim();
+}
+
+// renderAlbumsGrid dibuja la cuadrícula o lista compacta con soporte de selección múltiple y carga incremental.
+function renderAlbumsGrid(container) {
+  let albums = state.library.albums || [];
+  if (albumFilterQuery) {
+    const q = albumFilterQuery.toLowerCase();
+    albums = albums.filter(a => (a.title && a.title.toLowerCase().includes(q)) || (a.artist && a.artist.toLowerCase().includes(q)));
+  }
+
+  const isList = (albumViewMode === 'list');
+  const is3Col = (albumViewMode === 'grid-3');
+  const is4Col = (albumViewMode === 'grid-4' || albumViewMode === 'grid');
+  const gridClass = isList ? 'albums-list' : `albums-grid ${is3Col ? 'density-3col' : 'density-4col'}`;
+
+  // Si la barra ya existe en el DOM, solo actualizamos el contenedor para no perder el foco de escritura
+  let albumsContainer = document.getElementById('albumsContainer');
+  let filterInput = document.getElementById('albumFilterInput');
+
+  if (!filterInput || !albumsContainer) {
+    container.innerHTML = `
+      <div class="albums-toolbar">
+        <input type="text" id="albumFilterInput" placeholder="Filtrar álbumes..." value="${escapeHtml(albumFilterQuery)}" style="height:34px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; max-width:200px;"/>
+        <div class="albums-toolbar-actions">
+          <button type="button" id="btnToggleAlbumView" class="btn-secondary" style="height:34px; padding:0 10px; font-size:0.82rem; border-radius:var(--radius-full);" title="Cambiar tamaño de carátulas / lista">
+            ${is4Col ? '⊞ 4 Col' : is3Col ? '⊟ 3 Col' : '☰ Lista'}
+          </button>
+          <button type="button" id="btnToggleSelectAlbums" class="btn-secondary ${isSelectingAlbums ? 'active' : ''}" style="height:34px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); background:${isSelectingAlbums ? 'var(--accent)' : 'var(--bg-surface)'}; color:${isSelectingAlbums ? '#fff' : 'var(--text-secondary)'}; font-weight:600;">
+            ${isSelectingAlbums ? '✓ Listo' : 'Seleccionar'}
+          </button>
+        </div>
+      </div>
+      <div class="${gridClass} ${isSelectingAlbums ? 'selection-mode' : ''}" id="albumsContainer"></div>
+    `;
+
+    filterInput = document.getElementById('albumFilterInput');
+    albumsContainer = document.getElementById('albumsContainer');
+
+    const debouncedFilter = debounce((val) => {
+      albumFilterQuery = val;
+      renderAlbumsGrid(container);
+    }, 150);
+
+    filterInput?.addEventListener('input', (e) => {
+      debouncedFilter(e.target.value);
+    });
+
+    document.getElementById('btnToggleAlbumView')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (is4Col) albumViewMode = 'grid-3';
+      else if (is3Col) albumViewMode = 'list';
+      else albumViewMode = 'grid-4';
+      localStorage.setItem('aurabox_album_view', albumViewMode);
+      renderAlbumsGrid(container);
+    });
+
+    document.getElementById('btnToggleSelectAlbums')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      isSelectingAlbums = !isSelectingAlbums;
+      if (!isSelectingAlbums) {
+        selectedAlbumIds.clear();
+        updateMultiSelectBar();
+      }
+      renderAlbumsGrid(container);
+    });
+  } else {
+    albumsContainer.className = `${gridClass} ${isSelectingAlbums ? 'selection-mode' : ''}`;
+    const btnToggle = document.getElementById('btnToggleAlbumView');
+    if (btnToggle) {
+      btnToggle.textContent = is4Col ? '⊞ 4 Col' : is3Col ? '⊟ 3 Col' : '☰ Lista';
+    }
+    const btnSelect = document.getElementById('btnToggleSelectAlbums');
+    if (btnSelect) {
+      btnSelect.className = `btn-secondary ${isSelectingAlbums ? 'active' : ''}`;
+      btnSelect.style.background = isSelectingAlbums ? 'var(--accent)' : 'var(--bg-surface)';
+      btnSelect.style.color = isSelectingAlbums ? '#fff' : 'var(--text-secondary)';
+      btnSelect.textContent = isSelectingAlbums ? '✓ Listo' : 'Seleccionar';
+    }
+  }
+
+  // Renderizar álbumes en bloques progresivos (chunking)
+  renderAlbumCardsChunked(albumsContainer, albums, isList);
+  updateMultiSelectBar();
+}
+
+// renderAlbumCardsChunked renderiza álbumes progresivamente con IntersectionObserver evitando bloqueos en móviles.
+function renderAlbumCardsChunked(container, albums, isList) {
+  container.innerHTML = '';
+  if (albums.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">No se encontraron álbumes</div>';
+    return;
+  }
+
+  const BATCH_SIZE = 48;
+  let currentIndex = 0;
+
+  function appendBatch() {
+    const end = Math.min(currentIndex + BATCH_SIZE, albums.length);
+    const fragment = document.createDocumentFragment();
+
+    for (let i = currentIndex; i < end; i++) {
+      const album = albums[i];
+      const isSelected = selectedAlbumIds.has(album.id);
+      const cover = album.cover_url || '/assets/default-cover.svg';
+      const displayTitle = cleanDisplayAlbumTitle(album.title);
+
+      if (!isList) {
+        const card = document.createElement('div');
+        card.className = `album-card ${isSelected ? 'selected' : ''}`;
+        if (album.title) {
+          card.id = `album-${album.title.charAt(0).toUpperCase()}`;
+        }
+
+        card.innerHTML = `
+          <div class="album-card-checkbox">${isSelected ? '✓' : ''}</div>
+          <img class="album-card-cover" src="${cover}" alt="${displayTitle}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+          <div class="album-card-title" title="${escapeHtml(album.title)}">${escapeHtml(displayTitle)}</div>
+          <div class="album-card-artist" title="${escapeHtml(album.artist)}">${escapeHtml(album.artist || 'Artista')}</div>
+        `;
+
+        card.addEventListener('click', () => {
+          if (isSelectingAlbums) {
+            if (selectedAlbumIds.has(album.id)) {
+              selectedAlbumIds.delete(album.id);
+              card.classList.remove('selected');
+              card.querySelector('.album-card-checkbox').textContent = '';
+            } else {
+              selectedAlbumIds.add(album.id);
+              card.classList.add('selected');
+              card.querySelector('.album-card-checkbox').textContent = '✓';
+            }
+            updateMultiSelectBar();
+          } else {
+            openAlbumDetail(album.id);
+          }
+        });
+        fragment.appendChild(card);
+      } else {
+        const row = document.createElement('div');
+        row.className = `album-list-row ${isSelected ? 'selected' : ''}`;
+        row.innerHTML = `
+          <img class="album-list-cover" src="${cover}" alt="${displayTitle}" loading="lazy" decoding="async"/>
+          <div class="album-list-info">
+            <div class="album-list-title">${displayTitle}</div>
+            <div class="album-list-artist">${album.artist} ${album.year > 0 ? '• ' + album.year : ''}</div>
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-muted);">${album.track_count || ''} temas</div>
+        `;
+
+        row.addEventListener('click', () => {
+          if (isSelectingAlbums) {
+            if (selectedAlbumIds.has(album.id)) {
+              selectedAlbumIds.delete(album.id);
+              row.classList.remove('selected');
+            } else {
+              selectedAlbumIds.add(album.id);
+              row.classList.add('selected');
+            }
+            updateMultiSelectBar();
+          } else {
+            openAlbumDetail(album.id);
+          }
+        });
+        fragment.appendChild(row);
+      }
+    }
+
+    container.appendChild(fragment);
+    currentIndex = end;
+
+    if (currentIndex < albums.length) {
+      ensureSentinel();
+    }
+  }
+
+  let sentinel = null;
+  let observer = null;
+
+  function ensureSentinel() {
+    if (sentinel && sentinel.parentNode) {
+      sentinel.parentNode.removeChild(sentinel);
+    }
+    sentinel = document.createElement('div');
+    sentinel.className = 'albums-scroll-sentinel';
+    sentinel.style.cssText = 'height:30px; width:100%; grid-column:1/-1; pointer-events:none;';
+    container.appendChild(sentinel);
+
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          observer.disconnect();
+          appendBatch();
+        }
+      }, { rootMargin: '300px' });
+      observer.observe(sentinel);
+    } else {
+      setTimeout(appendBatch, 100);
+    }
+  }
+
+  appendBatch();
+}
+
+// updateMultiSelectBar actualiza la barra flotante de selección múltiple.
+function updateMultiSelectBar() {
+  const bar = document.getElementById('multiSelectBar');
+  const countLabel = document.getElementById('multiSelectCount');
+  if (!bar || !countLabel) return;
+
+  const count = selectedAlbumIds.size;
+  if (count > 0 && isSelectingAlbums) {
+    bar.classList.remove('hidden');
+    countLabel.textContent = `${count} álbum${count > 1 ? 'es' : ''} seleccionado${count > 1 ? 's' : ''}`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+// bindMultiSelectBar conecta los botones de acción para álbumes seleccionados.
+function bindMultiSelectBar() {
+  document.getElementById('btnMultiPlayNow')?.addEventListener('click', async () => {
+    if (selectedAlbumIds.size === 0) return;
+    const ids = Array.from(selectedAlbumIds);
+    showToast(`Reproduciendo ${ids.length} álbumes seleccionados...`);
+    await api.clearQueue();
+    await api.addToQueue({ album_ids: ids, mode: 'play_now' });
+    selectedAlbumIds.clear();
+    isSelectingAlbums = false;
+    updateMultiSelectBar();
+    renderActiveSubTab();
+  });
+
+  document.getElementById('btnMultiAppend')?.addEventListener('click', async () => {
+    if (selectedAlbumIds.size === 0) return;
+    const ids = Array.from(selectedAlbumIds);
+    await api.addToQueue({ album_ids: ids, mode: 'append' });
+    showToast(`Añadidos ${ids.length} álbumes a la cola`);
+    selectedAlbumIds.clear();
+    isSelectingAlbums = false;
+    updateMultiSelectBar();
+    renderActiveSubTab();
+  });
+
+  document.getElementById('btnMultiCancel')?.addEventListener('click', () => {
+    selectedAlbumIds.clear();
+    isSelectingAlbums = false;
+    updateMultiSelectBar();
+    renderActiveSubTab();
+  });
+}
+
+// openAlbumDetail carga y muestra los temas de un álbum con opción de reproducción inmediata.
+async function openAlbumDetail(albumId) {
+  try {
+    const data = await api.getLibraryAlbumDetail(albumId);
+    const container = document.getElementById('libraryContent');
+    if (!container || !data) return;
+
+    const album = data.album;
+    const tracks = data.tracks || [];
+
+    const cover = album.cover_url || '/assets/default-cover.svg';
+    container.innerHTML = `
+      <div style="margin-bottom:16px;">
+        <button id="btnBackToAlbums" class="btn-secondary" style="margin-bottom:12px;">
+          ← Volver a Álbumes
+        </button>
+        <div style="display:flex; gap:16px; align-items:center;">
+          <img src="${cover}" alt="${album.title}" loading="lazy" decoding="async" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
+          <div>
+            <h2 style="font-size:1.25rem; font-weight:700;">${album.title}</h2>
+            <div style="color:var(--text-secondary); font-size:0.9rem;">${album.artist} • ${album.year || ''}</div>
+            <div style="margin-top:8px;">
+              <button id="btnPlayAlbumNow" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#fff;">
+                ▶ Reproducir Álbum (${tracks.length} temas)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tracks-list" id="albumTracksList"></div>
+    `;
+
+    document.getElementById('btnBackToAlbums')?.addEventListener('click', () => renderActiveSubTab());
+    document.getElementById('btnPlayAlbumNow')?.addEventListener('click', () => {
+      api.clearQueue();
+      api.addToQueue({ album_id: album.id, mode: 'append' });
+      showToast(`Reproduciendo álbum: ${album.title}`);
+    });
+
+    const list = document.getElementById('albumTracksList');
+    tracks.forEach((track) => {
+      const row = createTrackRow(track, () => {
+        api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+      });
+      list.appendChild(row);
+    });
+  } catch (err) {
+    showToast('Error al cargar álbum');
+  }
+}
+
+// renderArtistsList dibuja los artistas con botón directo para "Crear Smart Mix".
+function renderArtistsList(container) {
+  const artists = state.library.artists || [];
+  if (artists.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No hay artistas registrados</div>';
+    return;
+  }
+
+  container.innerHTML = '<div class="artists-list" id="artistsList"></div>';
+  const list = document.getElementById('artistsList');
+
+  artists.forEach((art) => {
+    const row = document.createElement('div');
+    row.className = 'artist-row';
+    row.id = `artist-${art.name.charAt(0).toUpperCase()}`;
+
+    const initial = art.name.charAt(0).toUpperCase();
+    row.innerHTML = `
+      <div class="artist-row-left">
+        <div class="artist-avatar">${initial}</div>
+        <div>
+          <div class="artist-name">${art.name}</div>
+          <div class="artist-meta">${art.track_count} temas • ${art.genre || 'Rock'}</div>
+        </div>
+      </div>
+      <button class="btn-secondary btn-quick-mix" style="padding:4px 10px; font-size:0.75rem;">
+        ⚡ Smart Mix
+      </button>
+    `;
+
+    // Tap en botón rápido -> Generar mix instantáneo
+    row.querySelector('.btn-quick-mix').addEventListener('click', (e) => {
+      e.stopPropagation();
+      triggerSmartMix(art.name);
+    });
+
+    // Tap en fila -> Encolar todas sus canciones
+    row.addEventListener('click', () => {
+      api.addToQueue({ artist: art.name, mode: 'play_now' });
+      showToast(`Reproduciendo temas de ${art.name}`);
+    });
+
+    list.appendChild(row);
+  });
+}
+
+// renderRecentTracks dibuja los temas añadidos más recientemente.
+function renderRecentTracks(container) {
+  const tracks = state.library.recentTracks || [];
+  container.innerHTML = '<div class="tracks-list" id="recentTracksList"></div>';
+  const list = document.getElementById('recentTracksList');
+
+  tracks.forEach((track) => {
+    const row = createTrackRow(track, () => {
+      api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+    });
+    list.appendChild(row);
+  });
+}
+
+// renderFavoritesView dibuja la colección de pistas marcadas como favoritas con acciones de reproducción masiva.
+async function renderFavoritesView(container) {
+  container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando canciones favoritas...</div>';
+  try {
+    const data = await api.getFavorites();
+    const tracks = data.tracks || [];
+
+    if (tracks.length === 0) {
+      container.innerHTML = `
+        <div style="text-align:center; padding:60px 20px; color:var(--text-secondary); max-width:400px; margin:0 auto;">
+          <div style="font-size:3.5rem; color:#ff4b72; margin-bottom:16px; opacity:0.8;">♥</div>
+          <h3 style="font-size:1.25rem; font-weight:700; color:var(--text-primary); margin-bottom:8px;">Aún no tienes canciones favoritas</h3>
+          <p style="font-size:0.88rem; line-height:1.5; color:var(--text-muted); margin-bottom:24px;">
+            Pulsa el corazón <b>♥</b> en el reproductor o en cualquier canción de tu biblioteca para guardarla en esta colección.
+          </p>
+          <button class="btn-primary" id="btnExploreLibrary" style="margin:0 auto; padding:10px 24px; font-size:0.9rem; border-radius:var(--radius-full); cursor:pointer;">
+            Explorar Álbumes
+          </button>
+        </div>
+      `;
+      document.getElementById('btnExploreLibrary')?.addEventListener('click', () => {
+        state.ui.activeSubTab = 'albums';
+        document.querySelectorAll('.sub-tab-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.subtab === 'albums');
+        });
+        renderAlbumsGrid(container);
+      });
+      return;
+    }
+
+    // Calcular duración acumulada de las canciones favoritas
+    const totalSec = tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+    const hours = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const durationStr = hours > 0 ? `${hours} h ${mins} min` : `${mins} min`;
+
+    container.innerHTML = `
+      <div class="favorites-banner" style="background:linear-gradient(135deg, rgba(255, 75, 114, 0.16) 0%, rgba(138, 43, 226, 0.10) 100%); border:1px solid rgba(255, 75, 114, 0.25); border-radius:var(--radius-lg); padding:20px; margin-bottom:16px;">
+        <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
+          <div style="width:52px; height:52px; border-radius:var(--radius-md); background:linear-gradient(135deg, #ff4b72, #e02852); display:flex; align-items:center; justify-content:center; font-size:1.7rem; color:#fff; box-shadow:0 4px 16px rgba(255, 75, 114, 0.4);">
+            ♥
+          </div>
+          <div style="flex:1; min-width:0;">
+            <h2 style="font-size:1.25rem; font-weight:700; color:var(--text-primary); margin:0 0 4px 0;">Canciones Favoritas</h2>
+            <div style="font-size:0.82rem; color:var(--text-secondary); font-weight:500;">
+              ${tracks.length} ${tracks.length === 1 ? 'canción' : 'canciones'} • ${durationStr}
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn-primary" id="btnPlayAllFavorites" style="flex:1; min-width:140px; height:42px; border-radius:var(--radius-full); font-size:0.88rem; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer;">
+            ▶ <span>Reproducir todas</span>
+          </button>
+          <button class="btn-secondary" id="btnShuffleFavorites" style="height:42px; padding:0 16px; border-radius:var(--radius-full); font-size:0.88rem; font-weight:600; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            🔀 <span>Aleatorio</span>
+          </button>
+          <button class="btn-secondary" id="btnEnqueueFavorites" style="height:42px; padding:0 16px; border-radius:var(--radius-full); font-size:0.88rem; font-weight:600; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            ➕ <span>Encolar</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="tracks-list" id="favoritesTracksList"></div>
+    `;
+
+    document.getElementById('btnPlayAllFavorites')?.addEventListener('click', async () => {
+      try {
+        await api.playFavorites(false, 'play_now');
+        showToast('Reproduciendo canciones favoritas');
+      } catch (err) {
+        showToast('Error al reproducir favoritas', true);
+      }
+    });
+
+    document.getElementById('btnShuffleFavorites')?.addEventListener('click', async () => {
+      try {
+        await api.playFavorites(true, 'play_now');
+        showToast('Reproduciendo favoritas en modo aleatorio 🔀');
+      } catch (err) {
+        showToast('Error al barajar favoritas', true);
+      }
+    });
+
+    document.getElementById('btnEnqueueFavorites')?.addEventListener('click', async () => {
+      try {
+        await api.playFavorites(false, 'append');
+        showToast(`${tracks.length} canciones añadidas a la cola`);
+      } catch (err) {
+        showToast('Error al encolar favoritas', true);
+      }
+    });
+
+    const list = document.getElementById('favoritesTracksList');
+    tracks.forEach((track) => {
+      const row = createTrackRow(track, () => {
+        api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+      });
+      list.appendChild(row);
+    });
+
+  } catch (err) {
+    container.innerHTML = `<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar favoritas: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// renderFolderBrowser renderiza el explorador de carpetas con migas de pan y controles de reproducción directa.
+async function renderFolderBrowser(container, path = '') {
+  container.innerHTML = '<div style="color:var(--text-muted); padding:20px;">Explorando directorios...</div>';
+  try {
+    const data = await api.getLibraryFolders(path);
+    const items = data.items || [];
+    const isRoot = !path || data.is_root;
+
+    // Calcular migas de pan (breadcrumbs)
+    let breadcrumbHtml = `<span class="folder-crumb" data-path="" style="color:var(--accent-light); font-weight:700; cursor:pointer;">🏠 Raíz</span>`;
+    if (path) {
+      const parts = path.split('/').filter(Boolean);
+      let accumulated = '';
+      parts.forEach((p, idx) => {
+        accumulated += '/' + p;
+        const isLast = (idx === parts.length - 1);
+        breadcrumbHtml += ` <span style="color:var(--text-muted); margin:0 4px;">/</span> `;
+        if (isLast) {
+          breadcrumbHtml += `<span style="color:var(--text-primary); font-weight:700;">${escapeHtml(p)}</span>`;
+        } else {
+          breadcrumbHtml += `<span class="folder-crumb" data-path="${escapeHtml(accumulated)}" style="color:var(--accent-light); cursor:pointer;">${escapeHtml(p)}</span>`;
+        }
+      });
+    }
+
+    // Cabecera y barra de acciones
+    container.innerHTML = `
+      <div class="folder-browser-header" style="margin-bottom:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+          <div style="font-size:0.85rem; line-height:1.6; word-break:break-all;">
+            ${breadcrumbHtml}
+          </div>
+          ${path ? `<button id="btnBackFolder" class="btn-secondary" style="height:32px; padding:0 12px; font-size:0.8rem; border-radius:var(--radius-full);">← Subir un nivel</button>` : ''}
+        </div>
+
+        ${!isRoot ? `
+          <div class="folder-actions-bar" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:var(--bg-surface-elevated); padding:10px 12px; border-radius:var(--radius-md); border:1px solid var(--border-subtle); margin-bottom:12px;">
+            <button id="btnPlayAllFolder" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; font-size:0.82rem; padding:6px 14px; border-radius:var(--radius-full);" title="Reproducir inmediatamente todo el contenido">
+              ▶ Reproducir Carpeta
+            </button>
+            <button id="btnShuffleFolder" class="btn-secondary" style="font-size:0.82rem; padding:6px 12px; border-radius:var(--radius-full);" title="Mezclar y reproducir carpeta">
+              🔀 Mezclar
+            </button>
+            <button id="btnEnqueueFolder" class="btn-secondary" style="font-size:0.82rem; padding:6px 12px; border-radius:var(--radius-full);" title="Añadir carpeta a la cola de reproducción">
+              ➕ Añadir a Cola
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="tracks-list" id="folderItemsList"></div>
+    `;
+
+    // Conectar eventos de migas de pan y subir nivel
+    container.querySelectorAll('.folder-crumb').forEach((crumb) => {
+      crumb.addEventListener('click', () => {
+        renderFolderBrowser(container, crumb.dataset.path);
+      });
+    });
+
+    if (path) {
+      document.getElementById('btnBackFolder')?.addEventListener('click', () => {
+        const parent = path.substring(0, path.lastIndexOf('/'));
+        renderFolderBrowser(container, parent);
+      });
+
+      // Conectar botones de acción de carpeta completa
+      const folderName = path.split('/').filter(Boolean).pop() || 'Carpeta';
+      document.getElementById('btnPlayAllFolder')?.addEventListener('click', async () => {
+        await api.playFolder(path, false);
+        showToast(`▶ Reproduciendo carpeta: ${folderName}`, 'Ver en grande ⛶', openNowPlaying);
+        openNowPlaying();
+      });
+
+      document.getElementById('btnShuffleFolder')?.addEventListener('click', async () => {
+        await api.playFolder(path, true);
+        showToast(`🔀 Mezclando carpeta: ${folderName}`, 'Ver en grande ⛶', openNowPlaying);
+        openNowPlaying();
+      });
+
+      document.getElementById('btnEnqueueFolder')?.addEventListener('click', async () => {
+        await api.enqueueFolder(path, false);
+        showToast(`➕ Carpeta añadida a la cola: ${folderName}`);
+      });
+    }
+
+    const list = document.getElementById('folderItemsList');
+    if (items.length === 0) {
+      list.innerHTML = '<div style="color:var(--text-muted); padding:32px 16px; text-align:center;">Esta carpeta no contiene archivos de audio</div>';
+      return;
+    }
+
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'track-row folder-item-row';
+      row.style.cursor = 'pointer';
+      const isDir = item.is_dir !== false;
+
+      if (isDir) {
+        // Fila de Directorio
+        row.innerHTML = `
+          <div style="font-size:1.2rem; min-width:28px; color:var(--accent-light);">📁</div>
+          <div class="track-info">
+            <div class="track-title" style="font-weight:600;">${escapeHtml(item.name)}</div>
+            <div class="track-artist" style="font-size:0.75rem; color:var(--text-muted);">Carpeta de música</div>
+          </div>
+          <div class="track-right" style="gap:6px;">
+            <button class="btn-icon btn-dir-play" style="width:34px; height:34px; min-width:34px; border-radius:var(--radius-full); background:rgba(99,102,241,0.15); border:1px solid var(--accent); color:var(--accent-light);" title="Reproducir carpeta directamente">
+              ▶
+            </button>
+            <button class="btn-icon btn-dir-add" style="width:34px; height:34px; min-width:34px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-secondary);" title="Añadir a la cola">
+              ➕
+            </button>
+          </div>
+        `;
+
+        // Botón reproducir carpeta directa
+        row.querySelector('.btn-dir-play')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await api.playFolder(item.path, false);
+          showToast(`▶ Reproduciendo carpeta: ${item.name}`, 'Ver en grande ⛶', openNowPlaying);
+          openNowPlaying();
+        });
+
+        // Botón encolar carpeta
+        row.querySelector('.btn-dir-add')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await api.enqueueFolder(item.path, false);
+          showToast(`➕ Añadida a cola: ${item.name}`);
+        });
+
+        // Clic en la fila navega dentro de la carpeta
+        row.addEventListener('click', () => {
+          renderFolderBrowser(container, item.path);
+        });
+      } else {
+        // Fila de Archivo de Audio
+        const ext = item.name.split('.').pop().toUpperCase();
+        const cleanName = item.name.replace(/\.[^/.]+$/, '');
+
+        row.innerHTML = `
+          <div style="font-size:1.1rem; min-width:28px; color:var(--accent);">🎵</div>
+          <div class="track-info">
+            <div class="track-title" style="font-weight:500;">${escapeHtml(cleanName)}</div>
+            <div class="track-artist" style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(item.name)}</div>
+          </div>
+          <div class="track-right" style="gap:6px;">
+            <span class="badge-format" style="font-size:0.7rem; padding:2px 6px;">${ext}</span>
+            <button class="btn-icon btn-file-play" style="width:34px; height:34px; min-width:34px; border-radius:var(--radius-full); background:rgba(99,102,241,0.15); border:1px solid var(--accent); color:var(--accent-light);" title="Reproducir ahora">
+              ▶
+            </button>
+            <button class="btn-icon btn-file-add" style="width:34px; height:34px; min-width:34px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-secondary);" title="Añadir a la cola">
+              ➕
+            </button>
+          </div>
+        `;
+
+        // Botón play en el archivo
+        row.querySelector('.btn-file-play')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await api.playFile(item.path);
+          showToast(`▶ Reproduciendo: ${cleanName}`, 'Ver en grande ⛶', openNowPlaying);
+          openNowPlaying();
+        });
+
+        // Botón añadir a la cola
+        row.querySelector('.btn-file-add')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await api.enqueueFile(item.path);
+          showToast(`➕ Añadido a cola: ${cleanName}`);
+        });
+
+        // Clic en toda la fila reproduce el archivo y abre Now Playing
+        row.addEventListener('click', async () => {
+          await api.playFile(item.path);
+          showToast(`▶ Reproduciendo: ${cleanName}`, 'Ver en grande ⛶', openNowPlaying);
+          openNowPlaying();
+        });
+      }
+
+      list.appendChild(row);
+    });
+  } catch (err) {
+    container.innerHTML = '<div style="color:var(--color-danger); padding:20px;">Error al explorar carpetas: ' + escapeHtml(err.message || 'Error de red') + '</div>';
+  }
+}
+
+// createTrackRow construye el elemento visual de una pista con botón de favorito y menú contextual.
+function createTrackRow(track, onPlayClick) {
+  const row = document.createElement('div');
+  row.className = 'track-row';
+
+  const isFav = !!track.favorite;
+  row.innerHTML = `
+    <span class="track-number">${track.track_number || '•'}</span>
+    <div class="track-info">
+      <div class="track-title">${escapeHtml(track.title || 'Pista')}</div>
+      <div class="track-artist">${escapeHtml(track.artist || 'Artista')}</div>
+    </div>
+    <div class="track-right">
+      <button class="btn-icon btn-track-fav ${isFav ? 'active' : ''}" title="${isFav ? 'Quitar de favoritas' : 'Añadir a favoritas'}" style="width:32px; height:32px; min-width:32px; border:none; background:transparent; font-size:1.15rem; color:${isFav ? '#ff4b72' : 'var(--text-muted)'}; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;">
+        ${isFav ? '♥' : '♡'}
+      </button>
+      <span class="badge-format">${escapeHtml(track.format || 'FLAC')}</span>
+      <span class="track-duration">${formatTime(track.duration)}</span>
+      <button class="btn-icon btn-track-menu" style="width:32px; height:32px; min-width:32px; border:none; background:transparent;">
+        ⋮
+      </button>
+    </div>
+  `;
+
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.btn-track-menu') || e.target.closest('.btn-track-fav')) return;
+    onPlayClick();
+  });
+
+  const favBtn = row.querySelector('.btn-track-fav');
+  if (favBtn) {
+    favBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await api.toggleFavorite(track.id);
+        track.favorite = res.favorite;
+        favBtn.classList.toggle('active', res.favorite);
+        favBtn.innerHTML = res.favorite ? '♥' : '♡';
+        favBtn.style.color = res.favorite ? '#ff4b72' : 'var(--text-muted)';
+        favBtn.title = res.favorite ? 'Quitar de favoritas' : 'Añadir a favoritas';
+        showToast(res.favorite ? 'Añadida a canciones favoritas ♥' : 'Quitada de favoritas');
+        // Si estamos en la sub-pestaña de favoritos y se desmarca, refrescar la lista
+        if (state.ui.activeSubTab === 'favorites') {
+          const container = document.getElementById('libraryContent');
+          if (container) renderFavoritesView(container);
+        }
+      } catch (err) {
+        showToast('Error al actualizar favorita', true);
+      }
+    });
+  }
+
+  row.querySelector('.btn-track-menu').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openContextMenu(track);
+  });
+
+  return row;
+}
+
+// bindAZIndex conecta el índice lateral flotante para salto rápido en scroll.
+function bindAZIndex() {
+  const azContainer = document.getElementById('azIndexSlider');
+  if (!azContainer) return;
+
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ#'.split('');
+  azContainer.innerHTML = '';
+
+  letters.forEach((letter) => {
+    const el = document.createElement('span');
+    el.className = 'az-letter';
+    el.textContent = letter;
+
+    const jumpToLetter = () => {
+      const target = document.getElementById(`album-${letter}`) || document.getElementById(`artist-${letter}`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+
+    el.addEventListener('click', jumpToLetter);
+    azContainer.appendChild(el);
+  });
+}
+
+// bindSearch configura el buscador en tiempo real con debouncing de 200ms.
+function bindSearch() {
+  const input = document.getElementById('searchInput');
+  const resultsContainer = document.getElementById('searchResults');
+  if (!input || !resultsContainer) return;
+
+  let debounceTimer;
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const query = input.value.trim();
+    if (query.length === 0) {
+      resultsContainer.innerHTML = '';
+      return;
+    }
+
+    debounceTimer = setTimeout(async () => {
+      try {
+        const res = await api.search(query);
+        renderSearchResults(resultsContainer, res);
+      } catch (err) {
+        console.error('[Search] Error:', err);
+      }
+    }, 200);
+  });
+}
+
+// renderSearchResults muestra canciones, álbumes y artistas coincidentes con la búsqueda.
+function renderSearchResults(container, data) {
+  container.innerHTML = '';
+
+  if (data.tracks?.length === 0 && data.albums?.length === 0 && data.artists?.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted);">Sin resultados para esta búsqueda</div>';
+    return;
+  }
+
+  // Pistas coincidentes
+  if (data.tracks?.length > 0) {
+    const header = document.createElement('h3');
+    header.className = 'settings-section-title';
+    header.textContent = 'Canciones';
+    container.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'tracks-list';
+    data.tracks.forEach((track) => {
+      const row = createTrackRow(track, () => {
+        api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+      });
+      list.appendChild(row);
+    });
+    container.appendChild(list);
+  }
+
+  // Álbumes coincidentes
+  if (data.albums?.length > 0) {
+    const header = document.createElement('h3');
+    header.className = 'settings-section-title';
+    header.style.marginTop = '18px';
+    header.textContent = 'Álbumes';
+    container.appendChild(header);
+
+    const grid = document.createElement('div');
+    grid.className = 'albums-grid';
+    data.albums.forEach((album) => {
+      const card = document.createElement('div');
+      card.className = 'album-card';
+      const cover = album.cover_url || '/assets/default-cover.svg';
+      card.innerHTML = `
+        <img class="album-card-cover" src="${cover}" alt="${album.title}" loading="lazy" decoding="async"/>
+        <div class="album-card-title">${album.title}</div>
+        <div class="album-card-artist">${album.artist}</div>
+      `;
+      card.addEventListener('click', () => openAlbumDetail(album.id));
+      grid.appendChild(card);
+    });
+    container.appendChild(grid);
+  }
+}
+
+// bindSmartMixView configura el generador inteligente con autocompletado y chips táctiles para cualquier grupo.
+function bindSmartMixView() {
+  const input = document.getElementById('inputMixArtist');
+  const suggestions = document.getElementById('mixSuggestions');
+  const btnGen = document.getElementById('btnGenerateMix');
+
+  if (input && suggestions) {
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      if (!q) {
+        suggestions.classList.remove('open');
+        suggestions.innerHTML = '';
+        return;
+      }
+
+      const matches = (state.library.artists || []).filter(a => a.name.toLowerCase().includes(q)).slice(0, 8);
+      if (matches.length === 0) {
+        suggestions.classList.remove('open');
+        suggestions.innerHTML = '';
+        return;
+      }
+
+      suggestions.innerHTML = matches.map(m => `
+        <div class="mix-suggestion-item" data-artist="${escapeHtml(m.name)}">
+          <b>${escapeHtml(m.name)}</b> <span style="font-size:0.75rem; color:var(--text-muted);">(${m.track_count} temas)</span>
+        </div>
+      `).join('');
+
+      suggestions.querySelectorAll('.mix-suggestion-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          e.preventDefault();
+          input.value = item.dataset.artist;
+          suggestions.classList.remove('open');
+          suggestions.innerHTML = '';
+          triggerSmartMix(item.dataset.artist);
+        });
+      });
+      suggestions.classList.add('open');
+    });
+
+    // Tecla Enter en teclado móvil o de sobremesa: evitar submit de página y lanzar mix
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+        const artist = input.value.trim();
+        if (artist) {
+          suggestions.classList.remove('open');
+          triggerSmartMix(artist);
+        } else {
+          showToast('Escribe o selecciona un grupo o artista');
+        }
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!input.contains(e.target) && !suggestions.contains(e.target)) {
+        suggestions.classList.remove('open');
+      }
+    });
+  }
+
+  if (btnGen) {
+    btnGen.addEventListener('click', (e) => {
+      e.preventDefault();
+      const artist = input ? input.value.trim() : '';
+      if (!artist) {
+        showToast('Escribe o selecciona un grupo o artista');
+        return;
+      }
+      triggerSmartMix(artist);
+    });
+  }
+
+  populateSmartMixArtists();
+}
+
+// populateSmartMixArtists genera chips interactivos para los principales artistas del catálogo.
+function populateSmartMixArtists() {
+  const container = document.getElementById('mixArtistChips');
+  if (!container) return;
+
+  const topArtists = (state.library.artists || [])
+    .filter(a => a.name && !a.name.startsWith('0') && a.name !== 'Artista Desconocido' && a.name !== 'Varios Artistas')
+    .sort((a, b) => (b.track_count || 0) - (a.track_count || 0))
+    .slice(0, 16);
+
+  container.innerHTML = '';
+  topArtists.forEach(art => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'mix-chip';
+    chip.textContent = `${art.name} (${art.track_count})`;
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('inputMixArtist');
+      if (input) input.value = art.name;
+      triggerSmartMix(art.name);
+    });
+    container.appendChild(chip);
+  });
+}
+
+// triggerSmartMix busca 10 artistas similares al elegido, extrae 10 canciones de cada uno y los remezcla.
+async function triggerSmartMix(artist) {
+  if (isGeneratingMix) return;
+  isGeneratingMix = true;
+
+  const resultsArea = document.getElementById('mixResultsArea');
+  showToast(`Buscando 10 artistas similares a ${artist}...`);
+
+  if (resultsArea) {
+    resultsArea.innerHTML = `
+      <div class="mix-results-card" style="text-align:center; padding:30px;">
+        <div style="font-size:2rem; animation: pulse 1s infinite;">⚡</div>
+        <div style="font-size:0.95rem; font-weight:700; margin-top:8px;">Buscando 10 artistas similares a "${escapeHtml(artist)}"...</div>
+        <div style="font-size:0.8rem; color:var(--text-muted); margin-top:4px;">Seleccionando hasta 10 temas por grupo y remezclando sin artistas consecutivos</div>
+      </div>
+    `;
+  }
+
+  try {
+    const res = await api.generateSmartMix(artist, 10, true);
+    if (!res || !res.tracks || res.tracks.length === 0) {
+      if (resultsArea) {
+        resultsArea.innerHTML = `<div class="mix-results-card" style="color:var(--color-danger);">No se encontraron temas suficientes en la biblioteca para generar el mix</div>`;
+      }
+      return;
+    }
+
+    showToast(`¡Smart Mix listo! ${res.tracks.length} temas remezclados`);
+
+    if (resultsArea) {
+      const similarChips = (res.similar_artists || []).map(a => `<span class="badge-format" style="background:rgba(99,102,241,0.18); color:var(--accent-light); margin:3px 2px;">${escapeHtml(a)}</span>`).join(' ');
+      resultsArea.innerHTML = `
+        <div class="mix-results-card">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+            <div>
+              <div style="font-size:0.75rem; text-transform:uppercase; color:var(--accent-light); font-weight:700;">Smart Mix Generado</div>
+              <h3 style="font-size:1.2rem; font-weight:700; margin-top:2px;">${escapeHtml(res.seed_artist)} & 10 Similares</h3>
+              <div style="font-size:0.82rem; color:var(--text-secondary); margin-top:4px;">
+                ${res.count} canciones de ${1 + (res.similar_artists?.length || 0)} artistas intercalados
+              </div>
+            </div>
+            <span class="badge-format" style="background:var(--accent); color:#ffffff; font-weight:700; font-size:0.8rem;">▶ REPRODUCIENDO</span>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:6px; font-weight:600;">Artistas relacionados en esta sesión:</div>
+            <div style="display:flex; flex-wrap:wrap; gap:4px;">
+              ${similarChips || '<span style="font-size:0.8rem; color:var(--text-muted);">Artistas de tu catálogo local</span>'}
+            </div>
+          </div>
+
+          <div style="display:flex; gap:8px; margin-bottom:14px;">
+            <button type="button" id="btnPlayMixNow" class="btn-secondary" style="flex:1; background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; justify-content:center;">
+              ▶ Reiniciar Mix
+            </button>
+            <button type="button" id="btnAppendMixToQueue" class="btn-secondary" style="flex:1; justify-content:center;">
+              ➕ Añadir a Cola
+            </button>
+          </div>
+
+          <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Lista de temas remezclados:</div>
+          <div class="tracks-list" style="max-height:300px; overflow-y:auto; border-radius:var(--radius-sm); border:1px solid var(--border-subtle); padding:4px;">
+            ${res.tracks.map((t, idx) => `
+              <div class="track-row" style="padding:6px 10px;">
+                <span class="track-number" style="font-size:0.75rem;">${idx + 1}</span>
+                <img src="${t.cover_url || '/assets/default-cover.svg'}" alt="" loading="lazy" decoding="async" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
+                <div class="track-info">
+                  <div class="track-title" style="font-size:0.85rem;">${escapeHtml(t.title)}</div>
+                  <div class="track-artist" style="font-size:0.72rem;">${escapeHtml(t.artist)} • ${escapeHtml(t.album)}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      document.getElementById('btnPlayMixNow')?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await api.clearQueue();
+        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'play_now' });
+        showToast('Reproduciendo Smart Mix...');
+      });
+
+      document.getElementById('btnAppendMixToQueue')?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'append' });
+        showToast(`Añadidas ${res.tracks.length} canciones del Mix a la cola`);
+      });
+    }
+  } catch (err) {
+    showToast(`Error al crear mix: ${err.message}`);
+    if (resultsArea) {
+      resultsArea.innerHTML = `<div class="mix-results-card" style="color:var(--color-danger);">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  } finally {
+    isGeneratingMix = false;
+  }
+}
+
+// renderRadiosView dibuja el catálogo completo de emisoras web con buscador debounced y carga por lotes.
+async function renderRadiosView(container) {
+  if (cachedRadios.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando catálogo de radios web...</div>';
+    try {
+      cachedRadios = (await api.getRadios()) || [];
+    } catch (err) {
+      container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar emisoras de radio</div>';
+      return;
+    }
+  }
+
+  // Géneros populares para filtrado rápido
+  const popularGenres = ['Todos', 'Rock', 'Alternative', 'Ambient', 'Classical', 'Jazz', 'Pop', 'Blues', 'Country', 'Electronic', 'Metal', 'Folk', 'World'];
+
+  // Filtrado reactivo
+  const q = radioFilterQuery.trim().toLowerCase();
+  let filtered = cachedRadios;
+  if (radioGenreFilter !== 'Todos') {
+    filtered = filtered.filter(r => (r.genre && r.genre.toLowerCase().includes(radioGenreFilter.toLowerCase())));
+  }
+  if (q) {
+    filtered = filtered.filter(r =>
+      (r.name && r.name.toLowerCase().includes(q)) ||
+      (r.genre && r.genre.toLowerCase().includes(q)) ||
+      (r.broadcaster && r.broadcaster.toLowerCase().includes(q)) ||
+      (r.country && r.country.toLowerCase().includes(q))
+    );
+  }
+
+  let filterInput = document.getElementById('radioFilterInput');
+  let listContainer = document.getElementById('radiosContainer');
+  let countBadge = document.getElementById('radioCountBadge');
+
+  if (!filterInput || !listContainer) {
+    container.innerHTML = `
+      <div class="radios-toolbar">
+        <input type="text" id="radioFilterInput" placeholder="Buscar emisora, género o país..." value="${escapeHtml(radioFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1;"/>
+        <span class="badge-format" id="radioCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem;">${filtered.length} radios</span>
+      </div>
+
+      <div class="radios-genre-chips" id="radioGenreChips">
+        ${popularGenres.map(g => `
+          <button type="button" class="radio-genre-chip ${radioGenreFilter === g ? 'active' : ''}" data-genre="${g}">
+            ${g}
+          </button>
+        `).join('')}
+      </div>
+
+      <div class="radios-grid" id="radiosContainer"></div>
+    `;
+
+    filterInput = document.getElementById('radioFilterInput');
+    listContainer = document.getElementById('radiosContainer');
+    countBadge = document.getElementById('radioCountBadge');
+
+    const debouncedRadioFilter = debounce((val) => {
+      radioFilterQuery = val;
+      renderRadiosView(container);
+    }, 150);
+
+    filterInput?.addEventListener('input', (e) => {
+      debouncedRadioFilter(e.target.value);
+    });
+
+    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        radioGenreFilter = btn.dataset.genre;
+        document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(b => {
+          b.classList.toggle('active', b.dataset.genre === radioGenreFilter);
+        });
+        renderRadiosView(container);
+      });
+    });
+  } else {
+    if (countBadge) countBadge.textContent = `${filtered.length} radios`;
+    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(b => {
+      b.classList.toggle('active', b.dataset.genre === radioGenreFilter);
+    });
+  }
+
+  // Renderizar tarjetas con chunking progresivo
+  renderRadiosChunked(listContainer, filtered);
+}
+
+// renderRadiosChunked dibuja las emisoras en bloques de 40 elementos garantizando carga instantánea.
+function renderRadiosChunked(container, radios) {
+  container.innerHTML = '';
+  if (radios.length === 0) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">No se encontraron emisoras con los criterios actuales</div>';
+    return;
+  }
+
+  const BATCH_SIZE = 40;
+  let currentIndex = 0;
+
+  function appendBatch() {
+    const end = Math.min(currentIndex + BATCH_SIZE, radios.length);
+    const fragment = document.createDocumentFragment();
+
+    for (let i = currentIndex; i < end; i++) {
+      const radio = radios[i];
+      const card = document.createElement('div');
+      card.className = 'radio-station-card';
+
+      const subText = [radio.broadcaster, radio.country].filter(Boolean).join(' • ') || 'Emisora Web';
+      const bitrateText = radio.bitrate ? `${radio.bitrate}k` : '';
+      const formatText = radio.format || 'MP3';
+
+      card.innerHTML = `
+        <div class="radio-card-icon">📻</div>
+        <div class="radio-card-info">
+          <div class="radio-card-title">${escapeHtml(radio.name)}</div>
+          <div class="radio-card-sub">${escapeHtml(subText)}</div>
+          <div class="radio-card-badges">
+            ${radio.genre ? `<span class="radio-badge-genre">${escapeHtml(radio.genre.split(',')[0].trim())}</span>` : ''}
+            <span class="radio-badge-format">${escapeHtml(formatText)} ${escapeHtml(bitrateText)}</span>
+          </div>
+        </div>
+        <button type="button" class="radio-play-btn" title="Reproducir">▶</button>
+      `;
+
+      card.addEventListener('click', (e) => {
+        e.preventDefault();
+        api.playRadio(radio);
+        showToast(`Sintonizando ${radio.name}...`);
+        openNowPlaying();
+      });
+
+      fragment.appendChild(card);
+    }
+
+    container.appendChild(fragment);
+    currentIndex = end;
+
+    if (currentIndex < radios.length) {
+      ensureRadioSentinel();
+    }
+  }
+
+  let sentinel = null;
+  let observer = null;
+
+  function ensureRadioSentinel() {
+    if (sentinel && sentinel.parentNode) {
+      sentinel.parentNode.removeChild(sentinel);
+    }
+    sentinel = document.createElement('div');
+    sentinel.className = 'radios-scroll-sentinel';
+    sentinel.style.cssText = 'height:30px; width:100%; grid-column:1/-1; pointer-events:none;';
+    container.appendChild(sentinel);
+
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          observer.disconnect();
+          appendBatch();
+        }
+      }, { rootMargin: '300px' });
+      observer.observe(sentinel);
+    } else {
+      setTimeout(appendBatch, 100);
+    }
+  }
+
+  appendBatch();
+}
+
+// escapeHtml previene inyecciones XSS al renderizar texto dinámico en el DOM.
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// bindSettingsView gestiona selectores de hardware ALSA, salvaguarda de volumen y ReplayGain.
+function bindSettingsView() {
+  // Escaneo de biblioteca
+  document.getElementById('btnRescanLibrary')?.addEventListener('click', async () => {
+    showToast('Iniciando re-escaneo de música...');
+    await api.triggerLibraryScan();
+  });
+
+  // Conmutador de salidas de audio
+  const outOptions = document.querySelectorAll('.output-option');
+  outOptions.forEach((opt) => {
+    opt.addEventListener('click', async () => {
+      const id = parseInt(opt.dataset.outputid, 10);
+      await api.selectAudioOutput(id);
+      outOptions.forEach((o) => o.classList.remove('active'));
+      opt.classList.add('active');
+      showToast(`Salida conmutada a: ${opt.querySelector('.output-name').textContent}`);
+    });
+  });
+
+  // Temporizador de apagado (Sleep Timer)
+  const sleepButtons = document.querySelectorAll('.btn-sleep-timer');
+  sleepButtons.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const mins = parseInt(btn.dataset.minutes, 10);
+      await api.setSleepTimer(mins);
+      if (mins > 0) {
+        showToast(`Temporizador programado para apagarse en ${mins} minutos`);
+      } else {
+        showToast('Temporizador de apagado desactivado');
+      }
+    });
+  });
+
+  // Cargar emisoras de radio y configuración del NAS
+  loadRadioStations();
+  loadNASConfig();
+
+  // Guardar configuración del NAS
+  document.getElementById('btnSaveNAS')?.addEventListener('click', async () => {
+    const alias = document.getElementById('nasInputAlias')?.value.trim();
+    const host = document.getElementById('nasInputHost')?.value.trim();
+    const share = document.getElementById('nasInputShare')?.value.trim();
+    const username = document.getElementById('nasInputUser')?.value.trim();
+    const password = document.getElementById('nasInputPass')?.value.trim();
+    const options = document.getElementById('nasInputOptions')?.value.trim();
+
+    showToast('Guardando configuración y conectando al NAS...');
+    try {
+      await api.saveNASConfig({ alias, host, share, username, password, options });
+      showToast('Configuración NAS guardada. Re-escaneando...');
+      loadNASConfig();
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    }
+  });
+
+  // Re-escanear NAS
+  document.getElementById('btnRescanNAS')?.addEventListener('click', async () => {
+    showToast('Iniciando re-escaneo del almacenamiento NAS...');
+    await api.triggerLibraryScan();
+  });
+}
+
+// loadNASConfig lee la configuración activa del NAS y actualiza la tarjeta de estado.
+async function loadNASConfig() {
+  try {
+    const data = await api.getNASConfig();
+    if (!data) return;
+
+    if (data.alias && document.getElementById('nasInputAlias')) {
+      document.getElementById('nasInputAlias').value = data.alias;
+      document.getElementById('nasCardAlias').textContent = data.alias;
+    }
+    if (data.host && document.getElementById('nasInputHost')) {
+      document.getElementById('nasInputHost').value = data.host;
+    }
+    if (data.share && document.getElementById('nasInputShare')) {
+      document.getElementById('nasInputShare').value = data.share;
+    }
+    if (data.username && document.getElementById('nasInputUser')) {
+      document.getElementById('nasInputUser').value = data.username;
+    }
+    if (data.options && document.getElementById('nasInputOptions')) {
+      document.getElementById('nasInputOptions').value = data.options;
+    }
+    if (data.path && document.getElementById('nasCardPath')) {
+      document.getElementById('nasCardPath').textContent = data.path;
+    }
+
+    const statusCard = document.getElementById('nasStatusCard');
+    if (statusCard && data.mounted) {
+      statusCard.style.borderColor = 'var(--color-success)';
+    }
+  } catch (err) {
+    console.warn('[NAS] No se pudo leer configuración:', err);
+  }
+}
+
+// loadRadioStations carga emisoras web predeterminadas en Ajustes.
+async function loadRadioStations() {
+  const container = document.getElementById('radioStationsList');
+  if (!container) return;
+
+  try {
+    const radios = await api.getRadios();
+    container.innerHTML = `
+      <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:12px;">
+        ${radios.length} emisoras de alta fidelidad configuradas. Accede al catálogo completo con filtros desde la pestaña <b>Biblioteca → Radios</b>.
+      </div>
+    `;
+    radios.slice(0, 8).forEach((r) => {
+      const card = document.createElement('div');
+      card.className = 'output-option';
+      card.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div style="font-size:1.3rem;">📻</div>
+          <div>
+            <div class="output-name">${escapeHtml(r.name)}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(r.genre)} • ${escapeHtml(r.format || 'MP3')} ${escapeHtml(r.bitrate)}k</div>
+          </div>
+        </div>
+        <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;">▶ Sintonizar</button>
+      `;
+      card.addEventListener('click', (e) => {
+        e.preventDefault();
+        api.playRadio(r);
+        showToast(`Sintonizando: ${r.name}`);
+        openNowPlaying();
+      });
+      container.appendChild(card);
+    });
+  } catch (err) {
+    console.error('[Radios] Error:', err);
+  }
+}
+
+// bindContextMenu conecta las acciones rápidas del Bottom Sheet (⋯).
+function bindContextMenu() {
+  const modal = document.getElementById('contextMenuModal');
+  const btnClose = document.getElementById('btnCloseContextMenu');
+  if (!modal) return;
+
+  if (btnClose) {
+    btnClose.addEventListener('click', closeContextMenu);
+  }
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeContextMenu();
+  });
+
+  // Acciones
+  document.getElementById('cmenuPlayNow')?.addEventListener('click', () => {
+    if (state.ui.contextMenuTarget) {
+      api.addToQueue({ track_ids: [state.ui.contextMenuTarget.id], mode: 'play_now' });
+      showToast('Reproduciendo pista ahora');
+    }
+    closeContextMenu();
+  });
+
+  document.getElementById('cmenuPlayNext')?.addEventListener('click', () => {
+    if (state.ui.contextMenuTarget) {
+      api.addToQueue({ track_ids: [state.ui.contextMenuTarget.id], mode: 'play_next' });
+      showToast('Pista añadida a continuación');
+    }
+    closeContextMenu();
+  });
+
+  document.getElementById('cmenuAppend')?.addEventListener('click', () => {
+    if (state.ui.contextMenuTarget) {
+      api.addToQueue({ track_ids: [state.ui.contextMenuTarget.id], mode: 'append' });
+      showToast('Pista encolada al final');
+    }
+    closeContextMenu();
+  });
+
+  document.getElementById('cmenuSmartMix')?.addEventListener('click', () => {
+    if (state.ui.contextMenuTarget) {
+      triggerSmartMix(state.ui.contextMenuTarget.artist);
+    }
+    closeContextMenu();
+  });
+
+  document.getElementById('cmenuToggleFav')?.addEventListener('click', async () => {
+    if (state.ui.contextMenuTarget) {
+      const target = state.ui.contextMenuTarget;
+      try {
+        const res = await api.toggleFavorite(target.id);
+        target.favorite = res.favorite;
+        showToast(res.favorite ? 'Añadida a canciones favoritas ♥' : 'Quitada de favoritas');
+        if (state.ui.activeSubTab === 'favorites') {
+          const container = document.getElementById('libraryContent');
+          if (container) renderFavoritesView(container);
+        }
+      } catch (err) {
+        showToast('Error al actualizar favorita', true);
+      }
+    }
+    closeContextMenu();
+  });
+}
+
+// openContextMenu despliega el menú contextual de opciones para una pista.
+function openContextMenu(track) {
+  state.ui.contextMenuTarget = track;
+  const modal = document.getElementById('contextMenuModal');
+  const title = document.getElementById('contextMenuTitle');
+  const favText = document.getElementById('cmenuToggleFavText');
+  const favIcon = document.getElementById('cmenuFavIcon');
+
+  if (modal && title) {
+    title.textContent = `${track.title} - ${track.artist}`;
+    if (favText) {
+      favText.textContent = track.favorite ? 'Quitar de favoritas' : 'Marcar como favorita';
+    }
+    if (favIcon) {
+      favIcon.textContent = track.favorite ? '💔' : '♥';
+    }
+    modal.classList.add('active');
+  }
+}
+
+// closeContextMenu cierra el menú contextual inferior.
+function closeContextMenu() {
+  const modal = document.getElementById('contextMenuModal');
+  if (modal) {
+    modal.classList.remove('active');
+    state.ui.contextMenuTarget = null;
+  }
+}
+
