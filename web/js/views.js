@@ -25,6 +25,7 @@ let albumFilterQuery = '';
 let radioFilterQuery = '';
 let radioGenreFilter = 'Todos';
 let cachedRadios = [];
+let hasLoadedRadios = false;
 let isGeneratingMix = false;
 let outputSwitchInFlight = false;
 let outputRefreshInFlight = false;
@@ -1185,29 +1186,124 @@ async function triggerSmartMix(artist) {
   }
 }
 
-// renderRadiosView dibuja el catálogo completo de emisoras web con buscador debounced y carga por lotes.
+// isSpanishRadio identifica si una emisora pertenece a España según su campo país.
+function isSpanishRadio(radio) {
+  if (!radio || !radio.country) return false;
+  const c = radio.country.trim().toLowerCase();
+  return c === 'spain' || c === 'españa' || c === 'espana' || c === 'es';
+}
+
+// tuneRadioStation sintoniza una emisora validando la respuesta del servidor antes de abrir Now Playing.
+async function tuneRadioStation(radio) {
+  if (!radio) return;
+  showToast(`Sintonizando ${radio.name}...`);
+  try {
+    await api.playRadio(radio);
+    openNowPlaying();
+  } catch (err) {
+    showToast(`No se pudo sintonizar ${radio.name}: ${err.message || 'URL inválida'}`);
+  }
+}
+
+// openRadiosCatalog navega directamente a Biblioteca -> Radios aplicando el filtro indicado.
+function openRadiosCatalog(filterGenre = 'Todos') {
+  radioGenreFilter = filterGenre;
+  radioFilterQuery = '';
+  document.querySelector('.dock-item[data-tab="library"]')?.click();
+  state.ui.activeSubTab = 'radios';
+  document.querySelectorAll('.sub-tab-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.subtab === 'radios');
+  });
+  renderActiveSubTab();
+  const mainContent = document.querySelector('.main-content');
+  if (mainContent) mainContent.scrollTop = 0;
+}
+
+// handleSaveCustomRadio guarda una nueva emisora personalizada ingresada por el usuario y recarga la lista.
+async function handleSaveCustomRadio(container) {
+  const nameInput = document.getElementById('newRadioName');
+  const urlInput = document.getElementById('newRadioUrl');
+  const genreInput = document.getElementById('newRadioGenre');
+  const countryInput = document.getElementById('newRadioCountry');
+  const broadcasterInput = document.getElementById('newRadioBroadcaster');
+  const formatSelect = document.getElementById('newRadioFormat');
+  const submitBtn = document.getElementById('btnSubmitNewRadio');
+
+  const name = nameInput ? nameInput.value.trim() : '';
+  const streamURL = urlInput ? urlInput.value.trim() : '';
+  if (!name || !streamURL) {
+    showToast('Indica el nombre y la URL http/https de la emisora');
+    return;
+  }
+
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api.addRadio({
+      name,
+      stream_url: streamURL,
+      genre: (genreInput?.value.trim()) || 'General',
+      country: (countryInput?.value.trim()) || 'Spain',
+      broadcaster: broadcasterInput?.value.trim() || '',
+      format: formatSelect?.value || ''
+    });
+    cachedRadios = (await api.getRadios()) || [];
+    hasLoadedRadios = true;
+    if (nameInput) nameInput.value = '';
+    if (urlInput) urlInput.value = '';
+    if (genreInput) genreInput.value = '';
+    if (broadcasterInput) broadcasterInput.value = '';
+    if (formatSelect) formatSelect.value = '';
+    document.getElementById('addRadioPanel')?.classList.add('hidden');
+    showToast(`Emisora guardada: ${name}`);
+    renderRadiosView(container);
+    loadRadioStations();
+  } catch (err) {
+    showToast(`Error al guardar emisora: ${err.message}`);
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+// handleDeleteCustomRadio elimina una emisora añadida manualmente tras confirmación sencilla.
+async function handleDeleteCustomRadio(radio, container) {
+  if (!radio || !radio.id || radio.is_default) return;
+  try {
+    await api.deleteRadio(radio.id);
+    cachedRadios = cachedRadios.filter((r) => r.id !== radio.id);
+    showToast(`Emisora eliminada: ${radio.name}`);
+    renderRadiosView(container);
+    loadRadioStations();
+  } catch (err) {
+    showToast(`No se pudo eliminar: ${err.message}`);
+  }
+}
+
+// renderRadiosView dibuja el catálogo completo de emisoras web con filtro de España, buscador y alta personalizada.
 async function renderRadiosView(container) {
-  if (cachedRadios.length === 0) {
+  if (!hasLoadedRadios) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando catálogo de radios web...</div>';
     try {
       cachedRadios = (await api.getRadios()) || [];
+      hasLoadedRadios = true;
     } catch (err) {
       container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar emisoras de radio</div>';
       return;
     }
   }
 
-  // Géneros populares para filtrado rápido
-  const popularGenres = ['Todos', 'Rock', 'Alternative', 'Ambient', 'Classical', 'Jazz', 'Pop', 'Blues', 'Country', 'Electronic', 'Metal', 'Folk', 'World'];
+  // Filtros rápidos incluyendo emisoras españolas verificadas
+  const popularGenres = ['Todos', '🇪🇸 España', 'Rock', 'Alternative', 'Pop', 'Jazz', 'Classical', 'Electronic', 'Flamenco', 'News', 'Talk', 'Ambient', 'Blues', 'Folk', 'World'];
 
   // Filtrado reactivo
   const q = radioFilterQuery.trim().toLowerCase();
   let filtered = cachedRadios;
-  if (radioGenreFilter !== 'Todos') {
-    filtered = filtered.filter(r => (r.genre && r.genre.toLowerCase().includes(radioGenreFilter.toLowerCase())));
+  if (radioGenreFilter === '🇪🇸 España') {
+    filtered = filtered.filter(isSpanishRadio);
+  } else if (radioGenreFilter !== 'Todos') {
+    filtered = filtered.filter((r) => (r.genre && r.genre.toLowerCase().includes(radioGenreFilter.toLowerCase())));
   }
   if (q) {
-    filtered = filtered.filter(r =>
+    filtered = filtered.filter((r) =>
       (r.name && r.name.toLowerCase().includes(q)) ||
       (r.genre && r.genre.toLowerCase().includes(q)) ||
       (r.broadcaster && r.broadcaster.toLowerCase().includes(q)) ||
@@ -1222,14 +1318,46 @@ async function renderRadiosView(container) {
   if (!filterInput || !listContainer) {
     container.innerHTML = `
       <div class="radios-toolbar">
-        <input type="text" id="radioFilterInput" placeholder="Buscar emisora, género o país..." value="${escapeHtml(radioFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1;"/>
-        <span class="badge-format" id="radioCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem;">${filtered.length} radios</span>
+        <input type="text" id="radioFilterInput" placeholder="Buscar emisora, género o país..." value="${escapeHtml(radioFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:0;"/>
+        <span class="badge-format" id="radioCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem; white-space:nowrap;">${filtered.length} radios</span>
+        <button type="button" id="btnToggleAddRadio" class="btn-secondary" style="height:38px; padding:0 12px; font-size:0.8rem; border-radius:var(--radius-full); font-weight:700; white-space:nowrap;">
+          + Añadir
+        </button>
+      </div>
+
+      <div id="addRadioPanel" class="add-radio-panel hidden">
+        <div style="font-size:0.84rem; font-weight:700; margin-bottom:8px; color:var(--text-primary);">
+          Añadir emisora web (.mp3, .aac, .m3u, .pls, .m3u8)
+        </div>
+        <form id="addRadioForm" class="add-radio-form">
+          <input type="text" id="newRadioName" placeholder="Nombre de la emisora *" required />
+          <input type="url" id="newRadioUrl" placeholder="URL del stream (https://... o .pls/.m3u/.m3u8) *" required />
+          <div class="add-radio-row">
+            <input type="text" id="newRadioGenre" placeholder="Género (ej: Rock, Noticias)" />
+            <input type="text" id="newRadioCountry" placeholder="País (ej: Spain)" value="Spain" />
+          </div>
+          <div class="add-radio-row">
+            <input type="text" id="newRadioBroadcaster" placeholder="Cadena (opcional)" />
+            <select id="newRadioFormat">
+              <option value="">Formato automático</option>
+              <option value="MP3">MP3</option>
+              <option value="AAC">AAC</option>
+              <option value="HLS">HLS (.m3u8)</option>
+              <option value="FLAC">FLAC</option>
+              <option value="OGG">OGG</option>
+            </select>
+          </div>
+          <div class="add-radio-actions">
+            <button type="submit" id="btnSubmitNewRadio" class="btn-secondary add-radio-submit">💾 Guardar emisora</button>
+            <button type="button" id="btnCancelNewRadio" class="btn-secondary">Cancelar</button>
+          </div>
+        </form>
       </div>
 
       <div class="radios-genre-chips" id="radioGenreChips">
-        ${popularGenres.map(g => `
-          <button type="button" class="radio-genre-chip ${radioGenreFilter === g ? 'active' : ''}" data-genre="${g}">
-            ${g}
+        ${popularGenres.map((g) => `
+          <button type="button" class="radio-genre-chip ${radioGenreFilter === g ? 'active' : ''}" data-genre="${escapeHtml(g)}">
+            ${escapeHtml(g)}
           </button>
         `).join('')}
       </div>
@@ -1250,11 +1378,24 @@ async function renderRadiosView(container) {
       debouncedRadioFilter(e.target.value);
     });
 
-    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(btn => {
+    document.getElementById('btnToggleAddRadio')?.addEventListener('click', () => {
+      document.getElementById('addRadioPanel')?.classList.toggle('hidden');
+    });
+
+    document.getElementById('btnCancelNewRadio')?.addEventListener('click', () => {
+      document.getElementById('addRadioPanel')?.classList.add('hidden');
+    });
+
+    document.getElementById('addRadioForm')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      handleSaveCustomRadio(container);
+    });
+
+    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         radioGenreFilter = btn.dataset.genre;
-        document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(b => {
+        document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach((b) => {
           b.classList.toggle('active', b.dataset.genre === radioGenreFilter);
         });
         renderRadiosView(container);
@@ -1262,17 +1403,17 @@ async function renderRadiosView(container) {
     });
   } else {
     if (countBadge) countBadge.textContent = `${filtered.length} radios`;
-    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach(b => {
+    document.querySelectorAll('#radioGenreChips .radio-genre-chip').forEach((b) => {
       b.classList.toggle('active', b.dataset.genre === radioGenreFilter);
     });
   }
 
   // Renderizar tarjetas con chunking progresivo
-  renderRadiosChunked(listContainer, filtered);
+  renderRadiosChunked(listContainer, filtered, container);
 }
 
 // renderRadiosChunked dibuja las emisoras en bloques de 40 elementos garantizando carga instantánea.
-function renderRadiosChunked(container, radios) {
+function renderRadiosChunked(container, radios, viewContainer) {
   container.innerHTML = '';
   if (radios.length === 0) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">No se encontraron emisoras con los criterios actuales</div>';
@@ -1293,7 +1434,12 @@ function renderRadiosChunked(container, radios) {
 
       const subText = [radio.broadcaster, radio.country].filter(Boolean).join(' • ') || 'Emisora Web';
       const bitrateText = radio.bitrate ? `${radio.bitrate}k` : '';
-      const formatText = radio.format || 'MP3';
+      const formatText = radio.format || 'STREAM';
+      const spanishBadge = isSpanishRadio(radio) ? '<span class="radio-badge-country">🇪🇸 España</span>' : '';
+      const customBadge = (!radio.is_default) ? '<span class="radio-badge-genre">★ Propia</span>' : '';
+      const deleteBtn = (!radio.is_default && radio.id > 0)
+        ? '<button type="button" class="radio-delete-btn" title="Eliminar emisora personalizada">🗑️</button>'
+        : '';
 
       card.innerHTML = `
         <div class="radio-card-icon">📻</div>
@@ -1301,18 +1447,30 @@ function renderRadiosChunked(container, radios) {
           <div class="radio-card-title">${escapeHtml(radio.name)}</div>
           <div class="radio-card-sub">${escapeHtml(subText)}</div>
           <div class="radio-card-badges">
+            ${spanishBadge}
+            ${customBadge}
             ${radio.genre ? `<span class="radio-badge-genre">${escapeHtml(radio.genre.split(',')[0].trim())}</span>` : ''}
             <span class="radio-badge-format">${escapeHtml(formatText)} ${escapeHtml(bitrateText)}</span>
           </div>
         </div>
-        <button type="button" class="radio-play-btn" title="Reproducir">▶</button>
+        <div class="radio-card-actions">
+          ${deleteBtn}
+          <button type="button" class="radio-play-btn" title="Reproducir">▶</button>
+        </div>
       `;
 
+      const delBtnEl = card.querySelector('.radio-delete-btn');
+      if (delBtnEl) {
+        delBtnEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleDeleteCustomRadio(radio, viewContainer);
+        });
+      }
+
       card.addEventListener('click', (e) => {
+        if (e.target.closest('.radio-delete-btn')) return;
         e.preventDefault();
-        api.playRadio(radio);
-        showToast(`Sintonizando ${radio.name}...`);
-        openNowPlaying();
+        tuneRadioStation(radio);
       });
 
       fragment.appendChild(card);
@@ -1747,36 +1905,87 @@ async function loadSecurityStatus() {
   }
 }
 
-// loadRadioStations carga emisoras web predeterminadas en Ajustes.
+// loadRadioStations carga emisoras web destacadas (priorizando España) y accesos rápidos en Ajustes.
 async function loadRadioStations() {
   const container = document.getElementById('radioStationsList');
   if (!container) return;
 
   try {
-    const radios = await api.getRadios();
+    const radios = (await api.getRadios()) || [];
+    cachedRadios = radios;
+    hasLoadedRadios = true;
+    const spanishRadios = radios.filter(isSpanishRadio);
+
+    const priorityNames = [
+      'RNE Radio Nacional',
+      'RNE Radio 3',
+      'RNE Radio Clásica',
+      'Cadena SER',
+      'COPE Nacional',
+      'Onda Cero',
+      'LOS40',
+      'Rock FM España'
+    ];
+    const preview = [];
+    const seenIds = new Set();
+    priorityNames.forEach((targetName) => {
+      const match = radios.find((r) => r.name === targetName);
+      if (match && !seenIds.has(match.stream_url)) {
+        seenIds.add(match.stream_url);
+        preview.push(match);
+      }
+    });
+    spanishRadios.forEach((r) => {
+      if (preview.length < 8 && !seenIds.has(r.stream_url)) {
+        seenIds.add(r.stream_url);
+        preview.push(r);
+      }
+    });
+    radios.forEach((r) => {
+      if (preview.length < 8 && !seenIds.has(r.stream_url)) {
+        seenIds.add(r.stream_url);
+        preview.push(r);
+      }
+    });
+
     container.innerHTML = `
-      <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:12px;">
-        ${radios.length} emisoras de alta fidelidad configuradas. Accede al catálogo completo con filtros desde la pestaña <b>Biblioteca → Radios</b>.
+      <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;">
+        <b>${radios.length}</b> emisoras de alta fidelidad configuradas (<b>${spanishRadios.length}</b> de España).
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <button type="button" id="btnSettingsOpenSpanishRadios" class="btn-secondary" style="flex:1; min-width:140px; height:36px; justify-content:center; font-size:0.78rem;">
+          🇪🇸 Ver emisoras España (${spanishRadios.length})
+        </button>
+        <button type="button" id="btnSettingsOpenAllRadios" class="btn-secondary" style="flex:1; min-width:140px; height:36px; justify-content:center; font-size:0.78rem;">
+          📻 Catálogo completo
+        </button>
       </div>
     `;
-    radios.slice(0, 8).forEach((r) => {
+
+    document.getElementById('btnSettingsOpenSpanishRadios')?.addEventListener('click', () => {
+      openRadiosCatalog('🇪🇸 España');
+    });
+    document.getElementById('btnSettingsOpenAllRadios')?.addEventListener('click', () => {
+      openRadiosCatalog('Todos');
+    });
+
+    preview.forEach((r) => {
       const card = document.createElement('div');
       card.className = 'output-option';
+      const flagPrefix = isSpanishRadio(r) ? '🇪🇸 ' : '';
       card.innerHTML = `
-        <div style="display:flex; align-items:center; gap:10px;">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
           <div style="font-size:1.3rem;">📻</div>
-          <div>
-            <div class="output-name">${escapeHtml(r.name)}</div>
-            <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(r.genre)} • ${escapeHtml(r.format || 'MP3')} ${escapeHtml(r.bitrate)}k</div>
+          <div style="min-width:0;">
+            <div class="output-name">${flagPrefix}${escapeHtml(r.name)}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(r.genre)} • ${escapeHtml(r.format || 'STREAM')} ${escapeHtml(r.bitrate)}k</div>
           </div>
         </div>
         <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;">▶ Sintonizar</button>
       `;
       card.addEventListener('click', (e) => {
         e.preventDefault();
-        api.playRadio(r);
-        showToast(`Sintonizando: ${r.name}`);
-        openNowPlaying();
+        tuneRadioStation(r);
       });
       container.appendChild(card);
     });

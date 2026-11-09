@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -235,6 +236,79 @@ func TestInMemoryDBCompatibility(t *testing.T) {
 	}
 	if got := d.GetSetting("scanner_version", ""); got != "2" {
 		t.Fatalf("GetSetting esperado '2', obtenido %q", got)
+	}
+}
+
+// TestEmbeddedRadiosSeededAndCRUD verifica el sembrado automático de emisoras embebidas (incluidas españolas) y el alta/borrado de radios personalizadas.
+func TestEmbeddedRadiosSeededAndCRUD(t *testing.T) {
+	d, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB(:memory:) falló: %v", err)
+	}
+	defer d.Close()
+
+	radios, err := d.GetRadios()
+	if err != nil {
+		t.Fatalf("GetRadios falló: %v", err)
+	}
+	if len(radios) < 280 {
+		t.Fatalf("se esperaban al menos 280 emisoras sembradas desde default_radios.json embebido, obtenidas %d", len(radios))
+	}
+
+	spanishCount := 0
+	var foundRNE bool
+	var defaultStation RadioStation
+	for _, r := range radios {
+		if strings.EqualFold(r.Country, "Spain") {
+			spanishCount++
+		}
+		if r.Name == "RNE Radio Nacional" {
+			foundRNE = true
+		}
+		if r.IsDefault && defaultStation.ID == 0 {
+			defaultStation = r
+		}
+	}
+	if spanishCount < 45 || !foundRNE {
+		t.Fatalf("catálogo español incompleto (spanishCount=%d, foundRNE=%v)", spanishCount, foundRNE)
+	}
+
+	custom := RadioStation{
+		Name:        "Mi Radio Indie Test",
+		StreamURL:   "https://example.org/stream/live.pls",
+		Genre:       "Indie",
+		Broadcaster: "Indie Lab",
+		Country:     "Spain",
+		Bitrate:     "192",
+		Format:      "STREAM",
+	}
+	if err := d.AddRadio(&custom); err != nil {
+		t.Fatalf("AddRadio falló: %v", err)
+	}
+	if custom.ID <= 0 || custom.IsDefault {
+		t.Fatalf("emisora personalizada mal guardada: %+v", custom)
+	}
+
+	fetched, err := d.GetRadioByStreamURL(custom.StreamURL)
+	if err != nil || fetched.ID != custom.ID {
+		t.Fatalf("GetRadioByStreamURL falló: err=%v fetched=%+v", err, fetched)
+	}
+
+	dupDefault := custom
+	dupDefault.Name = "Intento Sobrescribir"
+	dupDefault.StreamURL = defaultStation.StreamURL
+	if err := d.AddRadio(&dupDefault); err == nil {
+		t.Fatalf("AddRadio no debería sobrescribir una emisora integrada existente (%s)", defaultStation.Name)
+	}
+
+	if err := d.DeleteRadio(defaultStation.ID); err == nil {
+		t.Fatalf("DeleteRadio no debería borrar una emisora predeterminada (ID=%d)", defaultStation.ID)
+	}
+	if err := d.DeleteRadio(custom.ID); err != nil {
+		t.Fatalf("DeleteRadio personalizada falló: %v", err)
+	}
+	if _, err := d.GetRadioByStreamURL(custom.StreamURL); err == nil {
+		t.Fatalf("GetRadioByStreamURL debería fallar tras eliminar la emisora")
 	}
 }
 

@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -356,5 +359,181 @@ func TestAudioDiagnosticsAndRefresh(t *testing.T) {
 	}
 	if !strings.Contains(diag.AlsaRaw, "USB Audio CODEC") {
 		t.Fatalf("AlsaRaw no contiene la tarjeta esperada: %q", diag.AlsaRaw)
+	}
+}
+
+// TestResolveStreamURLsAndPlaylistParsing verifica resolución de .pls/.m3u, paso directo de HLS .m3u8 y bloqueo de URLs inválidas.
+func TestResolveStreamURLsAndPlaylistParsing(t *testing.T) {
+	if _, err := ValidateHTTPStreamURL("ftp://example.org/radio.mp3"); err == nil {
+		t.Fatalf("ValidateHTTPStreamURL debía rechazar protocolo ftp://")
+	}
+	if _, err := ValidateHTTPStreamURL(""); err == nil {
+		t.Fatalf("ValidateHTTPStreamURL debía rechazar URL vacía")
+	}
+
+	var tsURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/station.pls", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/x-scpls")
+		_, _ = w.Write([]byte("[playlist]\nFile1=https://stream.example.org/a.mp3\nFile2=/mirror/b.mp3\nNumberOfEntries=2\n"))
+	})
+	mux.HandleFunc("/station.m3u", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/x-mpegurl")
+		_, _ = w.Write([]byte("\ufeff#EXTM3U\n#EXTINF:-1,Radio Prueba\nhttps://cdn.example.org/live.aac\n"))
+	})
+	mux.HandleFunc("/hls/live.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("no se debe descargar una URL .m3u8 antes de pasarla a MPD")
+	})
+	mux.HandleFunc("/hls.m3u", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = w.Write([]byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nchunklist.m3u8\n"))
+	})
+	mux.HandleFunc("/audio.pls", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg; charset=utf-8")
+		_, _ = w.Write([]byte("MP3_STREAM_BYTES"))
+	})
+	mux.HandleFunc("/missing.pls", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	tsURL = ts.URL
+
+	plsURLs, err := ResolveStreamURLs(tsURL + "/station.pls")
+	if err != nil {
+		t.Fatalf("ResolveStreamURLs(.pls) falló: %v", err)
+	}
+	if len(plsURLs) != 2 || plsURLs[0] != "https://stream.example.org/a.mp3" || plsURLs[1] != tsURL+"/mirror/b.mp3" {
+		t.Fatalf("URLs resueltas de .pls inesperadas: %v", plsURLs)
+	}
+
+	m3uURLs, err := ResolveStreamURLs(tsURL + "/station.m3u")
+	if err != nil {
+		t.Fatalf("ResolveStreamURLs(.m3u) falló: %v", err)
+	}
+	if len(m3uURLs) != 1 || m3uURLs[0] != "https://cdn.example.org/live.aac" {
+		t.Fatalf("URL resuelta de .m3u inesperada: %v", m3uURLs)
+	}
+
+	m3u8Direct, err := ResolveStreamURLs(tsURL + "/hls/live.m3u8")
+	if err != nil || len(m3u8Direct) != 1 || m3u8Direct[0] != tsURL+"/hls/live.m3u8" {
+		t.Fatalf(".m3u8 debe pasar directo sin descarga previa: urls=%v err=%v", m3u8Direct, err)
+	}
+
+	hlsViaM3U, err := ResolveStreamURLs(tsURL + "/hls.m3u")
+	if err != nil || len(hlsViaM3U) != 1 || hlsViaM3U[0] != tsURL+"/hls.m3u" {
+		t.Fatalf("manifiesto #EXT-X- debe pasar directo a ffmpeg de MPD: urls=%v err=%v", hlsViaM3U, err)
+	}
+
+	audioDirect, err := ResolveStreamURLs(tsURL + "/audio.pls")
+	if err != nil || len(audioDirect) != 1 || audioDirect[0] != tsURL+"/audio.pls" {
+		t.Fatalf("Content-Type audio/ debe pasar directo sin consumir stream: urls=%v err=%v", audioDirect, err)
+	}
+
+	if _, err := ResolveStreamURLs(tsURL + "/missing.pls"); err == nil {
+		t.Fatalf("lista HTTP 404 debía devolver error")
+	}
+}
+
+// TestRadioStatusErrorAndStreamTitle verifica sincronización de metadatos ICY, specs audio/bitrate y propagación/limpieza de errores MPD.
+func TestRadioStatusErrorAndStreamTitle(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "radio_mpd.sock")
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Listen unix falló: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var hasMPDErr atomic.Bool
+	var cmdMu sync.Mutex
+	var cmds []string
+
+	go func() {
+		for {
+			conn, aErr := ln.Accept()
+			if aErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = c.Write([]byte("OK MPD 0.24.18\n"))
+				r := bufio.NewReader(c)
+				for {
+					line, rErr := r.ReadString('\n')
+					if rErr != nil {
+						return
+					}
+					trimmed := strings.TrimSpace(line)
+					cmdMu.Lock()
+					cmds = append(cmds, trimmed)
+					cmdMu.Unlock()
+
+					switch trimmed {
+					case "outputs":
+						_, _ = c.Write([]byte("outputid: 0\noutputname: DAC\nplugin: alsa\noutputenabled: 1\nOK\n"))
+					case "status":
+						if hasMPDErr.Load() {
+							_, _ = c.Write([]byte("volume: 65\nstate: stop\nerror: Failed to decode stream\nOK\n"))
+						} else {
+							_, _ = c.Write([]byte("volume: 65\nstate: play\nsong: 0\nelapsed: 5.0\naudio: 48000:24:2\nbitrate: 192\nOK\n"))
+						}
+					case "currentsong":
+						_, _ = c.Write([]byte("file: https://stream.example.org/live\nName: RNE Radio 3\nTitle: Vetusta Morla - Copenhague\nOK\n"))
+					case "clearerror":
+						hasMPDErr.Store(false)
+						_, _ = c.Write([]byte("OK\n"))
+					default:
+						_, _ = c.Write([]byte("OK\n"))
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	client := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(client.Close)
+	client.tryConnect()
+
+	client.ReplaceQueue([]db.Track{{
+		ID:     -1,
+		Path:   "https://stream.example.org/live",
+		Title:  "RNE Radio 3",
+		Artist: "RNE (Spain)",
+		Source: "radio",
+	}}, true)
+
+	// Esperar a que pushQueueToMPD termine antes de sondear status
+	deadline := time.Now().Add(1 * time.Second)
+	for client.syncingQueue.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Avanzar reloj mínimo para evitar lastControlNano > startedAt en el test síncrono
+	time.Sleep(5 * time.Millisecond)
+	client.syncStatusFromMPD()
+
+	st := client.GetState()
+	if st.StreamTitle != "Vetusta Morla - Copenhague" {
+		t.Fatalf("StreamTitle esperado 'Vetusta Morla - Copenhague', obtenido %q", st.StreamTitle)
+	}
+	if st.CurrentTrack == nil || st.CurrentTrack.SampleRate != 48000 || st.CurrentTrack.Bitrate != 192 {
+		t.Fatalf("specs de radio inesperados: %+v", st.CurrentTrack)
+	}
+
+	hasMPDErr.Store(true)
+	time.Sleep(5 * time.Millisecond)
+	client.syncStatusFromMPD()
+
+	errState := client.GetState()
+	if errState.LastError != "Failed to decode stream" {
+		t.Fatalf("LastError esperado 'Failed to decode stream', obtenido %q", errState.LastError)
+	}
+	cmdMu.Lock()
+	joined := strings.Join(cmds, "\n")
+	cmdMu.Unlock()
+	if !strings.Contains(joined, "clearerror") {
+		t.Fatalf("se esperaba envío de comando clearerror tras capturar error MPD; comandos:\n%s", joined)
 	}
 }

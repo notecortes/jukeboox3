@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"aurabox/internal/db"
+	"aurabox/internal/events"
+	"aurabox/internal/mpd"
 	"aurabox/internal/tlsutil"
 )
 
@@ -88,6 +95,120 @@ func TestHTTPSRedirectAndSecurityEndpoints(t *testing.T) {
 	handler.ServeHTTP(recCA, reqCA)
 	if recCA.Code != http.StatusOK || !strings.Contains(recCA.Body.String(), "BEGIN CERTIFICATE") {
 		t.Fatalf("descarga de CA falló (code=%d)", recCA.Code)
+	}
+}
+
+// TestRadiosEndpointsCRUDAndPlayValidation verifica listado sembrado, alta/borrado de radios personalizadas y resolución .pls en /api/radios/play.
+func TestRadiosEndpointsCRUDAndPlayValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	database, err := db.InitDB(filepath.Join(tmpDir, "radios.db"))
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	hub := events.NewHub()
+	player := mpd.NewClient(filepath.Join(tmpDir, "missing.sock"), "127.0.0.1", "0", hub, database)
+	t.Cleanup(player.Close)
+
+	srv := &Server{
+		database:  database,
+		eventsHub: hub,
+		player:    player,
+	}
+
+	// 1. GET /api/radios debe devolver el catálogo completo (>= 280 emisoras incluyendo España)
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/radios", nil)
+	recGet := httptest.NewRecorder()
+	srv.handleRadios(recGet, reqGet)
+	if recGet.Code != http.StatusOK {
+		t.Fatalf("GET /api/radios devolvió %d: %s", recGet.Code, recGet.Body.String())
+	}
+	var list []db.RadioStation
+	if err := json.Unmarshal(recGet.Body.Bytes(), &list); err != nil {
+		t.Fatalf("JSON inválido en GET /api/radios: %v", err)
+	}
+	if len(list) < 280 {
+		t.Fatalf("se esperaban al menos 280 radios, obtenidas %d", len(list))
+	}
+	var defaultID int64
+	hasSpain := false
+	for _, r := range list {
+		if strings.EqualFold(r.Country, "Spain") {
+			hasSpain = true
+		}
+		if r.IsDefault && defaultID == 0 {
+			defaultID = r.ID
+		}
+	}
+	if !hasSpain {
+		t.Fatalf("GET /api/radios no incluye emisoras de Spain")
+	}
+
+	// 2. POST /api/radios debe rechazar URLs que no sean http/https
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/radios", bytes.NewBufferString(`{"name":"Mala","stream_url":"ftp://bad.local/stream"}`))
+	recBad := httptest.NewRecorder()
+	srv.handleRadios(recBad, reqBad)
+	if recBad.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/radios con ftp:// debía devolver 400, obtuvo %d", recBad.Code)
+	}
+
+	// 3. POST /api/radios válido + DELETE posterior (y bloqueo de borrado en default)
+	reqAdd := httptest.NewRequest(http.MethodPost, "/api/radios", bytes.NewBufferString(`{"name":"Mi Emisora PLS","stream_url":"https://example.org/radio.pls","genre":"Rock","country":"Spain"}`))
+	recAdd := httptest.NewRecorder()
+	srv.handleRadios(recAdd, reqAdd)
+	if recAdd.Code != http.StatusCreated {
+		t.Fatalf("POST /api/radios válido debía devolver 201, obtuvo %d: %s", recAdd.Code, recAdd.Body.String())
+	}
+	var created db.RadioStation
+	if err := json.Unmarshal(recAdd.Body.Bytes(), &created); err != nil || created.ID <= 0 {
+		t.Fatalf("respuesta de creación inválida: err=%v body=%s", err, recAdd.Body.String())
+	}
+
+	reqDelDefault := httptest.NewRequest(http.MethodDelete, "/api/radios?id="+strconv.FormatInt(defaultID, 10), nil)
+	recDelDefault := httptest.NewRecorder()
+	srv.handleRadios(recDelDefault, reqDelDefault)
+	if recDelDefault.Code != http.StatusNotFound {
+		t.Fatalf("DELETE de emisora default debía devolver 404, obtuvo %d", recDelDefault.Code)
+	}
+
+	reqDelCustom := httptest.NewRequest(http.MethodDelete, "/api/radios?id="+strconv.FormatInt(created.ID, 10), nil)
+	recDelCustom := httptest.NewRecorder()
+	srv.handleRadios(recDelCustom, reqDelCustom)
+	if recDelCustom.Code != http.StatusOK {
+		t.Fatalf("DELETE de emisora personalizada debía devolver 200, obtuvo %d: %s", recDelCustom.Code, recDelCustom.Body.String())
+	}
+
+	// 4. POST /api/radios/play con archivo .pls real servido localmente debe resolver la URL destino
+	plsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/x-scpls")
+		_, _ = w.Write([]byte("[playlist]\nFile1=http://radio.example.local:8000/stream.mp3\nNumberOfEntries=1\n"))
+	}))
+	defer plsSrv.Close()
+
+	playBody, _ := json.Marshal(map[string]string{
+		"name":       "Test PLS España",
+		"stream_url": plsSrv.URL + "/listen.pls",
+		"country":    "Spain",
+		"genre":      "Pop",
+	})
+	reqPlay := httptest.NewRequest(http.MethodPost, "/api/radios/play", bytes.NewReader(playBody))
+	recPlay := httptest.NewRecorder()
+	srv.handleRadioPlay(recPlay, reqPlay)
+	if recPlay.Code != http.StatusOK {
+		t.Fatalf("POST /api/radios/play válido debía devolver 200, obtuvo %d: %s", recPlay.Code, recPlay.Body.String())
+	}
+	st := player.GetState()
+	if st.CurrentTrack == nil || st.CurrentTrack.Source != "radio" || st.CurrentTrack.Path != "http://radio.example.local:8000/stream.mp3" {
+		t.Fatalf("estado CurrentTrack inesperado tras playRadio .pls: %+v", st.CurrentTrack)
+	}
+
+	// 5. POST /api/radios/play con URL inválida devuelve 400 sin alterar la reproducción
+	reqBadPlay := httptest.NewRequest(http.MethodPost, "/api/radios/play", bytes.NewBufferString(`{"name":"Mala","stream_url":"file:///etc/passwd"}`))
+	recBadPlay := httptest.NewRecorder()
+	srv.handleRadioPlay(recBadPlay, reqBadPlay)
+	if recBadPlay.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/radios/play con file:// debía devolver 400, obtuvo %d", recBadPlay.Code)
 	}
 }
 

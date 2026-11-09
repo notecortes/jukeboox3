@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+//go:embed default_radios.json
+var embeddedRadiosJSON []byte
 
 // DB gestiona las conexiones SQLite separando un escritor único serializado y un pool concurrente de lectura en WAL.
 type DB struct {
@@ -214,80 +218,35 @@ func (d *DB) createSchema() error {
 	return nil
 }
 
-// seedDefaultRadios inserta emisoras de radio de alta fidelidad predeterminadas desde default_radios.json.
+// seedDefaultRadios inserta o actualiza emisoras de radio web desde el catálogo embebido y archivos externos opcionales.
 func (d *DB) seedDefaultRadios() error {
-	// 1. Probar carga desde archivo JSON de radios
-	jsonCandidates := []string{
+	seeded, err := d.upsertRadiosFromJSON(embeddedRadiosJSON, true)
+	if err != nil {
+		log.Printf("[DB] Error al cargar catálogo embebido de radios: %v", err)
+	}
+
+	// Incorporar emisoras extra definidas en archivos externos si existen (sin sobrescribir el catálogo embebido)
+	extraCandidates := []string{
+		"/app/data/custom_radios.json",
+		"data/custom_radios.json",
 		"/app/data/default_radios.json",
 		"data/default_radios.json",
-		"../data/default_radios.json",
 	}
-
-	var jsonBytes []byte
-	for _, p := range jsonCandidates {
-		if b, err := os.ReadFile(p); err == nil && len(b) > 0 {
-			jsonBytes = b
-			break
+	for _, p := range extraCandidates {
+		if b, readErr := os.ReadFile(p); readErr == nil && len(b) > 0 {
+			extra, _ := d.upsertRadiosFromJSON(b, false)
+			seeded += extra
 		}
 	}
 
-	if len(jsonBytes) > 0 {
-		type jsonRadio struct {
-			ID          int         `json:"id"`
-			Name        string      `json:"name"`
-			URL         string      `json:"url"`
-			Genre       string      `json:"genre"`
-			Broadcaster string      `json:"broadcaster"`
-			Country     string      `json:"country"`
-			Bitrate     interface{} `json:"bitrate"`
-			Format      string      `json:"format"`
-		}
-
-		var radios []jsonRadio
-		if err := json.Unmarshal(jsonBytes, &radios); err == nil && len(radios) > 0 {
-			tx, err := d.conn.Begin()
-			if err != nil {
-				return err
-			}
-			stmt, err := tx.Prepare(`
-				INSERT INTO radio_stations (name, stream_url, logo_url, genre, broadcaster, country, bitrate, format, is_default)
-				VALUES (?, ?, '', ?, ?, ?, ?, ?, 1)
-				ON CONFLICT(stream_url) DO UPDATE SET
-					name=excluded.name,
-					genre=excluded.genre,
-					broadcaster=excluded.broadcaster,
-					country=excluded.country,
-					bitrate=excluded.bitrate,
-					format=excluded.format
-			`)
-			if err != nil {
-				_ = tx.Rollback()
-				return err
-			}
-			defer stmt.Close()
-
-			for _, r := range radios {
-				if r.URL == "" || !strings.HasPrefix(r.URL, "http") || strings.Contains(strings.ToLower(r.Name), "reserved") {
-					continue
-				}
-				bitrateStr := fmt.Sprintf("%v", r.Bitrate)
-				if bitrateStr == "" || bitrateStr == "<nil>" {
-					bitrateStr = "128"
-				}
-				formatStr := r.Format
-				if formatStr == "" {
-					formatStr = "MP3"
-				}
-
-				_, _ = stmt.Exec(r.Name, r.URL, r.Genre, r.Broadcaster, r.Country, bitrateStr, formatStr)
-			}
-			_ = tx.Commit()
-			log.Printf("[DB] %d emisoras de radio web cargadas e indexadas correctamente", len(radios))
-			return nil
-		}
+	if seeded > 0 {
+		total := seeded
+		_ = d.conn.QueryRow(`SELECT COUNT(*) FROM radio_stations`).Scan(&total)
+		log.Printf("[DB] %d emisoras de radio web indexadas correctamente", total)
+		return nil
 	}
 
-	// 2. Fallback mínimo en caso de no hallar el archivo
+	// Fallback mínimo en caso extremo de catálogo vacío
 	defaultRadios := []RadioStation{
 		{
 			Name:        "Radio Paradise - Main Mix",
@@ -300,12 +259,12 @@ func (d *DB) seedDefaultRadios() error {
 			IsDefault:   true,
 		},
 		{
-			Name:        "SomaFM: Groove Salad",
-			StreamURL:   "http://ice2.somafm.com/groovesalad-256-mp3",
-			Genre:       "Ambient, Downtempo",
-			Broadcaster: "SomaFM",
-			Country:     "United States",
-			Bitrate:     "256",
+			Name:        "RNE Radio Nacional",
+			StreamURL:   "https://dispatcher.rndfnk.com/crtve/rne1/main/mp3/high",
+			Genre:       "General, News, Talk",
+			Broadcaster: "RNE",
+			Country:     "Spain",
+			Bitrate:     "128",
 			Format:      "MP3",
 			IsDefault:   true,
 		},
@@ -318,6 +277,104 @@ func (d *DB) seedDefaultRadios() error {
 		`, r.Name, r.StreamURL, r.Genre, r.Broadcaster, r.Country, r.Bitrate, r.Format)
 	}
 	return nil
+}
+
+// upsertRadiosFromJSON decodifica un array JSON de emisoras e inserta o actualiza las entradas válidas en SQLite.
+func (d *DB) upsertRadiosFromJSON(jsonBytes []byte, updateOnConflict bool) (int, error) {
+	if len(jsonBytes) == 0 {
+		return 0, nil
+	}
+	type jsonRadio struct {
+		ID          int         `json:"id"`
+		Name        string      `json:"name"`
+		URL         string      `json:"url"`
+		StreamURL   string      `json:"stream_url"`
+		LogoURL     string      `json:"logo_url"`
+		Genre       string      `json:"genre"`
+		Broadcaster string      `json:"broadcaster"`
+		Country     string      `json:"country"`
+		Bitrate     interface{} `json:"bitrate"`
+		Format      string      `json:"format"`
+	}
+
+	var radios []jsonRadio
+	if err := json.Unmarshal(jsonBytes, &radios); err != nil {
+		return 0, err
+	}
+	if len(radios) == 0 {
+		return 0, nil
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+
+	query := `
+		INSERT OR IGNORE INTO radio_stations (name, stream_url, logo_url, genre, broadcaster, country, bitrate, format, is_default)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+	`
+	if updateOnConflict {
+		query = `
+			INSERT INTO radio_stations (name, stream_url, logo_url, genre, broadcaster, country, bitrate, format, is_default)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+			ON CONFLICT(stream_url) DO UPDATE SET
+				name=excluded.name,
+				logo_url=CASE WHEN excluded.logo_url != '' THEN excluded.logo_url ELSE radio_stations.logo_url END,
+				genre=excluded.genre,
+				broadcaster=excluded.broadcaster,
+				country=excluded.country,
+				bitrate=excluded.bitrate,
+				format=excluded.format
+		`
+	}
+
+	stmt, err := tx.Prepare(query)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	defer stmt.Close()
+
+	count := 0
+	for _, r := range radios {
+		streamURL := strings.TrimSpace(r.URL)
+		if streamURL == "" {
+			streamURL = strings.TrimSpace(r.StreamURL)
+		}
+		name := strings.TrimSpace(r.Name)
+		if name == "" || (!strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://")) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(name), "reserved") {
+			continue
+		}
+
+		bitrateStr := fmt.Sprintf("%v", r.Bitrate)
+		if bitrateStr == "" || bitrateStr == "<nil>" || bitrateStr == "0" {
+			bitrateStr = "128"
+		}
+		formatStr := strings.TrimSpace(r.Format)
+		if formatStr == "" {
+			formatStr = "MP3"
+		}
+		genreStr := strings.TrimSpace(r.Genre)
+		if genreStr == "" {
+			genreStr = "General"
+		}
+
+		if _, execErr := stmt.Exec(name, streamURL, strings.TrimSpace(r.LogoURL), genreStr, strings.TrimSpace(r.Broadcaster), strings.TrimSpace(r.Country), bitrateStr, formatStr); execErr == nil {
+			count++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // UpsertTrack inserta o actualiza una pista de audio en la base de datos.
@@ -1119,7 +1176,7 @@ func (d *DB) SetSetting(key, value string) error {
 
 // GetRadios devuelve la lista de emisoras de radio web guardadas.
 func (d *DB) GetRadios() ([]RadioStation, error) {
-	rows, err := d.reader().Query("SELECT id, name, stream_url, logo_url, genre, COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default FROM radio_stations ORDER BY name COLLATE NOCASE ASC")
+	rows, err := d.reader().Query("SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default FROM radio_stations ORDER BY name COLLATE NOCASE ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -1135,6 +1192,108 @@ func (d *DB) GetRadios() ([]RadioStation, error) {
 		}
 	}
 	return list, nil
+}
+
+// GetRadioByStreamURL busca una emisora registrada en la base de datos por su URL de flujo.
+func (d *DB) GetRadioByStreamURL(streamURL string) (*RadioStation, error) {
+	var r RadioStation
+	var def int
+	err := d.reader().QueryRow(`
+		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default
+		FROM radio_stations
+		WHERE stream_url = ?
+		LIMIT 1
+	`, streamURL).Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def)
+	if err != nil {
+		return nil, err
+	}
+	r.IsDefault = (def == 1)
+	return &r, nil
+}
+
+// AddRadio inserta o actualiza una emisora personalizada (.mp3, .aac, .m3u, .pls o .m3u8) en SQLite.
+func (d *DB) AddRadio(r *RadioStation) error {
+	if r == nil {
+		return fmt.Errorf("emisora vacía")
+	}
+	name := strings.TrimSpace(r.Name)
+	streamURL := strings.TrimSpace(r.StreamURL)
+	if name == "" {
+		return fmt.Errorf("el nombre de la emisora es obligatorio")
+	}
+	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
+		return fmt.Errorf("la URL de la emisora debe comenzar por http:// o https://")
+	}
+
+	genre := strings.TrimSpace(r.Genre)
+	if genre == "" {
+		genre = "General"
+	}
+	bitrate := strings.TrimSpace(r.Bitrate)
+	if bitrate == "" {
+		bitrate = "128"
+	}
+	format := strings.TrimSpace(r.Format)
+	if format == "" {
+		format = "STREAM"
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var existingName string
+	var existingDefault int
+	if err := d.conn.QueryRow(`SELECT name, is_default FROM radio_stations WHERE stream_url = ? LIMIT 1`, streamURL).Scan(&existingName, &existingDefault); err == nil && existingDefault == 1 {
+		return fmt.Errorf("esta URL ya existe en el catálogo integrado (%s)", existingName)
+	}
+
+	_, err := d.conn.Exec(`
+		INSERT INTO radio_stations (name, stream_url, logo_url, genre, broadcaster, country, bitrate, format, is_default)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+		ON CONFLICT(stream_url) DO UPDATE SET
+			name=excluded.name,
+			logo_url=CASE WHEN excluded.logo_url != '' THEN excluded.logo_url ELSE radio_stations.logo_url END,
+			genre=excluded.genre,
+			broadcaster=excluded.broadcaster,
+			country=excluded.country,
+			bitrate=excluded.bitrate,
+			format=excluded.format
+	`, name, streamURL, strings.TrimSpace(r.LogoURL), genre, strings.TrimSpace(r.Broadcaster), strings.TrimSpace(r.Country), bitrate, format)
+	if err != nil {
+		return err
+	}
+
+	var def int
+	if err := d.conn.QueryRow(`
+		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default
+		FROM radio_stations WHERE stream_url = ?
+	`, streamURL).Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def); err != nil {
+		return err
+	}
+	r.IsDefault = (def == 1)
+	return nil
+}
+
+// DeleteRadio elimina una emisora personalizada añadida por el usuario según su ID.
+func (d *DB) DeleteRadio(id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("id de emisora inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	res, err := d.conn.Exec("DELETE FROM radio_stations WHERE id = ? AND is_default = 0", id)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("emisora personalizada no encontrada")
+	}
+	return nil
 }
 
 // GetSimilarArtistsOffline calcula similitud de artistas usando géneros, décadas y conteo en SQLite.

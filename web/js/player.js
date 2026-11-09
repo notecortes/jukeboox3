@@ -9,6 +9,25 @@ import { openNowPlaying, closeNowPlaying } from './gestures.js';
 
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
 let isScrubbing = false;
+let lastShownPlayerError = '';
+
+// isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo.
+export function isLiveStreamTrack(track) {
+  if (!track) return false;
+  if (track.source === 'radio') return true;
+  const p = (track.path || '').toLowerCase();
+  return p.startsWith('http://') || p.startsWith('https://');
+}
+
+// formatLiveSubtitle construye el subtítulo con la canción ICY activa o el nombre de la emisora.
+function formatLiveSubtitle(track, streamTitle, includeStation = true) {
+  const icy = (streamTitle || '').trim();
+  const stationArtist = (track && track.artist) ? track.artist : 'Radio en Directo';
+  if (icy) {
+    return includeStation ? `🎙️ ${icy} • ${stationArtist}` : `🎙️ ${icy}`;
+  }
+  return `📡 ${stationArtist}`;
+}
 
 // initPlayer inicializa los escuchadores de controles, scrubber y MediaSession.
 export function initPlayer() {
@@ -19,6 +38,13 @@ export function initPlayer() {
   // Escuchar cambios reactivos en el estado
   subscribe((event) => {
     if (event === 'player_updated') {
+      const errMsg = (state.player.last_error || '').trim();
+      if (errMsg && errMsg !== lastShownPlayerError) {
+        lastShownPlayerError = errMsg;
+        showToast(`⚠️ ${errMsg}`);
+      } else if (!errMsg) {
+        lastShownPlayerError = '';
+      }
       renderMiniPlayer();
       renderNowPlaying();
       updateMediaSession();
@@ -88,8 +114,9 @@ function bindNowPlayingControls() {
 
   if (btnFav) {
     btnFav.addEventListener('click', () => {
-      if (state.player.current_track) {
-        api.toggleFavorite(state.player.current_track.id).then((res) => {
+      const track = state.player.current_track;
+      if (track && !isLiveStreamTrack(track) && track.id > 0) {
+        api.toggleFavorite(track.id).then((res) => {
           state.player.current_track.favorite = res.favorite;
           renderNowPlaying();
         });
@@ -100,6 +127,7 @@ function bindNowPlayingControls() {
   // Deslizador de progreso de tiempo (Scrubber)
   if (scrubber) {
     scrubber.addEventListener('input', () => {
+      if (scrubber.disabled) return;
       isScrubbing = true;
       const val = parseFloat(scrubber.value);
       const elapsedLabel = document.getElementById('npTimeElapsed');
@@ -110,6 +138,10 @@ function bindNowPlayingControls() {
     });
 
     scrubber.addEventListener('change', () => {
+      if (scrubber.disabled) {
+        isScrubbing = false;
+        return;
+      }
       const val = parseFloat(scrubber.value);
       state.player.elapsed_time = val;
       state.player.base_elapsed_time = val;
@@ -194,8 +226,11 @@ export function renderMiniPlayer() {
 
   mini.classList.remove('hidden');
   mini.classList.toggle('playing', isPlaying);
+  const isLiveMini = isLiveStreamTrack(track);
   document.getElementById('miniTitle').textContent = track.title || 'Desconocido';
-  document.getElementById('miniArtist').textContent = track.artist || 'Artista';
+  document.getElementById('miniArtist').textContent = isLiveMini
+    ? formatLiveSubtitle(track, state.player.stream_title, false)
+    : (track.artist || 'Artista');
 
   const coverImg = document.getElementById('miniCover');
   coverImg.src = track.cover_url || '/assets/default-cover.svg';
@@ -274,12 +309,29 @@ export function renderNowPlaying() {
     const badge = document.getElementById('npHifiBadge');
     if (badge) badge.textContent = 'En Espera';
     const btnFav = document.getElementById('npBtnFav');
-    if (btnFav) btnFav.classList.remove('active');
+    if (btnFav) {
+      btnFav.style.display = 'flex';
+      btnFav.classList.remove('active');
+    }
+    const elapsedLabel = document.getElementById('npTimeElapsed');
+    const durationLabel = document.getElementById('npTimeDuration');
+    const scrubber = document.getElementById('npTimelineScrubber');
+    if (elapsedLabel) elapsedLabel.textContent = '0:00';
+    if (durationLabel) durationLabel.textContent = '0:00';
+    if (scrubber) {
+      scrubber.disabled = false;
+      scrubber.style.opacity = '';
+      scrubber.value = 0;
+    }
     return;
   }
 
+  const isLive = isLiveStreamTrack(track);
+
   document.getElementById('npTitle').textContent = track.title || 'Canción';
-  document.getElementById('npArtist').textContent = track.artist || 'Artista';
+  document.getElementById('npArtist').textContent = isLive
+    ? formatLiveSubtitle(track, state.player.stream_title, true)
+    : (track.artist || 'Artista');
 
   const coverSrc = track.cover_url || '/assets/default-cover.svg';
   document.getElementById('npCover').src = coverSrc;
@@ -290,28 +342,51 @@ export function renderNowPlaying() {
     bg.style.backgroundImage = `url('${coverSrc}')`;
   }
 
-  // Badge Hi-Fi técnico
+  // Badge Hi-Fi técnico o transmisión en directo
   const badge = document.getElementById('npHifiBadge');
   if (badge) {
-    let rateKhz = track.sample_rate ? Math.round(track.sample_rate / 1000) : 44;
-    badge.textContent = `${track.format || 'FLAC'} ${rateKhz}kHz • ${track.bitrate || 320}kbps`;
+    if (isLive) {
+      const parts = ['EN VIVO', track.format || 'STREAM'];
+      if (track.sample_rate) parts.push(`${Math.round(track.sample_rate / 1000)}kHz`);
+      if (track.bitrate) parts.push(`${track.bitrate}kbps`);
+      badge.textContent = parts.join(' • ');
+    } else {
+      const rateKhz = track.sample_rate ? Math.round(track.sample_rate / 1000) : 44;
+      badge.textContent = `${track.format || 'FLAC'} ${rateKhz}kHz • ${track.bitrate || 320}kbps`;
+    }
   }
 
-  // Corazón de favorito
+  // Ocultar corazón en emisoras en directo (no tienen ID de pista en tabla tracks)
   const btnFav = document.getElementById('npBtnFav');
   if (btnFav) {
-    btnFav.classList.toggle('active', !!track.favorite);
+    btnFav.style.display = isLive ? 'none' : 'flex';
+    btnFav.classList.toggle('active', !isLive && !!track.favorite);
   }
 
-  // Actualizar marcas de duración
+  // Actualizar marcas de duración y bloqueo del scrubber en directos
   const dur = (track && track.duration) || state.player.duration || 0;
   const durationLabel = document.getElementById('npTimeDuration');
-  if (durationLabel && dur > 0) {
-    durationLabel.textContent = formatTime(dur);
+  if (durationLabel) {
+    if (dur > 0) {
+      durationLabel.textContent = formatTime(dur);
+    } else if (isLive) {
+      durationLabel.textContent = 'EN VIVO';
+    } else {
+      durationLabel.textContent = '0:00';
+    }
   }
   const scrubber = document.getElementById('npTimelineScrubber');
-  if (scrubber && dur > 0) {
-    scrubber.max = dur;
+  if (scrubber) {
+    if (isLive && dur <= 0) {
+      scrubber.disabled = true;
+      scrubber.max = 1;
+      scrubber.value = 1;
+      scrubber.style.opacity = '0.45';
+    } else {
+      scrubber.disabled = false;
+      scrubber.style.opacity = '';
+      if (dur > 0) scrubber.max = dur;
+    }
   }
 
   tickProgress();
@@ -319,18 +394,21 @@ export function renderNowPlaying() {
 
 // tickProgress avanza la barra de tiempo en tiempo real entre eventos SSE.
 export function tickProgress() {
+  const isLive = isLiveStreamTrack(state.player.current_track);
   const dur = state.player.duration || (state.player.current_track?.duration) || 0;
 
-  if (state.player.status === 'play' && dur > 0) {
+  if (state.player.status === 'play' && (dur > 0 || isLive)) {
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const lastSync = state.player.last_sync_timestamp || now;
     const deltaSec = Math.max(0, (now - lastSync) / 1000);
     const calculated = (state.player.base_elapsed_time || 0) + deltaSec;
-    state.player.elapsed_time = Math.min(dur, calculated);
+    state.player.elapsed_time = dur > 0 ? Math.min(dur, calculated) : calculated;
   }
 
   const elapsed = state.player.elapsed_time || 0;
-  const pct = dur > 0 ? Math.min(100, Math.max(0, (elapsed / dur) * 100)) : 0;
+  const pct = dur > 0
+    ? Math.min(100, Math.max(0, (elapsed / dur) * 100))
+    : (isLive && state.player.status === 'play' ? 100 : 0);
 
   const miniFill = document.getElementById('miniProgressFill');
   if (miniFill) miniFill.style.width = `${pct}%`;
@@ -341,11 +419,24 @@ export function tickProgress() {
     const durationLabel = document.getElementById('npTimeDuration');
 
     if (scrubber) {
-      if (dur > 0) scrubber.max = dur;
-      scrubber.value = elapsed;
+      if (isLive && dur <= 0) {
+        scrubber.max = 1;
+        scrubber.value = 1;
+      } else {
+        if (dur > 0) scrubber.max = dur;
+        scrubber.value = elapsed;
+      }
     }
     if (elapsedLabel) elapsedLabel.textContent = formatTime(elapsed);
-    if (durationLabel && dur > 0) durationLabel.textContent = formatTime(dur);
+    if (durationLabel) {
+      if (dur > 0) {
+        durationLabel.textContent = formatTime(dur);
+      } else if (isLive) {
+        durationLabel.textContent = 'EN VIVO';
+      } else {
+        durationLabel.textContent = '0:00';
+      }
+    }
   }
 }
 
@@ -391,7 +482,9 @@ function setupMediaSession() {
   navigator.mediaSession.setActionHandler('previoustrack', () => api.prev());
   navigator.mediaSession.setActionHandler('nexttrack', () => api.next());
   navigator.mediaSession.setActionHandler('seekto', (details) => {
-    if (details.seekTime !== undefined) api.seek(details.seekTime);
+    if (!isLiveStreamTrack(state.player.current_track) && details.seekTime !== undefined) {
+      api.seek(details.seekTime);
+    }
   });
 }
 
@@ -399,11 +492,13 @@ function setupMediaSession() {
 function updateMediaSession() {
   if (!('mediaSession' in navigator) || !state.player.current_track) return;
   const track = state.player.current_track;
+  const isLive = isLiveStreamTrack(track);
+  const icy = (state.player.stream_title || '').trim();
 
   navigator.mediaSession.metadata = new MediaMetadata({
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
+    title: (isLive && icy) ? icy : track.title,
+    artist: (isLive && icy) ? track.title : track.artist,
+    album: isLive ? (track.artist || 'Radio en Directo') : track.album,
     artwork: [
       { src: track.cover_url || '/assets/default-cover.svg', sizes: '512x512', type: 'image/png' }
     ]

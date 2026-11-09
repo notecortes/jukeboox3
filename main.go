@@ -1102,21 +1102,125 @@ func (s *Server) handleLyrics(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, res)
 }
 
-// handleRadios devuelve la lista de emisoras de streaming configuradas.
-func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
-	radios, err := s.database.GetRadios()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+// inferRadioFormat deduce el códec probable de una URL de radio cuando el cliente no especifica formato.
+func inferRadioFormat(explicitFmt, streamURL string) string {
+	fmtClean := strings.ToUpper(strings.TrimSpace(explicitFmt))
+	if fmtClean != "" {
+		return fmtClean
 	}
-	jsonResponse(w, http.StatusOK, radios)
+	lower := strings.ToLower(strings.TrimSpace(streamURL))
+	if idx := strings.IndexAny(lower, "?#"); idx >= 0 {
+		lower = lower[:idx]
+	}
+	switch {
+	case strings.HasSuffix(lower, ".m3u8"):
+		return "HLS"
+	case strings.HasSuffix(lower, ".mp3"), strings.Contains(lower, "/mp3/"), strings.HasSuffix(lower, "/mp3"):
+		return "MP3"
+	case strings.HasSuffix(lower, ".aac"), strings.HasSuffix(lower, ".aacp"), strings.Contains(lower, "/aac/"), strings.HasSuffix(lower, "/aac"):
+		return "AAC"
+	case strings.HasSuffix(lower, ".flac"), strings.Contains(lower, "/flac/"), strings.HasSuffix(lower, "/flac"):
+		return "FLAC"
+	case strings.HasSuffix(lower, ".ogg"), strings.HasSuffix(lower, ".oga"), strings.HasSuffix(lower, ".opus"):
+		return "OGG"
+	default:
+		return "STREAM"
+	}
 }
 
-// handleRadioPlay encola y comienza la reproducción de un flujo web de radio.
+// handleRadios gestiona la consulta, alta personalizada y borrado de emisoras de radio web.
+func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		radios, err := s.database.GetRadios()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, http.StatusOK, radios)
+
+	case http.MethodPost:
+		var payload struct {
+			Name        string `json:"name"`
+			StreamURL   string `json:"stream_url"`
+			URL         string `json:"url"`
+			LogoURL     string `json:"logo_url"`
+			Genre       string `json:"genre"`
+			Broadcaster string `json:"broadcaster"`
+			Country     string `json:"country"`
+			Bitrate     string `json:"bitrate"`
+			Format      string `json:"format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "json inválido", http.StatusBadRequest)
+			return
+		}
+
+		rawURL := strings.TrimSpace(payload.StreamURL)
+		if rawURL == "" {
+			rawURL = strings.TrimSpace(payload.URL)
+		}
+		cleanURL, err := mpd.ValidateHTTPStreamURL(rawURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		name := strings.TrimSpace(payload.Name)
+		if name == "" {
+			http.Error(w, "el nombre de la emisora es obligatorio", http.StatusBadRequest)
+			return
+		}
+
+		station := db.RadioStation{
+			Name:        name,
+			StreamURL:   cleanURL,
+			LogoURL:     strings.TrimSpace(payload.LogoURL),
+			Genre:       strings.TrimSpace(payload.Genre),
+			Broadcaster: strings.TrimSpace(payload.Broadcaster),
+			Country:     strings.TrimSpace(payload.Country),
+			Bitrate:     strings.TrimSpace(payload.Bitrate),
+			Format:      inferRadioFormat(payload.Format, cleanURL),
+		}
+		if err := s.database.AddRadio(&station); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jsonResponse(w, http.StatusCreated, station)
+
+	case http.MethodDelete:
+		idStr := strings.TrimSpace(r.URL.Query().Get("id"))
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "id de emisora inválido", http.StatusBadRequest)
+			return
+		}
+		if err := s.database.DeleteRadio(id); err != nil {
+			if strings.Contains(err.Error(), "no encontrada") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	default:
+		http.Error(w, "método no permitido", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleRadioPlay valida/resuelve el flujo web de radio y comienza su reproducción inmediata.
 func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
 	var payload struct {
 		Name        string `json:"name"`
 		StreamURL   string `json:"stream_url"`
+		URL         string `json:"url"`
 		LogoURL     string `json:"logo_url"`
 		Genre       string `json:"genre"`
 		Broadcaster string `json:"broadcaster"`
@@ -1129,50 +1233,60 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artistInfo := payload.Broadcaster
-	if payload.Country != "" {
-		if artistInfo != "" {
-			artistInfo += " (" + payload.Country + ")"
-		} else {
-			artistInfo = payload.Country
-		}
+	rawURL := strings.TrimSpace(payload.StreamURL)
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(payload.URL)
 	}
-	if artistInfo == "" {
-		artistInfo = "Radio en Directo"
+
+	resolvedURLs, err := mpd.ResolveStreamURLs(rawURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(payload.Name)
+	if name == "" {
+		name = "Radio Web"
+	}
+
+	genre := strings.TrimSpace(payload.Genre)
+	if genre == "" {
+		genre = "Radio"
 	}
 
 	bitrateVal := 128
-	if b, err := strconv.Atoi(payload.Bitrate); err == nil && b > 0 {
+	if b, bErr := strconv.Atoi(strings.TrimSpace(payload.Bitrate)); bErr == nil && b > 0 {
 		bitrateVal = b
 	}
 
-	formatVal := payload.Format
-	if formatVal == "" {
-		formatVal = "STREAM"
-	}
+	formatVal := inferRadioFormat(payload.Format, resolvedURLs[0])
 
-	coverVal := payload.LogoURL
+	coverVal := strings.TrimSpace(payload.LogoURL)
 	if coverVal == "" {
 		coverVal = "/assets/default-cover.svg"
 	}
 
 	radioTrack := db.Track{
-		ID:         -1,
-		Path:       payload.StreamURL,
-		Filename:   payload.Name,
-		Title:      payload.Name,
-		Artist:     artistInfo,
-		Album:      payload.Genre,
-		Genre:      payload.Genre,
-		Bitrate:    bitrateVal,
-		Format:     formatVal,
-		CoverURL:   coverVal,
-		Duration:   0,
+		ID:       -1,
+		Path:     resolvedURLs[0],
+		Filename: name,
+		Title:    name,
+		Artist:   mpd.FormatRadioArtist(payload.Broadcaster, payload.Country),
+		Album:    genre,
+		Genre:    genre,
+		Bitrate:  bitrateVal,
+		Format:   formatVal,
+		CoverURL: coverVal,
+		Source:   "radio",
+		Duration: 0,
 	}
 
 	s.player.ReplaceQueue([]db.Track{radioTrack}, true)
 
-	jsonResponse(w, http.StatusOK, map[string]string{"status": "playing_radio"})
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status":     "playing_radio",
+		"stream_url": resolvedURLs[0],
+	})
 }
 
 // handleSettings lee o actualiza configuraciones del sistema.

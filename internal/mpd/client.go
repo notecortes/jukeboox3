@@ -52,6 +52,8 @@ type PlayerState struct {
 	AudioOutputs   []OutputInfo `json:"audio_outputs"`
 	ActiveOutput   string       `json:"active_output"`
 	SleepTimerSec  int          `json:"sleep_timer_sec"`
+	StreamTitle    string       `json:"stream_title,omitempty"`
+	LastError      string       `json:"last_error,omitempty"`
 }
 
 // Client gestiona la comunicación por socket Unix/TCP con MPD y mantiene el estado en memoria sin bloqueos.
@@ -401,8 +403,19 @@ func mpdQuote(s string) string {
 // addTrackToMPD adds a track using catalog relative path and falls back to file:///rawmusic/... over Unix socket.
 func (c *Client) addTrackToMPD(t db.Track) error {
 	if strings.HasPrefix(t.Path, "http://") || strings.HasPrefix(t.Path, "https://") {
-		_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(t.Path)))
-		return err
+		resolvedURLs, err := ResolveStreamURLs(t.Path)
+		if err != nil {
+			return err
+		}
+		var lastErr error
+		for _, streamURL := range resolvedURLs {
+			_, addErr := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(streamURL)))
+			if addErr == nil {
+				return nil
+			}
+			lastErr = addErr
+		}
+		return lastErr
 	}
 
 	relPath := strings.TrimPrefix(t.Path, "/music/")
@@ -433,8 +446,19 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 	}
 
 	if strings.HasPrefix(t.Path, "http://") || strings.HasPrefix(t.Path, "https://") {
-		_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(t.Path), posSuffix))
-		return err
+		resolvedURLs, err := ResolveStreamURLs(t.Path)
+		if err != nil {
+			return err
+		}
+		var lastErr error
+		for _, streamURL := range resolvedURLs {
+			_, addErr := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(streamURL), posSuffix))
+			if addErr == nil {
+				return nil
+			}
+			lastErr = addErr
+		}
+		return lastErr
 	}
 
 	relPath := strings.TrimPrefix(t.Path, "/music/")
@@ -548,6 +572,7 @@ func (c *Client) syncQueueFromMPD() {
 	var currentTitle string
 	var currentArtist string
 	var currentAlbum string
+	var currentName string
 	var currentDuration float64
 
 	addCurrent := func() {
@@ -555,8 +580,40 @@ func (c *Client) syncQueueFromMPD() {
 			return
 		}
 		fullPath := normalizeMPDFilePath(currentFile)
+		isHTTP := strings.HasPrefix(fullPath, "http://") || strings.HasPrefix(fullPath, "https://")
 		if c.database != nil {
-			if t, err := c.database.GetTrackByPath(fullPath); err == nil && t != nil {
+			if isHTTP {
+				if radio, rErr := c.database.GetRadioByStreamURL(fullPath); rErr == nil && radio != nil {
+					bitrateVal := 128
+					if b, err := strconv.Atoi(radio.Bitrate); err == nil && b > 0 {
+						bitrateVal = b
+					}
+					formatVal := radio.Format
+					if formatVal == "" {
+						formatVal = "STREAM"
+					}
+					coverVal := radio.LogoURL
+					if coverVal == "" {
+						coverVal = "/assets/default-cover.svg"
+					}
+					tracks = append(tracks, db.Track{
+						ID:       -1,
+						Path:     fullPath,
+						Filename: radio.Name,
+						Title:    radio.Name,
+						Artist:   FormatRadioArtist(radio.Broadcaster, radio.Country),
+						Album:    radio.Genre,
+						Genre:    radio.Genre,
+						Bitrate:  bitrateVal,
+						Format:   formatVal,
+						CoverURL: coverVal,
+						Source:   "radio",
+						Duration: 0,
+					})
+					currentFile = ""
+					return
+				}
+			} else if t, err := c.database.GetTrackByPath(fullPath); err == nil && t != nil {
 				if currentDuration > 0 && (t.Duration <= 0 || t.Duration == 240.0) {
 					t.Duration = currentDuration
 					trackID := t.ID
@@ -570,7 +627,36 @@ func (c *Client) syncQueueFromMPD() {
 				return
 			}
 		}
+
 		// Fallback con metadatos de etiquetas o ruta si aún no estaba en SQLite
+		if isHTTP {
+			fallbackTitle := currentName
+			if fallbackTitle == "" {
+				fallbackTitle = currentTitle
+			}
+			if fallbackTitle == "" {
+				parts := strings.Split(fullPath, "/")
+				fallbackTitle = parts[len(parts)-1]
+			}
+			if fallbackTitle == "" {
+				fallbackTitle = "Radio Web"
+			}
+			tracks = append(tracks, db.Track{
+				ID:       -1,
+				Path:     fullPath,
+				Filename: fallbackTitle,
+				Title:    fallbackTitle,
+				Artist:   "Radio en Directo",
+				Album:    "Radio Web",
+				Format:   "STREAM",
+				CoverURL: "/assets/default-cover.svg",
+				Source:   "radio",
+				Duration: 0,
+			})
+			currentFile = ""
+			return
+		}
+
 		fallbackTitle := currentTitle
 		if fallbackTitle == "" {
 			parts := strings.Split(fullPath, "/")
@@ -602,6 +688,7 @@ func (c *Client) syncQueueFromMPD() {
 			currentTitle = ""
 			currentArtist = ""
 			currentAlbum = ""
+			currentName = ""
 			currentDuration = 0
 		case "Title":
 			currentTitle = val
@@ -609,6 +696,8 @@ func (c *Client) syncQueueFromMPD() {
 			currentArtist = val
 		case "Album":
 			currentAlbum = val
+		case "Name":
+			currentName = val
 		case "duration":
 			if d, err := strconv.ParseFloat(val, 64); err == nil {
 				currentDuration = d
@@ -632,7 +721,64 @@ func (c *Client) syncQueueFromMPD() {
 	}
 }
 
-// syncStatusFromMPD sondea el estado real de MPD para sincronizar tiempo, pista actual, repetición y volumen.
+// isHTTPStreamTrack indica si una pista corresponde a un flujo HTTP/HTTPS de radio por internet.
+func isHTTPStreamTrack(t *db.Track) bool {
+	if t == nil {
+		return false
+	}
+	if t.Source == "radio" {
+		return true
+	}
+	return strings.HasPrefix(t.Path, "http://") || strings.HasPrefix(t.Path, "https://")
+}
+
+// parseMPDAudioSampleRate extrae la frecuencia de muestreo en Hz desde la línea "audio: rate:bits:ch" de MPD.
+func parseMPDAudioSampleRate(raw string) int {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) == 0 {
+		return 0
+	}
+	rate, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || rate <= 0 {
+		return 0
+	}
+	return rate
+}
+
+// fetchCurrentStreamTitle consulta currentsong en MPD para obtener el título ICY actual de una radio en directo.
+func (c *Client) fetchCurrentStreamTitle(stationTitle string) (string, bool) {
+	lines, err := c.sendRawCommand("currentsong\n")
+	if err != nil {
+		return "", false
+	}
+
+	var icyTitle string
+	var icyArtist string
+	var icyName string
+	for _, line := range lines {
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, val := parts[0], parts[1]
+		switch key {
+		case "Title":
+			icyTitle = val
+		case "Artist":
+			icyArtist = val
+		case "Name":
+			icyName = val
+		}
+	}
+
+	refName := stationTitle
+	if refName == "" {
+		refName = icyName
+	}
+	return cleanStreamTitle(icyTitle, icyArtist, refName), true
+}
+
+// syncStatusFromMPD sondea el estado real de MPD para sincronizar tiempo, pista actual, errores, metadata ICY y volumen.
 func (c *Client) syncStatusFromMPD() bool {
 	if !c.isConnected() || c.syncingQueue.Load() {
 		return false
@@ -655,6 +801,9 @@ func (c *Client) syncStatusFromMPD() bool {
 	var volume = -1
 	var hasRepeat bool
 	var mpdRepeat bool
+	var mpdErr string
+	var mpdSampleRate int
+	var mpdBitrate int
 
 	for _, line := range lines {
 		parts := strings.SplitN(line, ": ", 2)
@@ -684,6 +833,14 @@ func (c *Client) syncStatusFromMPD() bool {
 		case "repeat":
 			hasRepeat = true
 			mpdRepeat = (val == "1")
+		case "error":
+			mpdErr = strings.TrimSpace(val)
+		case "audio":
+			mpdSampleRate = parseMPDAudioSampleRate(val)
+		case "bitrate":
+			if b, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && b > 0 {
+				mpdBitrate = b
+			}
 		}
 	}
 
@@ -692,6 +849,29 @@ func (c *Client) syncStatusFromMPD() bool {
 	c.mu.RUnlock()
 	if qLen == 0 && songIdx >= 0 {
 		c.syncQueueFromMPD()
+	}
+
+	var isLiveStream bool
+	var stationTitle string
+	c.mu.RLock()
+	var targetTrack *db.Track
+	if songIdx >= 0 && songIdx < len(c.queue) {
+		t := c.queue[songIdx]
+		targetTrack = &t
+	} else if c.state.CurrentTrack != nil {
+		t := *c.state.CurrentTrack
+		targetTrack = &t
+	}
+	if targetTrack != nil && isHTTPStreamTrack(targetTrack) {
+		isLiveStream = true
+		stationTitle = targetTrack.Title
+	}
+	c.mu.RUnlock()
+
+	var fetchedStreamTitle string
+	var hasStreamTitle bool
+	if isLiveStream && mpdState == "play" {
+		fetchedStreamTitle, hasStreamTitle = c.fetchCurrentStreamTitle(stationTitle)
 	}
 
 	var recordTrackID int64
@@ -721,6 +901,7 @@ func (c *Client) syncStatusFromMPD() bool {
 		trackCopy := c.queue[songIdx]
 		c.state.CurrentIndex = songIdx
 		c.state.CurrentTrack = &trackCopy
+		c.state.StreamTitle = ""
 		if duration > 0 {
 			c.state.Duration = duration
 			c.state.CurrentTrack.Duration = duration
@@ -734,6 +915,43 @@ func (c *Client) syncStatusFromMPD() bool {
 			if duration > 0 {
 				durUpdateTrackID = c.state.CurrentTrack.ID
 			}
+		}
+	}
+
+	if mpdErr != "" {
+		if mpdErr != c.state.LastError {
+			c.state.LastError = mpdErr
+			stateChanged = true
+		}
+	} else if mpdState == "play" && c.state.LastError != "" {
+		c.state.LastError = ""
+		stateChanged = true
+	}
+
+	if isLiveStream && mpdState == "play" {
+		if hasStreamTitle && fetchedStreamTitle != c.state.StreamTitle {
+			c.state.StreamTitle = fetchedStreamTitle
+			stateChanged = true
+		}
+	} else if c.state.StreamTitle != "" {
+		c.state.StreamTitle = ""
+		stateChanged = true
+	}
+
+	if c.state.CurrentTrack != nil && isHTTPStreamTrack(c.state.CurrentTrack) {
+		if mpdSampleRate > 0 && c.state.CurrentTrack.SampleRate != mpdSampleRate {
+			c.state.CurrentTrack.SampleRate = mpdSampleRate
+			if songIdx >= 0 && songIdx < len(c.queue) && isHTTPStreamTrack(&c.queue[songIdx]) {
+				c.queue[songIdx].SampleRate = mpdSampleRate
+			}
+			stateChanged = true
+		}
+		if mpdBitrate > 0 && c.state.CurrentTrack.Bitrate != mpdBitrate {
+			c.state.CurrentTrack.Bitrate = mpdBitrate
+			if songIdx >= 0 && songIdx < len(c.queue) && isHTTPStreamTrack(&c.queue[songIdx]) {
+				c.queue[songIdx].Bitrate = mpdBitrate
+			}
+			stateChanged = true
 		}
 	}
 
@@ -777,6 +995,10 @@ func (c *Client) syncStatusFromMPD() bool {
 				_ = c.database.UpdateTrackDuration(durID, durVal)
 			}
 		})
+	}
+
+	if mpdErr != "" {
+		_, _ = c.sendRawCommand("clearerror\n")
 	}
 
 	if clampVolTarget >= 0 {
@@ -895,6 +1117,10 @@ func (c *Client) Play() {
 	c.state.CurrentTrack = &trackCopy
 	c.state.Duration = trackCopy.Duration
 	c.state.Status = "play"
+	c.state.LastError = ""
+	if prevStatus != "pause" && !isHTTPStreamTrack(&trackCopy) {
+		c.state.StreamTitle = ""
+	}
 	idx := c.state.CurrentIndex
 	trackID := trackCopy.ID
 	c.markControlUpdate()
@@ -922,6 +1148,7 @@ func (c *Client) Play() {
 func (c *Client) Pause() {
 	c.mu.Lock()
 	c.state.Status = "pause"
+	c.state.LastError = ""
 	c.markControlUpdate()
 	c.mu.Unlock()
 
@@ -959,6 +1186,8 @@ func (c *Client) PlayIndex(index int) {
 	c.state.ElapsedTime = 0
 	c.state.Duration = trackCopy.Duration
 	c.state.Status = "play"
+	c.state.LastError = ""
+	c.state.StreamTitle = ""
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1012,6 +1241,8 @@ func (c *Client) Next() {
 		} else {
 			c.state.Status = "stop"
 			c.state.ElapsedTime = 0
+			c.state.StreamTitle = ""
+			c.state.LastError = ""
 			c.markControlUpdate()
 			c.mu.Unlock()
 			if c.isConnected() {
@@ -1029,6 +1260,8 @@ func (c *Client) Next() {
 	c.state.ElapsedTime = 0
 	c.state.Duration = trackCopy.Duration
 	c.state.Status = "play"
+	c.state.LastError = ""
+	c.state.StreamTitle = ""
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1078,6 +1311,8 @@ func (c *Client) Prev() {
 	c.state.ElapsedTime = 0
 	c.state.Duration = trackCopy.Duration
 	c.state.Status = "play"
+	c.state.LastError = ""
+	c.state.StreamTitle = ""
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1222,6 +1457,8 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 	c.state.CurrentTrack = &first
 	c.state.Duration = first.Duration
 	c.state.ElapsedTime = 0
+	c.state.LastError = ""
+	c.state.StreamTitle = ""
 	if autoPlay {
 		c.state.Status = "play"
 	} else {
@@ -1313,6 +1550,10 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	c.state.QueueLength = len(c.queue)
 	currIdx := c.state.CurrentIndex
 	needPlay := (mode == "play_now" || (mode == "append" && wasEmpty))
+	if needPlay {
+		c.state.LastError = ""
+		c.state.StreamTitle = ""
+	}
 	queueSnapshot := make([]db.Track, len(c.queue))
 	copy(queueSnapshot, c.queue)
 	var firstPlayID int64
@@ -1346,6 +1587,28 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	go c.applyQueueDeltaToMPD(ver, tracksCopy, mode, insertPos, currIdx, needPlay)
 }
 
+// setPlaybackErrorIfVersion registra un error de reproducción en el estado cuando falla la pista activa de la versión vigente.
+func (c *Client) setPlaybackErrorIfVersion(ver uint64, t db.Track, err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.queueVersion.Load() != ver {
+		c.mu.Unlock()
+		return
+	}
+	label := strings.TrimSpace(t.Title)
+	if label == "" {
+		label = t.Path
+	}
+	c.state.LastError = fmt.Sprintf("No se pudo reproducir %s: %v", label, err)
+	c.state.Status = "stop"
+	c.state.StreamTitle = ""
+	c.markControlUpdate()
+	c.mu.Unlock()
+	c.broadcastState()
+}
+
 // pushQueueToMPD reemplaza la cola de MPD y empieza reproduciendo startIdx antes de añadir el resto.
 func (c *Client) pushQueueToMPD(ver uint64, tracks []db.Track, startIdx int, autoPlay bool) {
 	if len(tracks) == 0 {
@@ -1369,17 +1632,29 @@ func (c *Client) pushQueueToMPD(ver uint64, tracks []db.Track, startIdx int, aut
 	}
 
 	// Añadir rápidamente hasta startIdx para comenzar a sonar en <50ms
+	mpdPlayIdx := 0
 	for i := 0; i <= startIdx; i++ {
 		if c.queueVersion.Load() != ver {
 			return
 		}
 		if err := c.addTrackToMPD(tracks[i]); err != nil {
 			log.Printf("[MPD] Advertencia al encolar pista inicial %s: %v", tracks[i].Path, err)
+			if i == startIdx {
+				if autoPlay {
+					c.setPlaybackErrorIfVersion(ver, tracks[i], err)
+				}
+				return
+			}
+		} else if i < startIdx {
+			mpdPlayIdx++
 		}
 	}
 
 	if autoPlay && c.queueVersion.Load() == ver {
-		_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", startIdx))
+		if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", mpdPlayIdx)); err != nil {
+			c.setPlaybackErrorIfVersion(ver, tracks[startIdx], err)
+			return
+		}
 	}
 
 	// Encolar el resto de pistas en segundo plano cancelando si el usuario lanzó otra petición
@@ -1413,8 +1688,15 @@ func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string
 			targetPos := insertPos + offset
 			if err := c.addTrackToMPDAt(t, targetPos); err != nil {
 				log.Printf("[MPD] Advertencia al insertar pista en posición %d (%s): %v", targetPos, t.Path, err)
+				if offset == 0 && autoPlay {
+					c.setPlaybackErrorIfVersion(ver, t, err)
+					return
+				}
 			} else if offset == 0 && autoPlay {
-				_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", playIdx))
+				if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", playIdx)); err != nil {
+					c.setPlaybackErrorIfVersion(ver, t, err)
+					return
+				}
 			}
 		}
 		return
@@ -1488,6 +1770,9 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.CurrentTrack = nil
 		c.state.Status = "stop"
 		c.state.ElapsedTime = 0
+		c.state.Duration = 0
+		c.state.StreamTitle = ""
+		c.state.LastError = ""
 	} else if index < c.state.CurrentIndex {
 		c.state.CurrentIndex--
 	} else if index == c.state.CurrentIndex {
@@ -1498,6 +1783,8 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.CurrentTrack = &trackCopy
 		c.state.Duration = trackCopy.Duration
 		c.state.ElapsedTime = 0
+		c.state.StreamTitle = ""
+		c.state.LastError = ""
 	}
 	c.mu.Unlock()
 
@@ -1526,6 +1813,9 @@ func (c *Client) ClearQueue() {
 	c.state.CurrentTrack = nil
 	c.state.Status = "stop"
 	c.state.ElapsedTime = 0
+	c.state.Duration = 0
+	c.state.StreamTitle = ""
+	c.state.LastError = ""
 	c.markControlUpdate()
 	c.mu.Unlock()
 

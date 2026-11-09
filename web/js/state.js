@@ -21,7 +21,9 @@ export const state = {
     replay_gain: 'auto',
     audio_outputs: [],
     active_output: 'Jack 3.5mm Analógico',
-    sleep_timer_sec: 0
+    sleep_timer_sec: 0,
+    stream_title: '',
+    last_error: ''
   },
 
   // Cola de canciones (Jukebox Queue)

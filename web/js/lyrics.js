@@ -5,6 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe } from './state.js';
+import { isLiveStreamTrack } from './player.js';
 
 // initLyrics inicializa la sincronización de letras LRCLIB con el reproductor.
 export function initLyrics() {
@@ -19,12 +20,28 @@ export function initLyrics() {
   setInterval(syncActiveLyricLine, 250);
 }
 
+// parseRadioStreamSong extrae artista y título desde un metadato ICY con formato "Artista - Canción".
+function parseRadioStreamSong(streamTitle) {
+  const clean = (streamTitle || '').trim();
+  if (!clean) return null;
+  const parts = clean.split(/\s+[-–—]\s+/);
+  if (parts.length < 2) return null;
+  const artist = parts[0].trim();
+  const title = parts.slice(1).join(' - ').trim();
+  if (!artist || !title) return null;
+  return { artist, title };
+}
+
 // checkAndFetchLyrics consulta la API abierta LRCLIB si la pista ha cambiado.
 async function checkAndFetchLyrics() {
   const track = state.player.current_track;
   if (!track) return;
 
-  const trackKey = `${track.artist}-${track.title}`;
+  const isLive = isLiveStreamTrack(track);
+  const streamTitle = isLive ? (state.player.stream_title || '').trim() : '';
+  const trackKey = isLive
+    ? `radio:${track.path || track.title}:${streamTitle}`
+    : `${track.artist}-${track.title}`;
   if (state.lyrics.trackKey === trackKey) return;
 
   state.lyrics.trackKey = trackKey;
@@ -35,10 +52,30 @@ async function checkAndFetchLyrics() {
 
   const container = document.getElementById('npLyricsContainer');
   if (!container) return;
+
+  let queryTitle = track.title;
+  let queryArtist = track.artist;
+  let queryAlbum = track.album;
+  let queryDuration = track.duration;
+  let queryPath = track.path;
+
+  if (isLive) {
+    const parsed = parseRadioStreamSong(streamTitle);
+    if (!parsed) {
+      container.innerHTML = '<div style="color:var(--text-muted); padding:40px 16px; font-size:0.9rem; line-height:1.5;">📡 Emisora de radio en directo.<br/>Cuando el flujo envíe «Artista - Canción», buscaremos la letra automáticamente.</div>';
+      return;
+    }
+    queryTitle = parsed.title;
+    queryArtist = parsed.artist;
+    queryAlbum = '';
+    queryDuration = 0;
+    queryPath = '';
+  }
+
   container.innerHTML = '<div style="color:var(--text-muted); padding:40px 0; font-size:0.9rem;">Buscando letras sincronizadas...</div>';
 
   try {
-    const res = await api.getLyrics(track.title, track.artist, track.album, track.duration, track.path);
+    const res = await api.getLyrics(queryTitle, queryArtist, queryAlbum, queryDuration, queryPath);
     if (res && res.found) {
       state.lyrics.found = true;
       state.lyrics.plain = res.plain || '';

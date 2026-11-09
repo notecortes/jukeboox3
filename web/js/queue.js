@@ -5,7 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe, updatePlayerState } from './state.js';
-import { formatTime, showToast } from './player.js';
+import { formatTime, isLiveStreamTrack, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
 // escapeHtml escapa caracteres especiales HTML para prevenir inyecciones XSS en la cola.
@@ -54,8 +54,19 @@ export function renderQueueList() {
   const queue = state.queue || [];
   if (totalCountEl) {
     let totalDur = 0;
-    queue.forEach((t) => totalDur += (t.duration || 0));
-    totalCountEl.textContent = `${queue.length} temas • ${formatTime(totalDur)}`;
+    let liveCount = 0;
+    queue.forEach((t) => {
+      if (isLiveStreamTrack(t) && (!t.duration || t.duration <= 0)) {
+        liveCount += 1;
+      } else {
+        totalDur += (t.duration || 0);
+      }
+    });
+    if (queue.length > 0 && liveCount === queue.length) {
+      totalCountEl.textContent = `${queue.length} radio${queue.length > 1 ? 's' : ''} en vivo`;
+    } else {
+      totalCountEl.textContent = `${queue.length} temas • ${formatTime(totalDur)}`;
+    }
   }
 
   if (queue.length === 0) {
@@ -73,6 +84,15 @@ export function renderQueueList() {
   // 1. Tarjeta Destacada "Ahora Suena" en formato grande
   if (state.player.current_track) {
     const cur = state.player.current_track;
+    const curIsLive = isLiveStreamTrack(cur);
+    const curHasKnownDur = (cur.duration && cur.duration > 0);
+    const heroSubtitle = (curIsLive && state.player.stream_title)
+      ? `🎙️ ${state.player.stream_title} • ${cur.artist || 'Radio en Directo'}`
+      : `${cur.artist || 'Artista'} • ${cur.album || (curIsLive ? 'Radio Web' : 'Álbum')}`;
+    const heroTimeLabel = (curIsLive && !curHasKnownDur)
+      ? `${formatTime(state.player.elapsed_time || 0)} • EN VIVO`
+      : `${formatTime(state.player.elapsed_time || 0)} / ${formatTime(cur.duration || 0)}`;
+
     const heroCard = document.createElement('div');
     heroCard.className = 'queue-hero-card';
     heroCard.style.cssText = `
@@ -102,10 +122,10 @@ export function renderQueueList() {
         <img src="${escapeHtml(cur.cover_url || '/assets/default-cover.svg')}" onerror="this.onerror=null;this.src='/assets/default-cover.svg';" style="width:68px; height:68px; min-width:68px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.5);" alt="Carátula"/>
         <div style="flex:1; min-width:0;">
           <div style="font-size:1.05rem; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(cur.title || 'Canción')}</div>
-          <div style="font-size:0.88rem; color:var(--text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(cur.artist || 'Artista')} • ${escapeHtml(cur.album || 'Álbum')}</div>
+          <div style="font-size:0.88rem; color:var(--text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(heroSubtitle)}</div>
           <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${escapeHtml(cur.format || 'FLAC')} ${cur.bitrate || 320}kbps</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">${formatTime(state.player.elapsed_time || 0)} / ${formatTime(cur.duration || 0)}</span>
+            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${escapeHtml(cur.format || (curIsLive ? 'STREAM' : 'FLAC'))} ${cur.bitrate || 128}kbps</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(heroTimeLabel)}</span>
           </div>
         </div>
       </div>
@@ -134,6 +154,10 @@ export function renderQueueList() {
     const item = document.createElement('div');
     item.className = `queue-item ${index === state.player.current_index ? 'active' : ''}`;
     item.dataset.index = index;
+    const itemIsLive = isLiveStreamTrack(track);
+    const durText = (itemIsLive && (!track.duration || track.duration <= 0))
+      ? 'EN VIVO'
+      : formatTime(track.duration);
 
     item.innerHTML = `
       <div class="queue-drag-handle" title="Arrastrar para mover">
@@ -148,7 +172,7 @@ export function renderQueueList() {
         <div class="track-artist">${escapeHtml(track.artist)}</div>
       </div>
       <div class="track-right">
-        <span class="track-duration">${formatTime(track.duration)}</span>
+        <span class="track-duration">${durText}</span>
         <button class="btn-icon" style="width:32px; height:32px; min-width:32px; border:none; background:transparent;" title="Eliminar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>

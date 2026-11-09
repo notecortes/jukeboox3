@@ -263,6 +263,19 @@ export function getRadios() {
   return requestHelper('/radios');
 }
 
+// addRadio guarda una nueva emisora personalizada (.mp3, .aac, .m3u, .pls, .m3u8) en el catálogo.
+export function addRadio(radio) {
+  return requestHelper('/radios', {
+    method: 'POST',
+    body: JSON.stringify(radio)
+  });
+}
+
+// deleteRadio elimina una emisora personalizada añadida por el usuario según su ID.
+export function deleteRadio(id) {
+  return requestHelper(`/radios?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 // playRadio arranca la reproducción de una emisora web.
 export function playRadio(radio) {
   return requestHelper('/radios/play', {

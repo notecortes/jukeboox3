@@ -1,0 +1,2832 @@
+[
+  {
+    "id": 1,
+    "name": "1.FM - Blues Radio",
+    "url": "http://strm112.1.fm/blues_mobile_mp3",
+    "genre": "Blues",
+    "broadcaster": "1.FM",
+    "country": "Switzerland",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 2,
+    "name": "2BOB Radio 104.7 FM",
+    "url": "http://playerservices.streamtheworld.com/api/livestream-redirect/2BOB.mp3",
+    "genre": "Alternative",
+    "broadcaster": "BOB 2.00",
+    "country": "Australia",
+    "bitrate": "64",
+    "format": "MP3"
+  },
+  {
+    "id": 3,
+    "name": "4ZZZ FM 102.1 - Alternative",
+    "url": "https://iheart.4zzz.org.au/4zzz",
+    "genre": "Alternative",
+    "broadcaster": "4ZZZ FM",
+    "country": "Australia",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 4,
+    "name": "6forty Radio",
+    "url": "http://radio.6forty.com:8000/6forty",
+    "genre": "Alternative, Post-Rock, Post-Metal, Modern, Experimental, Deep Indie",
+    "broadcaster": "6forty Radio",
+    "country": "United States",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 5,
+    "name": "A.M. Ambient",
+    "url": "http://radio.stereoscenic.com/ama-h",
+    "genre": "Electronica, Ambient",
+    "broadcaster": "Stereoscenic",
+    "country": "United States",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 6,
+    "name": "ABC Country",
+    "url": "http://live-radio01.mediahubaustralia.com/CTRW/mp3/",
+    "genre": "Country",
+    "broadcaster": "ABC",
+    "country": "Australia",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 7,
+    "name": "ABC Jazz",
+    "url": "http://live-radio01.mediahubaustralia.com/JAZW/mp3/",
+    "genre": "Jazz",
+    "broadcaster": "ABC",
+    "country": "Australia",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 8,
+    "name": "Absolut Hot",
+    "url": "https://edge68.live-sm.absolutradio.de/absolut-hot/stream/aacp?aggregator=smk-m3u-aac",
+    "genre": "Pop, Top 40, Chart, Electro, Hip Hop",
+    "broadcaster": "Absolut",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 10,
+    "name": "Absolut Relax",
+    "url": "https://edge12.live-sm.absolutradio.de/absolut-relax/stream/mp3",
+    "genre": "Pop, 80's, 90's",
+    "broadcaster": "Absolut",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 9,
+    "name": "Absolut music XL",
+    "url": "https://absolut-musicxl.live-sm.absolutradio.de/absolut-musicxl/stream/mp3",
+    "genre": "Pop, New Releases, Oldies, Rock, Pop",
+    "broadcaster": "Absolut",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 11,
+    "name": "Ambient Sleeping Pill",
+    "url": "http://radio.stereoscenic.com/asp-h",
+    "genre": "Electronica, Ambient",
+    "broadcaster": "Stereoscenic",
+    "country": "United States",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 12,
+    "name": "Ancient FM - Mediaeval and Renaissance Music",
+    "url": "https://mediaserv73.live-streams.nl:18058/stream",
+    "genre": "Classical, Mediaeval, Renaissance",
+    "broadcaster": "Ancient FM",
+    "country": "Canada",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 13,
+    "name": "ArtSound FM 92.7",
+    "url": "https://stream.artsound.fm/mp3",
+    "genre": "Classical, Jazz, Folk, World Music",
+    "broadcaster": "ArtSound FM",
+    "country": "Australia",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 15,
+    "name": "BBC Asian Network",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_asian_network&bitrate=96000",
+    "genre": "Contemporary, Bollywood, Bhangra, Pop, Urban",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 16,
+    "name": "BBC Asian Network (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_asian_network&bitrate=320000&uk=1",
+    "genre": "Contemporary, Bollywood, Bhangra, Pop, Urban",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 17,
+    "name": "BBC Radio 1",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_one&bitrate=96000",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 18,
+    "name": "BBC Radio 1 (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_one&bitrate=320000&uk=1",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 19,
+    "name": "BBC Radio 2",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_two&bitrate=96000",
+    "genre": "Pop, Contemporary",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 20,
+    "name": "BBC Radio 2 (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_two&bitrate=320000&uk=1",
+    "genre": "Pop, Contemporary",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 21,
+    "name": "BBC Radio 3",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_three&bitrate=96000",
+    "genre": "Classical, Jazz, World Music",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 22,
+    "name": "BBC Radio 3 (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_three&bitrate=320000&uk=1",
+    "genre": "Classical, Jazz, World Music",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 23,
+    "name": "BBC Radio 4 FM",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_fourfm&bitrate=96000",
+    "genre": "Spoken Word",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 24,
+    "name": "BBC Radio 4 FM (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_fourfm&bitrate=320000&uk=1",
+    "genre": "Spoken Word",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 25,
+    "name": "BBC Radio 5 live",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_five_live&bitrate=96000",
+    "genre": "News, Discussion, Sports, Interviews, Phone-ins",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 26,
+    "name": "BBC Radio 5 live (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_five_live&bitrate=320000&uk=1",
+    "genre": "News, Discussion, Sports, Interviews, Phone-ins",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 27,
+    "name": "BBC Radio 5 live sports extra (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_radio_five_live_sports_extra&bitrate=320000&uk=1",
+    "genre": "News, Sports",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 28,
+    "name": "BBC Radio 6 music",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_6music&bitrate=96000",
+    "genre": "Alternative, Rock, Funk",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 29,
+    "name": "BBC Radio 6 music (320K)",
+    "url": "http://lsn.lv/bbcradio.m3u8?station=bbc_6music&bitrate=320000&uk=1",
+    "genre": "Alternative, Rock, Funk",
+    "broadcaster": "BBC",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 30,
+    "name": "BR-Klassik",
+    "url": "https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high",
+    "genre": "Classical",
+    "broadcaster": "Bayern Radio",
+    "country": "Germany",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 14,
+    "name": "Bayern 2",
+    "url": "https://dispatcher.rndfnk.com/br/br2/live/mp3/mid",
+    "genre": "Eclectic",
+    "broadcaster": "Bayern Radio",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 31,
+    "name": "Buddha Radio",
+    "url": "https://legacy.scahw.com.au/2buddha_32",
+    "genre": "Chill Out",
+    "broadcaster": "Buddah",
+    "country": "Australia",
+    "bitrate": "32",
+    "format": "MP3"
+  },
+  {
+    "id": 32,
+    "name": "ByteFM",
+    "url": "https://bytefm.cast.addradio.de/bytefm/main/high/stream",
+    "genre": "Eclectic",
+    "broadcaster": "Alsterradio",
+    "country": "Germany",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 33,
+    "name": "CDNX",
+    "url": "http://msmn7.co:8018/stream",
+    "genre": "Alternative",
+    "broadcaster": "Camden Market",
+    "country": "United Kingdom",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 34,
+    "name": "Classic FM",
+    "url": "http://media-ice.musicradio.com/ClassicFMMP3",
+    "genre": "Classical",
+    "broadcaster": "Global Radio",
+    "country": "United Kingdom",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 35,
+    "name": "Czech Radio Classical",
+    "url": "https://rozhlas.stream/ddur_mp3_256.mp3",
+    "genre": "Classical",
+    "broadcaster": "ČRo D-Dur",
+    "country": "Czech Republic",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 38,
+    "name": "DR P1",
+    "url": "http://live-icy.dr.dk/A/A03H.mp3",
+    "genre": "News, Talk",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 39,
+    "name": "DR P2",
+    "url": "http://live-icy.dr.dk/A/A04H.mp3",
+    "genre": "Eclectic, Music, Culture",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 40,
+    "name": "DR P3",
+    "url": "http://live-icy.dr.dk/A/A05H.mp3",
+    "genre": "Pop, Rock",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 41,
+    "name": "DR P4",
+    "url": "http://live-icy.dr.dk/A/A08H.mp3",
+    "genre": "Pop, News",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 42,
+    "name": "DR P6 Beat",
+    "url": "http://live-icy.dr.dk/A/A29H.mp3",
+    "genre": "Alternative, Alt Rock, Rock",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 43,
+    "name": "DR P8 Jazz",
+    "url": "http://live-icy.dr.dk/A/A22H.mp3",
+    "genre": "Jazz",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 44,
+    "name": "DR P8 Jazz (320K)",
+    "url": "https://DRliveradio.akamaized.net/hls/live/2022411/p8jazz/playlist-320000.m3u8",
+    "genre": "Jazz",
+    "broadcaster": "DR",
+    "country": "Denmark",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 36,
+    "name": "Dandelion Radio",
+    "url": "http://stream.dandelionradio.com:9414",
+    "genre": "Alternative",
+    "broadcaster": "Dandelion Radio",
+    "country": "United Kingdom",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 37,
+    "name": "Davide of MIMIC",
+    "url": "https://streaming04.liveboxstream.uk/proxy/davideof?mp=/stream",
+    "genre": "Classical",
+    "broadcaster": "Davide of MIMIC Radio",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 45,
+    "name": "Eldoradio",
+    "url": "http://81.92.238.33:80",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "Eldoradio",
+    "country": "Luxembourg",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 46,
+    "name": "FluxFM - 2000s",
+    "url": "https://channels.fluxfm.de/2000er/stream.mp3",
+    "genre": "2000s",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 47,
+    "name": "FluxFM - 60s",
+    "url": "https://channels.fluxfm.de/60s/stream.mp3",
+    "genre": "60s",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 48,
+    "name": "FluxFM - 70s",
+    "url": "https://channels.fluxfm.de/70s/stream.mp3",
+    "genre": "70s",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 49,
+    "name": "FluxFM - 80s",
+    "url": "https://channels.fluxfm.de/80s/stream.mp3",
+    "genre": "80s",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 50,
+    "name": "FluxFM - 90s",
+    "url": "https://channels.fluxfm.de/90s/stream.mp3",
+    "genre": "90s",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 51,
+    "name": "FluxFM - Anima Radio",
+    "url": "https://channels.fluxfm.de/anima-radio/stream.mp3",
+    "genre": "HipHop",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 52,
+    "name": "FluxFM - B-Funk",
+    "url": "https://channels.fluxfm.de/b-funk/stream.mp3",
+    "genre": "Funk",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 53,
+    "name": "FluxFM - Berlin Beach House Radio",
+    "url": "https://channels.fluxfm.de/berlin-beach-house/stream.mp3",
+    "genre": "Electronica",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 54,
+    "name": "FluxFM - ChillHop",
+    "url": "https://channels.fluxfm.de/chillhop/stream.mp3",
+    "genre": "Chill Out, Laidback",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 55,
+    "name": "FluxFM - Chillout Radio",
+    "url": "https://channels.fluxfm.de/chillout-radio/stream.mp3",
+    "genre": "Chill Out, Laidback",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 56,
+    "name": "FluxFM - Clubsandwich",
+    "url": "https://channels.fluxfm.de/clubsandwich/stream.mp3",
+    "genre": "Electronica",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 57,
+    "name": "FluxFM - ElectroFlux",
+    "url": "https://channels.fluxfm.de/elektro-flux/stream.mp3",
+    "genre": "Electronica, Pop",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 58,
+    "name": "FluxFM - Electronic Chillout",
+    "url": "https://channels.fluxfm.de/electronic-chillout/stream.mp3",
+    "genre": "Chill Out, Laidback",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 59,
+    "name": "FluxFM - FluxFinest",
+    "url": "https://channels.fluxfm.de/fluxfm-finest/stream.mp3",
+    "genre": "HipHop",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 60,
+    "name": "FluxFM - FluxLounge",
+    "url": "https://channels.fluxfm.de/flux-lounge/stream.mp3",
+    "genre": "Lounge, Neo-Soul, Trip-Hop, Jazz",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 61,
+    "name": "FluxFM - HipHop Classics",
+    "url": "https://channels.fluxfm.de/boom-fm-classics/stream.mp3",
+    "genre": "HipHop",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 62,
+    "name": "FluxFM - Hippie Trippy Garden Pretty",
+    "url": "https://channels.fluxfm.de/htgp/stream.mp3",
+    "genre": "Electronica, Soundscape, Atmospheric",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 63,
+    "name": "FluxFM - Indie Disco",
+    "url": "https://channels.fluxfm.de/indiedisco/stream.mp3",
+    "genre": "Indie, Disco, Dance",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 64,
+    "name": "FluxFM - Jazzradio Schwarzenstein",
+    "url": "https://channels.fluxfm.de/jazz-schwarzenstein/stream.mp3",
+    "genre": "Jazz",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 65,
+    "name": "FluxFM - John Reed Radio",
+    "url": "https://streams.fluxfm.de/john-reed/mp3-320/streams.fluxfm.de/",
+    "genre": "Various Genres",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 66,
+    "name": "FluxFM - Listen To Berlin",
+    "url": "https://channels.fluxfm.de/listen-to-berlin/stream.mp3",
+    "genre": "HipHop",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 67,
+    "name": "FluxFM - Livestream",
+    "url": "https://channels.fluxfm.de/FluxFM/stream.mp3",
+    "genre": "News, Various Genres",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 68,
+    "name": "FluxFM - MetalFM",
+    "url": "https://channels.fluxfm.de/metal-fm/stream.mp3",
+    "genre": "Metal",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 69,
+    "name": "FluxFM - Mini Flux",
+    "url": "https://channels.fluxfm.de/mini-flux/stream.mp3",
+    "genre": "Various Genres",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 70,
+    "name": "FluxFM - Radio Alternative",
+    "url": "https://channels.fluxfm.de/alternative/stream.mp3",
+    "genre": "Alternative",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 71,
+    "name": "FluxFM - Sound Of Berlin",
+    "url": "https://channels.fluxfm.de/sound-of-berlin/stream.mp3",
+    "genre": "Electronica, House",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 72,
+    "name": "FluxFM - Techno Underground",
+    "url": "https://channels.fluxfm.de/techno-underground/stream.mp3",
+    "genre": "Electronica, Techno",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 73,
+    "name": "FluxFM - XJAZZ",
+    "url": "https://channels.fluxfm.de/x-jazz/stream.mp3",
+    "genre": "Jazz",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 74,
+    "name": "FluxFM - Yoga Sounds",
+    "url": "https://channels.fluxfm.de/yoga-sounds/stream.mp3",
+    "genre": "Chill Out, Ambient, Yoga",
+    "broadcaster": "FluxFM",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 75,
+    "name": "France Culture Live",
+    "url": "http://direct.franceculture.fr/live/franceculture-midfi.mp3",
+    "genre": "Spoken Word, Current Affairs",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 76,
+    "name": "France Inter Paris (FIP)",
+    "url": "http://direct.fipradio.fr/live/fip-midfi.mp3",
+    "genre": "Classical, Jazz, Rock, World Music",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 77,
+    "name": "France Musique Classique Plus",
+    "url": "http://direct.francemusique.fr/live/francemusiqueclassiqueplus-hifi.mp3",
+    "genre": "Classical",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 78,
+    "name": "France Musique La Contemporaine",
+    "url": "http://direct.francemusique.fr/live/francemusiquelacontemporaine-hifi.mp3",
+    "genre": "Contemporary",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 79,
+    "name": "France Musique La Jazz",
+    "url": "http://direct.francemusique.fr/live/francemusiquelajazz-hifi.aac",
+    "genre": "Jazz",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 80,
+    "name": "France Musique Live",
+    "url": "http://direct.francemusique.fr/live/francemusique-midfi.mp3",
+    "genre": "Classical, Jazz",
+    "broadcaster": "Radio France",
+    "country": "France",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 82,
+    "name": "Hi On Line - Classical",
+    "url": "http://mediaserv30.live-streams.nl:8088/live",
+    "genre": "Classical",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 83,
+    "name": "Hi On Line - France",
+    "url": "http://mediaserv21.live-streams.nl:8000/live",
+    "genre": "Contemporary",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 84,
+    "name": "Hi On Line - Gold",
+    "url": "http://mediaserv30.live-streams.nl:8000/live",
+    "genre": "Pop, Golden Oldies",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 85,
+    "name": "Hi On Line - Jazz",
+    "url": "http://mediaserv38.live-streams.nl:8006/live",
+    "genre": "Jazz",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 86,
+    "name": "Hi On Line - Latin",
+    "url": "http://mediaserv33.live-streams.nl:8034/live",
+    "genre": "Latin",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 87,
+    "name": "Hi On Line - Lounge",
+    "url": "http://mediaserv33.live-streams.nl:8036/live",
+    "genre": "Lounge",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 88,
+    "name": "Hi On Line - Pop (320K)",
+    "url": "https://mediaserv33.live-streams.nl:8036/stream",
+    "genre": "Pop",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 89,
+    "name": "Hi On Line - Pop (FLAC)",
+    "url": "http://mscp2.live-streams.nl:8100/flac.flac",
+    "genre": "Pop",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 90,
+    "name": "Hi On Line - World",
+    "url": "http://mediaserv38.live-streams.nl:8027/live",
+    "genre": "World Music",
+    "broadcaster": "Hi.Fine",
+    "country": "Netherlands",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 96,
+    "name": "JB Radio2 (320K)",
+    "url": "https://mediacp.jb-radio.net:8001/aac",
+    "genre": "Alternative, Rock, Eclectic",
+    "broadcaster": "JB Radio",
+    "country": "Canada",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 91,
+    "name": "Jazz de Ville - Chill",
+    "url": "https://onair22.xdevel.com/proxy/xautocloud_td3e_421?mp=/stream",
+    "genre": "Jazz",
+    "broadcaster": "Jazz de Ville",
+    "country": "Netherlands",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 92,
+    "name": "Jazz de Ville - Dance",
+    "url": "https://onair22.xdevel.com/proxy/xautocloud_6cqz_422?mp=/stream",
+    "genre": "Jazz",
+    "broadcaster": "Jazz de Ville",
+    "country": "Netherlands",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 93,
+    "name": "Jazz de Ville - Groove",
+    "url": "https://onair22.xdevel.com/proxy/xautocloud_1kha_423?mp=/stream",
+    "genre": "Jazz",
+    "broadcaster": "Jazz de Ville",
+    "country": "Netherlands",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 94,
+    "name": "Jazz de Ville - Jazz",
+    "url": "https://onair22.xdevel.com/proxy/xautocloud_kkyb_420?mp=/stream",
+    "genre": "Jazz",
+    "broadcaster": "Jazz de Ville",
+    "country": "Netherlands",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 95,
+    "name": "Jazz24",
+    "url": "https://knkx-live-a.edge.audiocdn.com/6285_256k",
+    "genre": "Jazz",
+    "broadcaster": "Jazz24.org",
+    "country": "United States",
+    "bitrate": "256",
+    "format": "AAC"
+  },
+  {
+    "id": 98,
+    "name": "KCMP 89.3 FM - The Current",
+    "url": "http://current.stream.publicradio.org/kcmp.mp3",
+    "genre": "Alternative",
+    "broadcaster": "PBS",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 99,
+    "name": "KCSM",
+    "url": "http://ice5.securenetsystems.net/KCSM",
+    "genre": "Jazz",
+    "broadcaster": "KCSM FM",
+    "country": "United States",
+    "bitrate": "64",
+    "format": "AAC"
+  },
+  {
+    "id": 101,
+    "name": "KEXP 90.3 FM Seattle",
+    "url": "https://kexp.streamguys1.com/kexp160.aac",
+    "genre": "Alternative, Indie",
+    "broadcaster": "PBS",
+    "country": "United States",
+    "bitrate": "160",
+    "format": "AAC-LC"
+  },
+  {
+    "id": 102,
+    "name": "KMHD Portland FM 89.1 -  Jazz",
+    "url": "http://stream1.opb.org/kmhd.mp3",
+    "genre": "Jazz",
+    "broadcaster": "KMHD",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 103,
+    "name": "KUVO 89.3 FM Denver",
+    "url": "http://kuvo-ice.streamguys.org/kuvo-aac-128",
+    "genre": "Jazz",
+    "broadcaster": "PBS",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 104,
+    "name": "KUVO HD2",
+    "url": "http://kuvo-ice.streamguys.org/kuvohd2-aac-128",
+    "genre": "Pop, R&B, Hip Hop",
+    "broadcaster": "PBS",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 97,
+    "name": "Kanal K",
+    "url": "https://play.kanalk.ch/kanalk/mp3-192/",
+    "genre": "Alternative",
+    "broadcaster": "Regionalradio Aargaudio AG",
+    "country": "Switzerland",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 105,
+    "name": "Linn Classical",
+    "url": "http://linn.co.uk:8004/autodj",
+    "genre": "Classical",
+    "broadcaster": "Linn",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 106,
+    "name": "Linn Jazz",
+    "url": "http://linn.co.uk:8000/autodj",
+    "genre": "Jazz",
+    "broadcaster": "Linn",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 107,
+    "name": "Linn Radio",
+    "url": "http://linn.co.uk:8003/autodj",
+    "genre": "Eclectic",
+    "broadcaster": "Linn",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 109,
+    "name": "MDR Klassik",
+    "url": "http://mdr-284350-0.cast.mdr.de/mdr/284350/0/aac/high/stream.aac",
+    "genre": "Classical",
+    "broadcaster": "Mitteldeutscher Rundfunk",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 108,
+    "name": "Mad Music Asylum",
+    "url": "http://albireo.shoutca.st:8250/stream",
+    "genre": "Rock, Eclectic",
+    "broadcaster": "Mad Music Asylum",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 110,
+    "name": "Morow - Retro Progressive Rock",
+    "url": "http://stream.fr.morow.com:8080/morow_hi.aacp",
+    "genre": "Progressive Rock, Rock",
+    "broadcaster": "Morow",
+    "country": "France",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 111,
+    "name": "Musiq 3",
+    "url": "https://radios.rtbf.be/musiq3-128.aac",
+    "genre": "Classical",
+    "broadcaster": "RTBF",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 115,
+    "name": "NME 1 - Classic & New Indie Alt",
+    "url": "http://listen-nme.sharp-stream.com/nme1high.mp3",
+    "genre": "Indie",
+    "broadcaster": "NME",
+    "country": "United Kingdom",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 116,
+    "name": "NME 2 - New & Upfront Indie Alt",
+    "url": "http://listen-nme.sharp-stream.com/nme2high.mp3",
+    "genre": "Indie",
+    "broadcaster": "NME",
+    "country": "United Kingdom",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 117,
+    "name": "NPO Klassiek",
+    "url": "http://icecast.omroep.nl/radio4-bb-mp3",
+    "genre": "Classical",
+    "broadcaster": "NPO",
+    "country": "Netherlands",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 118,
+    "name": "NPO Radio 1",
+    "url": "http://icecast.omroep.nl/radio1-bb-aac",
+    "genre": "News",
+    "broadcaster": "NPO",
+    "country": "Netherlands",
+    "bitrate": "64",
+    "format": "AAC"
+  },
+  {
+    "id": 119,
+    "name": "NPO Radio 2",
+    "url": "http://icecast.omroep.nl/radio2-bb-aac",
+    "genre": "Pop, Dance, Oldies, Rock",
+    "broadcaster": "NPO",
+    "country": "Netherlands",
+    "bitrate": "64",
+    "format": "AAC"
+  },
+  {
+    "id": 120,
+    "name": "NTS Live 1",
+    "url": "http://stream-relay-geo.ntslive.net/stream",
+    "genre": "Alternative, Underground, Club, Live",
+    "broadcaster": "NTS",
+    "country": "United Kingdom",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 121,
+    "name": "NTS Live 2",
+    "url": "http://stream-relay-geo.ntslive.net/stream2",
+    "genre": "Alternative, Underground, Club, Live",
+    "broadcaster": "NTS",
+    "country": "United Kingdom",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 112,
+    "name": "Naim Classical",
+    "url": "http://mscp3.live-streams.nl:8250/class-high.aac",
+    "genre": "Classical",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 113,
+    "name": "Naim Jazz",
+    "url": "http://mscp3.live-streams.nl:8340/jazz-high.aac",
+    "genre": "Jazz",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 114,
+    "name": "Naim Radio",
+    "url": "http://mscp3.live-streams.nl:8360/high.aac",
+    "genre": "Eclectic",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 122,
+    "name": "Omroep Zeeland",
+    "url": "https://d3isaxd2t6q8zm.cloudfront.net/icecast/omroepzeeland/omroepzeeland_radio",
+    "genre": "Pop",
+    "broadcaster": "Omroep Zeeland",
+    "country": "Netherlands",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 123,
+    "name": "Organ Experience",
+    "url": "http://play2.organlive.com:7006/320",
+    "genre": "Classical",
+    "broadcaster": "ORGAN.MEDIA",
+    "country": "United States",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 124,
+    "name": "OrganLive.com",
+    "url": "http://play2.organlive.com:7000/320",
+    "genre": "Classical",
+    "broadcaster": "ORGAN.MEDIA",
+    "country": "United States",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 125,
+    "name": "P1",
+    "url": "https://sverigesradio.se/topsy/direkt/132-hi-aac",
+    "genre": "News, Culture",
+    "broadcaster": "Sveriges Radio",
+    "country": "Sweden",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 126,
+    "name": "P2",
+    "url": "https://http-live.sr.se/p2musik-aac-320",
+    "genre": "Classical, Jazz",
+    "broadcaster": "Sveriges Radio",
+    "country": "Sweden",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 127,
+    "name": "P3",
+    "url": "https://sverigesradio.se/topsy/direkt/164-hi-aac",
+    "genre": "Pop, Culture",
+    "broadcaster": "Sveriges Radio",
+    "country": "Sweden",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 129,
+    "name": "PRM - Prog Rock & Metal",
+    "url": "http://shoutcastunlimited.com:8512",
+    "genre": "Progressive Rock, Metal",
+    "broadcaster": "Will Mangold",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 128,
+    "name": "Positivly Baroque",
+    "url": "http://play2.organlive.com:7002/320",
+    "genre": "Classical, Baroque",
+    "broadcaster": "ORGAN.MEDIA",
+    "country": "United States",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 149,
+    "name": "RCO Live",
+    "url": "https://ice.cr1.streamzilla.xlcdn.com:8000/sz=RCOLiveWebradio=mp3-192",
+    "genre": "Classical",
+    "broadcaster": "RCO",
+    "country": "Netherlands",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 152,
+    "name": "RSI - Rete Due",
+    "url": "http://stream.srg-ssr.ch/m/retedue/mp3_128",
+    "genre": "Classical, Music, Culture",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 153,
+    "name": "RSI - Rete Tre",
+    "url": "http://stream.srg-ssr.ch/m/retetre/mp3_128",
+    "genre": "Alternative, Pop",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 154,
+    "name": "RSI - Rete Uno",
+    "url": "http://stream.srg-ssr.ch/m/reteuno/mp3_128",
+    "genre": "News, Entertainment, News",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 155,
+    "name": "RTR Radio",
+    "url": "http://stream.srg-ssr.ch/m/rr/mp3_128",
+    "genre": "Pop",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 156,
+    "name": "RTS - Couleur 3",
+    "url": "http://stream.srg-ssr.ch/m/couleur3/mp3_128",
+    "genre": "Eclectic",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 157,
+    "name": "RTS - Espace 2",
+    "url": "http://stream.srg-ssr.ch/m/espace-2/mp3_128",
+    "genre": "Classical",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 158,
+    "name": "RTS - La Premiere",
+    "url": "http://stream.srg-ssr.ch/m/la-1ere/mp3_128",
+    "genre": "Pop",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 159,
+    "name": "RTS - option musique",
+    "url": "http://stream.srg-ssr.ch/m/option-musique/mp3_128",
+    "genre": "Alternative, Indie",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 130,
+    "name": "Radio 357",
+    "url": "https://stream.rcs.revma.com/an1ugyygzk8uv",
+    "genre": "Rock, Alternative, Jazz",
+    "broadcaster": "Radio 357",
+    "country": "Poland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 131,
+    "name": "Radio Caroline",
+    "url": "http://sc3.radiocaroline.net:8030",
+    "genre": "Rock, Classic Rock",
+    "broadcaster": "Radio Caroline",
+    "country": "United Kingdom",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 132,
+    "name": "Radio FM4",
+    "url": "https://orf-live.ors-shoutcast.at/fm4-q2a",
+    "genre": "Alternative, Alt Rock, Electronic",
+    "broadcaster": "ORF",
+    "country": "Austria",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 133,
+    "name": "Radio New Zealand - Concert",
+    "url": "http://radionz-ice.streamguys.com:80/concert.mp3",
+    "genre": "Classical",
+    "broadcaster": "Radio New Zealand",
+    "country": "New Zealand",
+    "bitrate": "64",
+    "format": "MP3"
+  },
+  {
+    "id": 134,
+    "name": "Radio New Zealand - National",
+    "url": "http://radionz-ice.streamguys.com:80/national.mp3",
+    "genre": "Eclectic, Music, Current Affairs",
+    "broadcaster": "Radio New Zealand",
+    "country": "New Zealand",
+    "bitrate": "64",
+    "format": "MP3"
+  },
+  {
+    "id": 135,
+    "name": "Radio Nowy Swiat",
+    "url": "https://stream.nowyswiat.online/mp3",
+    "genre": "Rock, Alternative, Jazz",
+    "broadcaster": "Radio Nowy Swiat",
+    "country": "Poland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 136,
+    "name": "Radio Paradise - Main Mix",
+    "url": "https://stream.radioparadise.com/flacm",
+    "genre": "Eclectic",
+    "broadcaster": "Radio Paradise",
+    "country": "United States",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 137,
+    "name": "Radio Paradise - Mellow",
+    "url": "https://stream.radioparadise.com/mellow-flacm",
+    "genre": "Rock, Mellow Rock",
+    "broadcaster": "Radio Paradise",
+    "country": "United States",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 138,
+    "name": "Radio Paradise - Rock",
+    "url": "https://stream.radioparadise.com/rock-flacm",
+    "genre": "Rock",
+    "broadcaster": "Radio Paradise",
+    "country": "United States",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 139,
+    "name": "Radio Paradise - World",
+    "url": "https://stream.radioparadise.com/world-flacm",
+    "genre": "World Music",
+    "broadcaster": "Radio Paradise",
+    "country": "United States",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 140,
+    "name": "Radio SRF 1",
+    "url": "http://streaming.swisstxt.ch/m/drs1/mp3_128",
+    "genre": "News, Entertainment, News",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 141,
+    "name": "Radio SRF 2 Kultur",
+    "url": "http://streaming.swisstxt.ch/m/drs2/mp3_128",
+    "genre": "Classical, Jazz",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 142,
+    "name": "Radio SRF 3",
+    "url": "http://streaming.swisstxt.ch/m/drs3/mp3_128",
+    "genre": "Eclectic",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 143,
+    "name": "Radio SRF 4 News",
+    "url": "http://streaming.swisstxt.ch/m/drs4news/mp3_128",
+    "genre": "News",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 144,
+    "name": "Radio SRF Musikwelle",
+    "url": "http://streaming.swisstxt.ch/m/drsmw/mp3_128",
+    "genre": "Pop, Schlager",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 145,
+    "name": "Radio SRF Virus",
+    "url": "http://streaming.swisstxt.ch/m/drsvirus/mp3_128",
+    "genre": "Alternative",
+    "broadcaster": "SRF",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 146,
+    "name": "Radio Swiss Classic",
+    "url": "http://stream.srg-ssr.ch/m/rsc_de/aacp_96",
+    "genre": "Classical",
+    "broadcaster": "Swiss Broadcasting Corporation",
+    "country": "Switzerland",
+    "bitrate": "96",
+    "format": "AAC"
+  },
+  {
+    "id": 147,
+    "name": "Radio Swiss Jazz",
+    "url": "http://stream.srg-ssr.ch/m/rsj/aacp_96",
+    "genre": "Jazz",
+    "broadcaster": "Swiss Broadcasting Corporation",
+    "country": "Switzerland",
+    "bitrate": "96",
+    "format": "AAC"
+  },
+  {
+    "id": 148,
+    "name": "Radio Swiss Pop",
+    "url": "http://stream.srg-ssr.ch/m/rsp/aacp_96",
+    "genre": "Pop",
+    "broadcaster": "Swiss Broadcasting Corporation",
+    "country": "Switzerland",
+    "bitrate": "96",
+    "format": "AAC"
+  },
+  {
+    "id": 150,
+    "name": "Resonance Radio 104.4 FM",
+    "url": "http://stream.resonance.fm/resonance",
+    "genre": "Eclectic",
+    "broadcaster": "Resonance Radio",
+    "country": "United Kingdom",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 151,
+    "name": "Roots Legacy Radio - Dub UK & Roots Reggae",
+    "url": "https://l.rootslegacy.fr/;",
+    "genre": "Dub, Dub UK, Roots Reggae",
+    "broadcaster": "Roots Legacy Radio",
+    "country": "France",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 203,
+    "name": "SUB.FM - Where Bass Matters",
+    "url": "http://subfm.radioca.st/Sub.FM",
+    "genre": "Dub, Dubstep, Garage, Grime, Deep House, Techno, Juke, Jungle Trap",
+    "broadcaster": "SUB.FM",
+    "country": "United Kingdom",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 205,
+    "name": "SWR 2",
+    "url": "https://liveradio.swr.de/sw331ch/swr2/play.aac",
+    "genre": "Classical, Jazz",
+    "broadcaster": "Südwestdeutscher Rundfunk",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 160,
+    "name": "San Diego Jazz 88.3",
+    "url": "http://listen.jazz88.org/ksds.mp3",
+    "genre": "Jazz",
+    "broadcaster": "KSDS",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 161,
+    "name": "SmoothJazz Global",
+    "url": "https://smoothjazz.cdnstream1.com/2585_320.mp3",
+    "genre": "Jazz, Smooth Jazz",
+    "broadcaster": "Global Radio",
+    "country": "United States",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 162,
+    "name": "SmoothLounge Global",
+    "url": "https://smoothjazz.cdnstream1.com/2586_320.mp3",
+    "genre": "Lounge, Smooth Lounge",
+    "broadcaster": "Global Radio",
+    "country": "United States",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 163,
+    "name": "Soho Radio London",
+    "url": "https://sohoradiomusic.doughunt.co.uk:8010/320mp3",
+    "genre": "Eclectic, Music, Culture",
+    "broadcaster": "Soho Radio",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 164,
+    "name": "Soma FM - Beat Blender",
+    "url": "http://ice1.somafm.com/beatblender-128-aac",
+    "genre": "Electronica, Deep House, Down-Tempo Chill",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 165,
+    "name": "Soma FM - Black Rock FM",
+    "url": "http://ice1.somafm.com/brfm-128-aac",
+    "genre": "Electronica, Burning Man Festival Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 166,
+    "name": "Soma FM - Boot Liquor",
+    "url": "http://ice1.somafm.com/bootliquor-128-aac",
+    "genre": "Country, Americana Roots Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 167,
+    "name": "Soma FM - Bossa Beyond",
+    "url": "https://ice5.somafm.com/bossa-128-aac",
+    "genre": "Bossanova, World",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 169,
+    "name": "Soma FM - Covers",
+    "url": "http://ice1.somafm.com/covers-128-mp3",
+    "genre": "Pop, Cover Songs",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 171,
+    "name": "Soma FM - DEF CON Radio",
+    "url": "http://ice1.somafm.com/defcon-128-aac",
+    "genre": "Electronica, DEF CON Conference Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 170,
+    "name": "Soma FM - Deep Space One",
+    "url": "http://ice1.somafm.com/deepspaceone-128-aac",
+    "genre": "Electronica, Ambient, Experimental, Space Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 172,
+    "name": "Soma FM - Digitalis",
+    "url": "http://ice1.somafm.com/digitalis-128-aac",
+    "genre": "Rock, Digitally Affected Analog Rock",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 173,
+    "name": "Soma FM - Drone Zone",
+    "url": "http://ice1.somafm.com/dronezone-128-aac",
+    "genre": "Electronica, Ambient, Texture, Atmospheric Texture, Minimal Beats",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 174,
+    "name": "Soma FM - Dub Step Beyond",
+    "url": "http://ice1.somafm.com/dubstep-128-aac",
+    "genre": "Dub, Dubstep, Deep Bass",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 175,
+    "name": "Soma FM - Fluid",
+    "url": "http://ice1.somafm.com/fluid-128-aac",
+    "genre": "Electronica, Instrumental Hiphop, Future Soul, Liquid Trap",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 176,
+    "name": "Soma FM - Folk Forward",
+    "url": "http://ice1.somafm.com/folkfwd-128-aac",
+    "genre": "Folk, Indie Folk, Alternative Folk",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 177,
+    "name": "Soma FM - Groove Salad",
+    "url": "http://ice1.somafm.com/groovesalad-128-aac",
+    "genre": "Electronica, Ambient, Down-Tempo",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 178,
+    "name": "Soma FM - Groove Salad Classic",
+    "url": "http://ice2.somafm.com/gsclassic-128-aac",
+    "genre": "Electronica, Ambient, Down-Tempo, Early 2000's",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 179,
+    "name": "Soma FM - Heavyweight Reggae",
+    "url": "http://ice4.somafm.com/reggae-128-aac",
+    "genre": "Reggae, Ska, Rocksteady Classic and Deep",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 180,
+    "name": "Soma FM - Illinois Street Lounge",
+    "url": "http://ice1.somafm.com/illstreet-128-aac",
+    "genre": "Lounge, Bachelor Pad, Exotica, Vintage Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 181,
+    "name": "Soma FM - Indie Pop Rocks!",
+    "url": "http://ice1.somafm.com/indiepop-128-aac",
+    "genre": "Pop, Indie Pop",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 182,
+    "name": "Soma FM - Left Coast 70s",
+    "url": "http://ice1.somafm.com/seventies-128-aac",
+    "genre": "Rock, 70's Mellow Rock",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 183,
+    "name": "Soma FM - Live",
+    "url": "http://ice1.somafm.com/live-128-aac",
+    "genre": "Electronica, Live, Special Events",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 184,
+    "name": "Soma FM - Lush",
+    "url": "http://ice1.somafm.com/lush-128-aac",
+    "genre": "Electronica, Mellow Vocals Mostly female",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 185,
+    "name": "Soma FM - Metal Detector",
+    "url": "http://ice1.somafm.com/metal-128-aac",
+    "genre": "Metal",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 186,
+    "name": "Soma FM - Mission Control",
+    "url": "http://ice1.somafm.com/missioncontrol-128-aac",
+    "genre": "Electronica, Ambient, NASA Radio Traffic",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 188,
+    "name": "Soma FM - PopTron",
+    "url": "http://ice1.somafm.com/poptron-128-aac",
+    "genre": "Pop, Electro-Pop, indie Dance Rock",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 191,
+    "name": "Soma FM - SF 10-33",
+    "url": "http://ice1.somafm.com/sf1033-128-aac",
+    "genre": "Electronica, Ambient, San Francisco Public Safety Radio Traffic",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 189,
+    "name": "Soma FM - Secret Agent",
+    "url": "http://ice1.somafm.com/secretagent-128-aac",
+    "genre": "Pop, Easy-Tempo, 60's European Pop",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 190,
+    "name": "Soma FM - Seven Inch Soul",
+    "url": "http://ice1.somafm.com/7soul-128-aac",
+    "genre": "Soul, Vintage Soul From Vinyl 45 RPM Records",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 192,
+    "name": "Soma FM - Sonic Universe",
+    "url": "http://ice1.somafm.com/sonicuniverse-128-aac",
+    "genre": "Jazz, Nu Jazz, Euro Jazz, Avant-Garde",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 193,
+    "name": "Soma FM - Space Station Soma",
+    "url": "http://ice1.somafm.com/spacestation-128-aac",
+    "genre": "Electronica, Mid-Tempo",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 194,
+    "name": "Soma FM - Suburbs of Goa",
+    "url": "http://ice1.somafm.com/suburbsofgoa-128-aac",
+    "genre": "World Music, Desi-Influenced Asian, World Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 195,
+    "name": "Soma FM - Synphaera",
+    "url": "https://ice6.somafm.com/synphaera-128-aac",
+    "genre": "Electronica, Synth",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 196,
+    "name": "Soma FM - The Dark Zone",
+    "url": "https://ice6.somafm.com/darkzone-128-aac",
+    "genre": "Electronica, Ambient, Deep Ambient",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 197,
+    "name": "Soma FM - The In-Sound",
+    "url": "https://ice5.somafm.com/insound-128-aac",
+    "genre": "Pop, Oldies",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 198,
+    "name": "Soma FM - The Trip",
+    "url": "http://ice1.somafm.com/thetrip-128-aac",
+    "genre": "Pop, Progressive House, Trance",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 199,
+    "name": "Soma FM - ThistleRadio",
+    "url": "http://ice1.somafm.com/thistle-128-aac",
+    "genre": "Folk, Celtic, Roots Music",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 200,
+    "name": "Soma FM - Tiki Time",
+    "url": "https://ice6.somafm.com/tikitime-128-aac",
+    "genre": "Tiki, World",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 201,
+    "name": "Soma FM - Underground 80s",
+    "url": "http://ice1.somafm.com/u80s-128-aac",
+    "genre": "Pop, 80's, Synth-Pop, New Wave",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 202,
+    "name": "Soma FM - Vaporwaves",
+    "url": "https://ice1.somafm.com/vaporwaves-128-aac",
+    "genre": "Electronica, Electro-acoustic, IDM, Shoegaze, Post-rock",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 168,
+    "name": "Soma FM - cliqhop idm",
+    "url": "http://ice1.somafm.com/cliqhop-128-aac",
+    "genre": "Electronica, Beats With Clicks and Bleeps",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 187,
+    "name": "Soma FM - n5MD Radio",
+    "url": "https://ice6.somafm.com/n5md-128-aac",
+    "genre": "Electronica, Ambient, NASA Radio Traffic",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 204,
+    "name": "SwissGroove",
+    "url": "http://158.69.74.203:80/",
+    "genre": "Jazz, Funk, Soul, World, Latin, Lounge, Nu Grooves",
+    "broadcaster": "SwissGroove",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 206,
+    "name": "The Jazz Groove",
+    "url": "http://west-aac-64.streamthejazzgroove.com/stream",
+    "genre": "Jazz",
+    "broadcaster": "The Jazz Groove",
+    "country": "United States",
+    "bitrate": "64",
+    "format": "AAC"
+  },
+  {
+    "id": 207,
+    "name": "Triple J",
+    "url": "http://live-radio01.mediahubaustralia.com/2TJW/mp3/",
+    "genre": "Alternative",
+    "broadcaster": "ABC",
+    "country": "Australia",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 208,
+    "name": "Triple J Unearthed",
+    "url": "http://live-radio01.mediahubaustralia.com/UNEW/mp3/",
+    "genre": "Alternative, Indie",
+    "broadcaster": "ABC",
+    "country": "Australia",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 210,
+    "name": "VRT - Klara",
+    "url": "http://icecast.vrtcdn.be/klara-high.mp3",
+    "genre": "Classical, Jazz",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 211,
+    "name": "VRT - Klara Continuo",
+    "url": "http://icecast.vrtcdn.be/klaracontinuo-high.mp3",
+    "genre": "Classical",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 212,
+    "name": "VRT - MNM",
+    "url": "http://icecast.vrtcdn.be/mnm-high.mp3",
+    "genre": "Pop",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 213,
+    "name": "VRT - MNM Hits",
+    "url": "http://icecast.vrtcdn.be/mnm_hits-high.mp3",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 214,
+    "name": "VRT - Radio 1",
+    "url": "http://icecast.vrtcdn.be/radio1-high.mp3",
+    "genre": "Pop, Contemporary, Rock, News",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 215,
+    "name": "VRT - Radio 2",
+    "url": "http://icecast.vrtcdn.be/ra2vlb-high.mp3",
+    "genre": "Eclectic",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 216,
+    "name": "VRT - Studio Brussel",
+    "url": "http://icecast.vrtcdn.be/stubru-high.mp3",
+    "genre": "Alternative",
+    "broadcaster": "VRT",
+    "country": "Belgium",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 209,
+    "name": "Venice Classic Radio Italia",
+    "url": "https://uk2.streamingpulse.com/ssl/vcr1",
+    "genre": "Classical",
+    "broadcaster": "Venice Classic Radio",
+    "country": "Italy",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 217,
+    "name": "WBJC Baltimore 91.5 - Classical",
+    "url": "https://ice64.securenetsystems.net/WBJC",
+    "genre": "Classical",
+    "broadcaster": "Baltimore City Community College",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 218,
+    "name": "WCLV Cleveland 104.9 - Classical",
+    "url": "http://audio1.ideastream.org/wclv.mp3",
+    "genre": "Classical",
+    "broadcaster": "Ideastream",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 219,
+    "name": "WCRB Boston 99.5 - Classical",
+    "url": "https://wgbh-live.streamguys1.com/classical-hi",
+    "genre": "Classical",
+    "broadcaster": "WCRB",
+    "country": "United States",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 220,
+    "name": "WDCB Chicago FM 90.9 - Jazz & Blues",
+    "url": "http://wdcb-ice.streamguys.org:80/wdcb128",
+    "genre": "Blues, Jazz",
+    "broadcaster": "DuPage College",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 221,
+    "name": "WDR 1LIVE",
+    "url": "http://wdr-1live-live.icecast.wdr.de/wdr/1live/live/mp3/128/stream.mp3",
+    "genre": "Pop",
+    "broadcaster": "WDR",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 222,
+    "name": "WDR 3",
+    "url": "https://wdr-wdr3-live.icecastssl.wdr.de/wdr/wdr3/live/mp3/256/stream.mp3",
+    "genre": "Classical, Jazz",
+    "broadcaster": "Westdeutscher Rundfun",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 223,
+    "name": "WEMU Ypsilanti FM 89.1 - Jazz",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/WEMUFM.mp3",
+    "genre": "Jazz",
+    "broadcaster": "WEMU",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 224,
+    "name": "WFMT Chicago 98.7 - Classical",
+    "url": "http://stream.wfmt.com/main",
+    "genre": "Classical",
+    "broadcaster": "WYMT",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 225,
+    "name": "WFMU 91.1 FM",
+    "url": "http://stream0.wfmu.org/freeform-best-available",
+    "genre": "Classical",
+    "broadcaster": "WFMU",
+    "country": "United States",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 226,
+    "name": "WKCR 89.9 FM",
+    "url": "http://wkcr.streamguys1.com:80/live",
+    "genre": "Jazz, Classical",
+    "broadcaster": "WKCR (Columbia University)",
+    "country": "United States",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 227,
+    "name": "WQED Pittsburgh 89.3 - Classical",
+    "url": "http://ice-1.streamhoster.com/lv_wqed--893",
+    "genre": "Classical",
+    "broadcaster": "WQED",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 228,
+    "name": "WQXR New York - Classical Music",
+    "url": "http://stream.wqxr.org/wqxr",
+    "genre": "Classical",
+    "broadcaster": "New York Public Radio",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 229,
+    "name": "WQXR Q2 - Living Music, Living Composers",
+    "url": "http://q2stream.wqxr.org/q2",
+    "genre": "Classical",
+    "broadcaster": "New York Public Radio",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 230,
+    "name": "WRTI Philadelphia 90.1 - Classical",
+    "url": "https://wrti-live.streamguys1.com/classical-mp3",
+    "genre": "Classical",
+    "broadcaster": "Temple University",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 231,
+    "name": "WRTI Philadelphia 90.1 - Jazz",
+    "url": "https://wrti-live.streamguys1.com/jazz-mp3",
+    "genre": "Jazz",
+    "broadcaster": "Temple University",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 232,
+    "name": "WWOZ New Orleans FM 90.7 - Various Artists",
+    "url": "https://www.wwoz.org/listen/hi",
+    "genre": "Jazz, Blues, Latin, Cajun, Funk",
+    "broadcaster": "WWOZ",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 233,
+    "name": "Zappa Stream Radio",
+    "url": "http://streams.norbert.de:8000/zappa.aac",
+    "genre": "Progressive Rock, Rock",
+    "broadcaster": "Zappa Stream Radio",
+    "country": "United States",
+    "bitrate": "256",
+    "format": "AAC"
+  },
+  {
+    "id": 234,
+    "name": "Zen FM",
+    "url": "https://25583.live.streamtheworld.com/TOPZEN_SC",
+    "genre": "Lounge",
+    "broadcaster": "Zen FM",
+    "country": "Belgium",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 81,
+    "name": "frequence3 (FLAC)",
+    "url": "http://hd.stream.frequence3.net/frequence3.flac",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "Frequence3 Association",
+    "country": "France",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 1001,
+    "name": "RNE Radio Nacional",
+    "url": "https://dispatcher.rndfnk.com/crtve/rne1/main/mp3/high",
+    "genre": "General, News, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1002,
+    "name": "RNE Radio Clásica",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r2_main.m3u8",
+    "genre": "Classical",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1003,
+    "name": "RNE Radio 3",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r3_main.m3u8",
+    "genre": "Alternative, Indie, Rock, Electronic",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1004,
+    "name": "RNE Ràdio 4",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r4_main.m3u8",
+    "genre": "General, Culture, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1005,
+    "name": "RNE Radio 5 Todo Noticias",
+    "url": "https://dispatcher.rndfnk.com/crtve/rne5/main/mp3/high",
+    "genre": "News, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1006,
+    "name": "RNE Radio Exterior de España",
+    "url": "https://dispatcher.rndfnk.com/crtve/rneree/main/mp3/high",
+    "genre": "News, World, Culture",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1007,
+    "name": "Cadena SER",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENASER.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1008,
+    "name": "LOS40",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40.mp3",
+    "genre": "Pop, Hits, Top 40",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1009,
+    "name": "LOS40 Classic",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_CLASSIC.mp3",
+    "genre": "Classic Hits, Rock, Pop, 80s, 90s",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1010,
+    "name": "LOS40 Dance",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_DANCE.mp3",
+    "genre": "Dance, Electronic, House",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1011,
+    "name": "LOS40 Urban",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_URBAN.mp3",
+    "genre": "Urban, Hip Hop, Pop",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1012,
+    "name": "Cadena Dial",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENADIAL.mp3",
+    "genre": "Pop, Español, Hits",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1013,
+    "name": "Radiolé",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOLE.mp3",
+    "genre": "Flamenco, Folk, World, Español",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1014,
+    "name": "COPE Nacional",
+    "url": "https://net1-cope-rrcast.flumotion.com/cope/net1.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1015,
+    "name": "Cadena 100",
+    "url": "https://cadena100-streamers-mp3.flumotion.com/cope/cadena100.mp3",
+    "genre": "Pop, Rock, Hits",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1016,
+    "name": "Rock FM España",
+    "url": "https://rockfm-cope-rrcast.flumotion.com/cope/rockfm.mp3",
+    "genre": "Rock, Classic Rock",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1017,
+    "name": "MegaStarFM",
+    "url": "https://megastar-cope-rrcast.flumotion.com/cope/megastar.mp3",
+    "genre": "Pop, Dance, Top 40",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1018,
+    "name": "Onda Cero",
+    "url": "https://atres-live.ondacero.es/live/ondacero/master.m3u8",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1019,
+    "name": "Europa FM",
+    "url": "https://atres-live.europafm.com/live/europafm/master.m3u8",
+    "genre": "Pop, Dance, Hits",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1020,
+    "name": "Melodía FM",
+    "url": "https://atres-live.melodia-fm.com/live/melodiafm/master.m3u8",
+    "genre": "Pop, Classic Hits, 80s, 90s",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1021,
+    "name": "Kiss FM España",
+    "url": "https://bbkissfm.kissfmradio.cires21.com/bbkissfm.mp3",
+    "genre": "Pop, 80s, 90s, Classic Hits",
+    "broadcaster": "Grupo Kiss Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1022,
+    "name": "Hit FM España",
+    "url": "https://hitfm.kissfmradio.cires21.com/hitfm.mp3",
+    "genre": "Pop, Dance, Top 40",
+    "broadcaster": "Grupo Kiss Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1023,
+    "name": "esRadio",
+    "url": "https://libertaddigital-radio-live1.flumotion.com/libertaddigital/ld-live1-med.aac",
+    "genre": "News, Talk",
+    "broadcaster": "Libertad Digital",
+    "country": "Spain",
+    "bitrate": "96",
+    "format": "AAC"
+  },
+  {
+    "id": 1024,
+    "name": "Radio Marca Nacional",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOMARCA_NACIONAL_SC",
+    "genre": "Sports, Talk",
+    "broadcaster": "Unidad Editorial",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1025,
+    "name": "RAC1",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC_1.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Grupo Godó",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1026,
+    "name": "RAC105",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC105.mp3",
+    "genre": "Pop, Hits",
+    "broadcaster": "Grupo Godó",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1027,
+    "name": "Catalunya Ràdio",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyaradioHD.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1028,
+    "name": "Catalunya Música",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyamusicaHD.mp3",
+    "genre": "Classical, Jazz",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1029,
+    "name": "Catalunya Informació",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyainformacioHD.mp3",
+    "genre": "News, Talk",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1030,
+    "name": "iCat",
+    "url": "https://shoutcast.ccma.cat/ccma/icatHD.mp3",
+    "genre": "Alternative, Indie, Electronic",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1031,
+    "name": "Canal Sur Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/csr.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1032,
+    "name": "Canal Fiesta Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/cfr.mp3",
+    "genre": "Pop, Español",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1033,
+    "name": "Canal Sur Radio Música",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/csm.mp3",
+    "genre": "Pop, Culture, Español",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1034,
+    "name": "Canal Flamenco Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/flamenco.mp3",
+    "genre": "Flamenco, Folk, World",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1035,
+    "name": "Flaix FM",
+    "url": "https://stream.flaixfm.cat/icecast",
+    "genre": "Electronic, Dance, EDM",
+    "broadcaster": "Grup Flaix",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1036,
+    "name": "Ràdio Flaixbac",
+    "url": "https://stream.flaixbac.cat/icecast",
+    "genre": "Pop, Dance, Hits",
+    "broadcaster": "Grup Flaix",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1037,
+    "name": "Ibiza Global Radio",
+    "url": "http://ibizaglobalradio.streaming-pro.com:8024/",
+    "genre": "Electronic, House, Deep House",
+    "broadcaster": "Ibiza Global",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1038,
+    "name": "Ibiza Sonica Radio",
+    "url": "https://ibizasonica.streaming-pro.com:8000/ibizasonica",
+    "genre": "Electronic, House, Chillout",
+    "broadcaster": "Ibiza Sonica",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1039,
+    "name": "Loca FM",
+    "url": "http://s3.we4stream.com:8045/live",
+    "genre": "Electronic, Dance, House",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "160",
+    "format": "MP3"
+  },
+  {
+    "id": 1040,
+    "name": "Loca FM 80s",
+    "url": "http://s02.fjperezdj.com:8075/live",
+    "genre": "80s, Pop, Rock",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1041,
+    "name": "Loca FM Urban",
+    "url": "http://locafm02.we4stream.com:8015/live",
+    "genre": "Urban, Hip Hop",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "160",
+    "format": "MP3"
+  },
+  {
+    "id": 1042,
+    "name": "Loca FM Deep Techno",
+    "url": "http://s02.fjperezdj.com:8066/live",
+    "genre": "Electronic, Techno",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1043,
+    "name": "EITB Radio Euskadi",
+    "url": "http://mp3-eitb.stream.flumotion.com/eitb/radioeuskadi.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "EITB",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1044,
+    "name": "EITB Gaztea",
+    "url": "http://mp3-eitb.stream.flumotion.com/eitb/gaztea.mp3",
+    "genre": "Pop, Rock, Indie",
+    "broadcaster": "EITB",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1045,
+    "name": "Radio Galega",
+    "url": "https://crtvg-radiogalega-hls.flumotion.cloud/playlist.m3u8",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "CRTVG",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 1046,
+    "name": "Radio Galega Música",
+    "url": "https://crtvg-radiogalega-musica-hls.flumotion.cloud/playlist.m3u8",
+    "genre": "Pop, Rock, Folk",
+    "broadcaster": "CRTVG",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 1047,
+    "name": "Jazz Radio Spain",
+    "url": "https://stream.tunerplay.com/radio/8020/jazzradiospain.mp3",
+    "genre": "Jazz, Smooth Jazz",
+    "broadcaster": "Jazz Radio Spain",
+    "country": "Spain",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 1048,
+    "name": "Costa Del Mar - Smooth Jazz",
+    "url": "https://radio4.cdm-radio.com:18024/stream-mp3-Smooth",
+    "genre": "Jazz, Smooth Jazz, Ambient",
+    "broadcaster": "Costa Del Mar",
+    "country": "Spain",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
+    "id": 1049,
+    "name": "Cafe Mambo Ibiza Radio",
+    "url": "https://streamer.radio.co/sd7b28e5f3/listen",
+    "genre": "Electronic, Ambient, House",
+    "broadcaster": "Cafe Mambo",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 1050,
+    "name": "1000 HITS 80s España",
+    "url": "http://c2.auracast.net:8048/stream",
+    "genre": "80s, Pop, Rock",
+    "broadcaster": "1000 HITS",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  }
+]
