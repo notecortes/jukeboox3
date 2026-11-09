@@ -18,8 +18,9 @@ type EventMessage struct {
 
 // Hub gestiona las suscripciones de clientes en tiempo real y el despacho de eventos.
 type Hub struct {
-	clients map[chan EventMessage]bool
-	mu      sync.RWMutex
+	clients   map[chan EventMessage]bool
+	onConnect func(send func(eventType string, data interface{}))
+	mu        sync.RWMutex
 }
 
 // NewHub inicializa un nuevo distribuidor de eventos SSE.
@@ -30,6 +31,13 @@ func NewHub() *Hub {
 	// Iniciar pinger periódico para mantener vivas las conexiones móviles
 	go h.startKeepAlive()
 	return h
+}
+
+// SetOnConnect registra un callback que envía estado inicial al cliente recién suscrito por SSE.
+func (h *Hub) SetOnConnect(fn func(send func(eventType string, data interface{}))) {
+	h.mu.Lock()
+	h.onConnect = fn
+	h.mu.Unlock()
 }
 
 // Subscribe registra un nuevo canal de cliente para recibir transmisiones SSE.
@@ -100,6 +108,22 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Confirmar conexión inmediata al cliente
 	fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"ok\"}\n\n")
 	flusher.Flush()
+
+	// Enviar estado inicial directo al cliente conectado sin retransmitir al resto
+	h.mu.RLock()
+	onConnect := h.onConnect
+	h.mu.RUnlock()
+	if onConnect != nil {
+		onConnect(func(eventType string, data interface{}) {
+			dataBytes, err := json.Marshal(data)
+			if err != nil {
+				log.Printf("[SSE] Error al serializar estado inicial %s: %v", eventType, err)
+				return
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(dataBytes))
+			flusher.Flush()
+		})
+	}
 
 	notify := r.Context().Done()
 	for {

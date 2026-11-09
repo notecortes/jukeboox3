@@ -1,0 +1,240 @@
+package db
+
+import (
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+)
+
+// newTestDB crea una base de datos SQLite temporal aislada para cada caso de prueba.
+func newTestDB(t *testing.T) *DB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test_aurabox.db")
+	d, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+	})
+	return d
+}
+
+// TestUpsertAndIndexedDurations comprueba que UpsertTrack asigna el ID real y GetIndexedTrackDurations indexa por ruta.
+func TestUpsertAndIndexedDurations(t *testing.T) {
+	d := newTestDB(t)
+
+	tr := Track{
+		Path:        "/music/local/The Beatles/Abbey Road/01 - Come Together.flac",
+		Filename:    "01 - Come Together.flac",
+		Title:       "Come Together",
+		Artist:      "The Beatles",
+		Album:       "Abbey Road",
+		AlbumArtist: "The Beatles",
+		Genre:       "Rock",
+		Year:        1969,
+		Duration:    259.5,
+		TrackNumber: 1,
+		Bitrate:     960,
+		SampleRate:  96000,
+		Format:      "FLAC",
+		Source:      "local",
+	}
+
+	if err := d.UpsertTrack(&tr); err != nil {
+		t.Fatalf("UpsertTrack falló: %v", err)
+	}
+	if tr.ID <= 0 {
+		t.Fatalf("se esperaba un ID asignado tras UpsertTrack, recibido %d", tr.ID)
+	}
+
+	durations, err := d.GetIndexedTrackDurations()
+	if err != nil {
+		t.Fatalf("GetIndexedTrackDurations falló: %v", err)
+	}
+	if got := durations[tr.Path]; got != 259.5 {
+		t.Fatalf("duración esperada 259.5, obtenida %v", got)
+	}
+}
+
+// TestGetTracksByIDsPreservesOrderAndChunks verifica la fragmentación en bloques de 500 y el orden exacto de entrada.
+func TestGetTracksByIDsPreservesOrderAndChunks(t *testing.T) {
+	d := newTestDB(t)
+
+	const total = 515
+	batch := make([]*Track, 0, total)
+	for i := 1; i <= total; i++ {
+		batch = append(batch, &Track{
+			Path:        fmt.Sprintf("/music/nas/artist/album/track_%03d.mp3", i),
+			Filename:    fmt.Sprintf("track_%03d.mp3", i),
+			Title:       fmt.Sprintf("Canción %03d", i),
+			Artist:      "Artista Prueba",
+			Album:       "Álbum Prueba",
+			Duration:    180.0,
+			TrackNumber: i,
+			Format:      "MP3",
+			Source:      "nas",
+		})
+	}
+	if err := d.BatchUpsertTracks(batch); err != nil {
+		t.Fatalf("BatchUpsertTracks falló: %v", err)
+	}
+
+	all, err := d.GetAllTracks()
+	if err != nil || len(all) != total {
+		t.Fatalf("se esperaban %d pistas, obtenidas %d (err=%v)", total, len(all), err)
+	}
+
+	// Construir una lista desordenada que cruce el límite de 500 elementos por bloque
+	requestedIDs := make([]int64, 0, total)
+	for i := total - 1; i >= 0; i-- {
+		requestedIDs = append(requestedIDs, all[i].ID)
+	}
+
+	got, err := d.GetTracksByIDs(requestedIDs)
+	if err != nil {
+		t.Fatalf("GetTracksByIDs falló: %v", err)
+	}
+	if len(got) != len(requestedIDs) {
+		t.Fatalf("longitud esperada %d, obtenida %d", len(requestedIDs), len(got))
+	}
+	for i, wantID := range requestedIDs {
+		if got[i].ID != wantID {
+			t.Fatalf("en índice %d se esperaba ID %d, obtenido %d", i, wantID, got[i].ID)
+		}
+	}
+}
+
+// TestEmptySlicesAndFavorites verifica que las consultas vacías no devuelven nil y que ToggleFavorite persiste cambios.
+func TestEmptySlicesAndFavorites(t *testing.T) {
+	d := newTestDB(t)
+
+	if tracks, err := d.GetAllTracks(); err != nil || tracks == nil || len(tracks) != 0 {
+		t.Fatalf("GetAllTracks vacío debe devolver slice no nulo (len=%d, nil=%v, err=%v)", len(tracks), tracks == nil, err)
+	}
+	if albums, err := d.GetAlbums(); err != nil || albums == nil || len(albums) != 0 {
+		t.Fatalf("GetAlbums vacío debe devolver slice no nulo")
+	}
+	if artists, err := d.GetArtists(); err != nil || artists == nil || len(artists) != 0 {
+		t.Fatalf("GetArtists vacío debe devolver slice no nulo")
+	}
+	if favs, err := d.GetFavorites(); err != nil || favs == nil || len(favs) != 0 {
+		t.Fatalf("GetFavorites vacío debe devolver slice no nulo")
+	}
+
+	tr := Track{
+		Path:     "/music/local/Rosalía/El Mal Querer/01 - Malamente.flac",
+		Filename: "01 - Malamente.flac",
+		Title:    "Malamente",
+		Artist:   "Rosalía",
+		Album:    "El Mal Querer",
+		Duration: 150.0,
+		Format:   "FLAC",
+		Source:   "local",
+	}
+	if err := d.UpsertTrack(&tr); err != nil {
+		t.Fatalf("UpsertTrack falló: %v", err)
+	}
+
+	isFav, err := d.ToggleFavorite(tr.ID)
+	if err != nil || !isFav {
+		t.Fatalf("ToggleFavorite debería activar favorito (isFav=%v, err=%v)", isFav, err)
+	}
+
+	favs, err := d.GetFavorites()
+	if err != nil || len(favs) != 1 || favs[0].ID != tr.ID {
+		t.Fatalf("GetFavorites inesperado: %+v (err=%v)", favs, err)
+	}
+}
+
+// TestConcurrentReadsDuringBatchUpsertWAL verifica que el pool WAL de lectura no se bloquea ni falla con escrituras concurrentes.
+func TestConcurrentReadsDuringBatchUpsertWAL(t *testing.T) {
+	d := newTestDB(t)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+
+	// Escritor en lotes simulando un escaneo continuo
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for b := 0; b < 5; b++ {
+			batch := make([]*Track, 0, 100)
+			for i := 0; i < 100; i++ {
+				batch = append(batch, &Track{
+					Path:        fmt.Sprintf("/music/nas/band_%d/alb_%d/track_%02d.flac", i%5, b, i),
+					Filename:    fmt.Sprintf("track_%02d.flac", i),
+					Title:       fmt.Sprintf("Tema %d-%02d", b, i),
+					Artist:      fmt.Sprintf("Banda %d", i%5),
+					Album:       fmt.Sprintf("Disco %d", b),
+					Genre:       "Indie",
+					Duration:    200.0,
+					TrackNumber: i + 1,
+					Format:      "FLAC",
+					Source:      "nas",
+				})
+			}
+			if err := d.BatchUpsertTracks(batch); err != nil {
+				errs <- fmt.Errorf("BatchUpsertTracks lote %d: %w", b, err)
+				return
+			}
+		}
+	}()
+
+	// Lectores concurrentes ejecutando consultas de biblioteca mientras se escribe
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 20; k++ {
+				if _, err := d.GetRecentTracks(20); err != nil {
+					errs <- fmt.Errorf("GetRecentTracks: %w", err)
+					return
+				}
+				if _, err := d.GetAlbums(); err != nil {
+					errs <- fmt.Errorf("GetAlbums: %w", err)
+					return
+				}
+				if _, err := d.GetArtists(); err != nil {
+					errs <- fmt.Errorf("GetArtists: %w", err)
+					return
+				}
+				if _, _, _, err := d.Search("Banda"); err != nil {
+					errs <- fmt.Errorf("Search: %w", err)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	artists, err := d.GetArtists()
+	if err != nil || len(artists) != 5 {
+		t.Fatalf("se esperaban 5 artistas tras lotes deduplicados, obtenidos %d (err=%v)", len(artists), err)
+	}
+}
+
+// TestInMemoryDBCompatibility asegura que las bases de datos efímeras :memory: mantienen lecturas y escrituras consistentes.
+func TestInMemoryDBCompatibility(t *testing.T) {
+	d, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB(:memory:) falló: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSetting("scanner_version", "2"); err != nil {
+		t.Fatalf("SetSetting falló: %v", err)
+	}
+	if got := d.GetSetting("scanner_version", ""); got != "2" {
+		t.Fatalf("GetSetting esperado '2', obtenido %q", got)
+	}
+}
+

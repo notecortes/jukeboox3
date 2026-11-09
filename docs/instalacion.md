@@ -319,8 +319,19 @@ docker compose up -d --build
   1. Ve a **Ajustes** en la web (`http://<IP>:4080`) y verifica qué salida está seleccionada.
   2. Si usas DAC USB, asegúrate de que el contenedor tiene acceso a `/dev/snd` (está configurado por defecto en `docker-compose.yml`).
   3. Ejecuta en la terminal de la Raspberry Pi: `aplay -l` para verificar que Linux reconoce tu DAC.
+* **Error `permission denied` al montar el volumen del NAS (`nas_music`):**
+  1. Si la contraseña del NAS contiene símbolos especiales (como `#`, `$` o espacios), envuélvela en comillas simples en `.env`: `NAS_PASS='tu_contraseña'`.
+  2. Recuerda que Docker guarda las credenciales dentro del volumen una vez creado. Después de corregir `.env`, ejecuta:
+     ```bash
+     sudo docker compose down
+     sudo docker volume rm aurabox_nas_music
+     sudo docker compose up -d
+     ```
+  3. Verifica con `sudo mount -t cifs //<IP_NAS>/<SHARE> /mnt/test -o username=<USUARIO>,ro` que tu NAS no esté bloqueando la IP de la Raspberry Pi ni exigiendo otra versión de SMB (`vers=2.1` o sin `sec=ntlmssp` en `NAS_OPTIONS`).
 * **La carpeta del NAS aparece vacía:**
   1. Revisa que las credenciales en el archivo `.env` (`NAS_USER`, `NAS_PASS`, `NAS_HOST`, `NAS_SHARE`) sean correctas.
   2. Comprueba que el NAS admite SMB versión 2.0 o 3.0.
   3. Puedes forzar un re-escaneo desde la aplicación tocando en **Ajustes > Re-escanear Biblioteca**.
+* **Aviso `Your kernel does not support memory limit capabilities` en Raspberry Pi:**
+  * Es solo informativo y no afecta a la reproducción. Si quieres habilitar el control de memoria en el kernel de la Pi, añade `cgroup_enable=memory cgroup_memory=1` al final de la línea en `/boot/firmware/cmdline.txt` y reinicia.
 

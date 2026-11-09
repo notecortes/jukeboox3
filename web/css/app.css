@@ -144,6 +144,14 @@ html, body {
   gap: 4px;
 }
 
+#headerActiveOutput {
+  max-width: 115px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
 .badge-status {
   width: 8px;
   height: 8px;
@@ -299,5 +307,6 @@ html, body {
 .toast.show {
   transform: translateX(-50%) translateY(0);
   opacity: 1;
+  pointer-events: auto;
 }
 

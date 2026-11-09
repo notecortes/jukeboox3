@@ -223,10 +223,49 @@ export function renderMiniPlayer() {
   }
 }
 
-// renderNowPlaying actualiza los elementos visuales de la vista expandida a pantalla completa.
+// renderNowPlaying actualiza los elementos visuales de la vista expandida y los controles globales del reproductor.
 export function renderNowPlaying() {
   const track = state.player.current_track;
   const isPlaying = (state.player.status === 'play');
+  const maxLimit = state.player.max_volume_limit || 85;
+
+  // Sincronizar botón principal de play / pausa
+  const playIcon = document.getElementById('npPlayIcon');
+  if (playIcon) {
+    playIcon.innerHTML = isPlaying
+      ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>'
+      : '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+  }
+
+  // Sincronizar botón de repetición
+  const btnRepeat = document.getElementById('npBtnRepeat');
+  if (btnRepeat) {
+    btnRepeat.classList.toggle('active', !!state.player.repeat);
+  }
+
+  // Sincronizar slider de volumen y salvaguarda auditiva en Ajustes
+  const volSlider = document.getElementById('npVolumeSlider');
+  if (volSlider) {
+    volSlider.max = maxLimit;
+    if (document.activeElement !== volSlider) {
+      volSlider.value = state.player.volume;
+    }
+  }
+
+  const settingMaxVol = document.getElementById('settingMaxVol');
+  const labelMaxVol = document.getElementById('labelMaxVol');
+  if (settingMaxVol && document.activeElement !== settingMaxVol) {
+    settingMaxVol.value = maxLimit;
+  }
+  if (labelMaxVol) {
+    labelMaxVol.textContent = `${maxLimit}%`;
+  }
+
+  // Actualizar insignia de salida de audio activa en cabecera
+  const outBadge = document.getElementById('headerActiveOutput');
+  if (outBadge) {
+    outBadge.textContent = state.player.active_output || 'Audio';
+  }
 
   if (!track) {
     document.getElementById('npTitle').textContent = 'AuraBox Hi-Fi';
@@ -234,6 +273,8 @@ export function renderNowPlaying() {
     document.getElementById('npCover').src = '/assets/default-cover.svg';
     const badge = document.getElementById('npHifiBadge');
     if (badge) badge.textContent = 'En Espera';
+    const btnFav = document.getElementById('npBtnFav');
+    if (btnFav) btnFav.classList.remove('active');
     return;
   }
 
@@ -260,27 +301,6 @@ export function renderNowPlaying() {
   const btnFav = document.getElementById('npBtnFav');
   if (btnFav) {
     btnFav.classList.toggle('active', !!track.favorite);
-  }
-
-  // Botón principal de play / pausa
-  const playIcon = document.getElementById('npPlayIcon');
-  if (playIcon) {
-    playIcon.innerHTML = isPlaying
-      ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>'
-      : '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-  }
-
-  // Slider de volumen
-  const volSlider = document.getElementById('npVolumeSlider');
-  if (volSlider) {
-    volSlider.value = state.player.volume;
-    volSlider.max = state.player.max_volume_limit || 85;
-  }
-
-  // Actualizar salida de audio
-  const outBadge = document.getElementById('headerActiveOutput');
-  if (outBadge) {
-    outBadge.textContent = state.player.active_output || 'Jack 3.5mm';
   }
 
   // Actualizar marcas de duración
@@ -329,11 +349,17 @@ export function tickProgress() {
   }
 }
 
-// toggleRepeat alterna el modo de repetición.
+// toggleRepeat alterna el modo de repetición en memoria y en el demonio MPD.
 function toggleRepeat() {
-  state.player.repeat = !state.player.repeat;
-  document.getElementById('npBtnRepeat')?.classList.toggle('active', state.player.repeat);
-  showToast(state.player.repeat ? 'Repetición activada' : 'Repetición desactivada');
+  const nextRepeat = !state.player.repeat;
+  state.player.repeat = nextRepeat;
+  document.getElementById('npBtnRepeat')?.classList.toggle('active', nextRepeat);
+  showToast(nextRepeat ? 'Repetición activada' : 'Repetición desactivada');
+  api.setRepeat(nextRepeat).catch(() => {
+    state.player.repeat = !nextRepeat;
+    document.getElementById('npBtnRepeat')?.classList.toggle('active', !nextRepeat);
+    showToast('Error al cambiar modo repetición');
+  });
 }
 
 // toggleLyricsView conmuta entre la carátula y la vista de letras sincronizadas.

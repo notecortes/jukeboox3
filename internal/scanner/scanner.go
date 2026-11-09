@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -20,18 +21,30 @@ import (
 	"aurabox/internal/events"
 )
 
+const scannerSchemaVersion = "2"
+
+var (
+	catDirRegex        = regexp.MustCompile(`^(\d{2}\.)?([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)$`)
+	albumCleanRegex    = regexp.MustCompile(`(?i)\s*(\[[^\]]*\]|\((?:19|20)\d{2}[^)]*\)|FLAC|Lossless|Hunter|PMEDIA|FRG|320kbps|⭐️|\b\d+Bit[^\s]*)\s*`)
+	albumYearPrefRegex = regexp.MustCompile(`^(?:19|20)\d{2}\s*[-–]\s*(.+)`)
+	yearSearchRegex    = regexp.MustCompile(`\b(19\d{2}|20\d{2})\b`)
+	trackDotRegex      = regexp.MustCompile(`^(\d+)\.\s*(.+)`)
+)
+
 // LibraryScanner analiza las carpetas de música local, NAS y USB e indexa metadatos audiófilos.
 type LibraryScanner struct {
-	database  *db.DB
-	eventsHub *events.Hub
-	localDir  string
-	nasDir    string
-	usbDir    string
-	coversDir  string
-	scanning   bool
-	coverCache map[string]string
-	cacheMu    sync.RWMutex
-	mu         sync.Mutex
+	database    *db.DB
+	eventsHub   *events.Hub
+	localDir    string
+	nasDir      string
+	usbDir      string
+	coversDir   string
+	scanning    bool
+	repairing   atomic.Bool
+	coverCache  map[string]string
+	cacheMu     sync.RWMutex
+	coverCopyMu sync.Mutex
+	mu          sync.Mutex
 }
 
 // NewLibraryScanner inicializa el escáner de biblioteca musical.
@@ -48,8 +61,13 @@ func NewLibraryScanner(database *db.DB, hub *events.Hub, localDir, nasDir, usbDi
 	}
 }
 
-// ScanLibraryAll inicia el barrido recursivo de todas las fuentes de almacenamiento configuradas.
+// ScanLibraryAll inicia un barrido incremental rápido de todas las fuentes configuradas.
 func (ls *LibraryScanner) ScanLibraryAll() {
+	ls.ScanLibrary(false)
+}
+
+// ScanLibrary inicia el escaneo paralelo en segundo plano; con force=true reindexa incluso pistas existentes.
+func (ls *LibraryScanner) ScanLibrary(force bool) {
 	ls.mu.Lock()
 	if ls.scanning {
 		ls.mu.Unlock()
@@ -65,7 +83,21 @@ func (ls *LibraryScanner) ScanLibraryAll() {
 			ls.mu.Unlock()
 		}()
 
-		log.Printf("[Scanner] Iniciando análisis integral de biblioteca con extracción de tags y metadatos reales...")
+		forceScan := force
+		if ls.database != nil && !forceScan {
+			if ver := ls.database.GetSetting("scanner_version", ""); ver != scannerSchemaVersion {
+				log.Printf("[Scanner] Actualizando índice a esquema de escáner v%s (reescaneo único)...", scannerSchemaVersion)
+				forceScan = true
+			}
+		}
+
+		var indexedDurations map[string]float64
+		if !forceScan && ls.database != nil {
+			indexedDurations, _ = ls.database.GetIndexedTrackDurations()
+		}
+
+		log.Printf("[Scanner] Iniciando análisis de biblioteca (incremental=%v, ya_indexadas=%d)...",
+			!forceScan, len(indexedDurations))
 		start := time.Now()
 
 		sources := []struct {
@@ -77,7 +109,8 @@ func (ls *LibraryScanner) ScanLibraryAll() {
 			{"usb", ls.usbDir},
 		}
 
-		totalScanned := 0
+		totalProcessed := 0
+		skippedExisting := 0
 		for _, s := range sources {
 			if s.path == "" {
 				continue
@@ -85,20 +118,28 @@ func (ls *LibraryScanner) ScanLibraryAll() {
 			if _, err := os.Stat(s.path); os.IsNotExist(err) {
 				continue
 			}
-			count := ls.scanDirectory(s.path, s.name)
-			totalScanned += count
+			processed, skipped := ls.scanDirectory(s.path, s.name, indexedDurations, &totalProcessed)
+			skippedExisting += skipped
+			_ = processed
+		}
+
+		if ls.database != nil {
+			_ = ls.database.SetSetting("scanner_version", scannerSchemaVersion)
 		}
 
 		elapsed := time.Since(start)
-		log.Printf("[Scanner] Análisis finalizado: %d pistas indexadas correctamente en %v", totalScanned, elapsed)
+		log.Printf("[Scanner] Análisis finalizado: %d pistas nuevas/actualizadas (%d omitidas sin cambios) en %v",
+			totalProcessed, skippedExisting, elapsed)
 
 		// Tras escanear, reparar duraciones de pistas pendientes en segundo plano
 		ls.RepairDurationsInBackground()
 
 		if ls.eventsHub != nil {
 			ls.eventsHub.Broadcast("library_updated", map[string]interface{}{
-				"tracks_count": totalScanned,
+				"tracks_count": totalProcessed,
+				"skipped":      skippedExisting,
 				"elapsed_ms":   elapsed.Milliseconds(),
+				"scanning":     false,
 			})
 		}
 	}()
@@ -106,7 +147,13 @@ func (ls *LibraryScanner) ScanLibraryAll() {
 
 // RepairDurationsInBackground recorre en segundo plano las canciones sin duración real calculada y las repara en paralelo.
 func (ls *LibraryScanner) RepairDurationsInBackground() {
+	if !ls.repairing.CompareAndSwap(false, true) {
+		return
+	}
+
 	go func() {
+		defer ls.repairing.Store(false)
+
 		tracks, err := ls.database.GetTracksNeedingDuration()
 		if err != nil || len(tracks) == 0 {
 			return
@@ -122,12 +169,12 @@ func (ls *LibraryScanner) RepairDurationsInBackground() {
 			sr  int
 		}
 
-		results := make(chan updateItem, 1000)
-		jobs := make(chan db.TrackPathID, 1000)
+		results := make(chan updateItem, 256)
+		jobs := make(chan db.TrackPathID, 256)
 
-		// 8 workers concurrentes para procesar en paralelo sin saturar I/O
+		// 4 workers concurrentes para equilibrar rendimiento y memoria (<256MB en RPi)
 		var wg sync.WaitGroup
-		for w := 0; w < 8; w++ {
+		for w := 0; w < 4; w++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -151,7 +198,7 @@ func (ls *LibraryScanner) RepairDurationsInBackground() {
 		}()
 
 		// Colector de resultados y persistencia en lotes
-		batch := make([]db.TrackPropertyUpdate, 0, 500)
+		batch := make([]db.TrackPropertyUpdate, 0, 100)
 		totalUpdated := 0
 
 		flush := func() {
@@ -169,8 +216,10 @@ func (ls *LibraryScanner) RepairDurationsInBackground() {
 				Bitrate:    item.br,
 				SampleRate: item.sr,
 			})
-			if len(batch) >= 500 {
+			if len(batch) >= 100 {
 				flush()
+				// Ceder brevemente el lock de escritura SQLite para no retrasar favoritos o ajustes
+				time.Sleep(15 * time.Millisecond)
 			}
 		}
 		flush()
@@ -181,13 +230,14 @@ func (ls *LibraryScanner) RepairDurationsInBackground() {
 		if totalUpdated > 0 && ls.eventsHub != nil {
 			ls.eventsHub.Broadcast("library_updated", map[string]interface{}{
 				"durations_repaired": totalUpdated,
+				"scanning":           false,
 			})
 		}
 	}()
 }
 
-// scanDirectory recorre un árbol de directorios e indexa cada archivo de audio compatible en lotes atómicos.
-func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string) int {
+// scanDirectory recorre un árbol de directorios en paralelo (4 workers) y persiste en lotes con progreso SSE.
+func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map[string]float64, totalCounter *int) (int, int) {
 	validExts := map[string]bool{
 		".mp3":  true,
 		".flac": true,
@@ -195,45 +245,113 @@ func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string) int {
 		".m4a":  true,
 		".wav":  true,
 		".opus": true,
+		".aac":  true,
+		".alac": true,
+		".wma":  true,
 	}
+
+	type scanJob struct {
+		path string
+		info os.FileInfo
+	}
+
+	jobs := make(chan scanJob, 64)
+	results := make(chan *db.Track, 128)
+
+	var workersWg sync.WaitGroup
+	const numWorkers = 4
+	for w := 0; w < numWorkers; w++ {
+		workersWg.Add(1)
+		go func() {
+			defer workersWg.Done()
+			for j := range jobs {
+				if t := ls.parseTrackMetadata(j.path, rootPath, sourceName, j.info); t != nil {
+					results <- t
+				}
+			}
+		}()
+	}
+
+	skipped := 0
+	go func() {
+		_ = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() {
+				return nil
+			}
+			ext := strings.ToLower(filepath.Ext(path))
+			if !validExts[ext] {
+				return nil
+			}
+			// Omitir archivos ya indexados con duración válida para arranques casi instantáneos
+			if indexed != nil {
+				if dur, ok := indexed[path]; ok && dur > 0 && dur != 240.0 {
+					skipped++
+					return nil
+				}
+			}
+			jobs <- scanJob{path: path, info: info}
+			return nil
+		})
+		close(jobs)
+		workersWg.Wait()
+		close(results)
+	}()
 
 	count := 0
-	batchSize := 150
+	const initialBatchSize = 25
+	const batchSize = 100
 	batch := make([]*db.Track, 0, batchSize)
+	firstBatchNotified := false
+	lastNotify := time.Now()
+	lastLoggedMilestone := 0
 
 	flushBatch := func() {
-		if len(batch) > 0 {
-			if err := ls.database.BatchUpsertTracks(batch); err == nil {
-				count += len(batch)
-			} else {
-				log.Printf("[Scanner] Advertencia al persistir lote de %d canciones: %v", len(batch), err)
-			}
-			batch = batch[:0]
+		if len(batch) == 0 {
+			return
 		}
+		if err := ls.database.BatchUpsertTracks(batch); err == nil {
+			count += len(batch)
+			if totalCounter != nil {
+				*totalCounter += len(batch)
+			}
+			if count-lastLoggedMilestone >= 1000 {
+				lastLoggedMilestone = (count / 1000) * 1000
+				log.Printf("[Scanner] Progreso (%s): %d pistas indexadas...", sourceName, count)
+			}
+			// Enviar actualización progresiva en el primer lote o cada 5 segundos
+			if ls.eventsHub != nil && (!firstBatchNotified || time.Since(lastNotify) >= 5*time.Second) {
+				firstBatchNotified = true
+				lastNotify = time.Now()
+				soFar := count
+				if totalCounter != nil {
+					soFar = *totalCounter
+				}
+				ls.eventsHub.Broadcast("library_updated", map[string]interface{}{
+					"tracks_count": soFar,
+					"scanning":     true,
+				})
+			}
+		} else {
+			log.Printf("[Scanner] Advertencia al persistir lote de %d canciones: %v", len(batch), err)
+		}
+		batch = batch[:0]
 	}
 
-	_ = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
+	for track := range results {
+		batch = append(batch, track)
+		limit := batchSize
+		if !firstBatchNotified {
+			limit = initialBatchSize
 		}
-
-		ext := strings.ToLower(filepath.Ext(path))
-		if !validExts[ext] {
-			return nil
+		if len(batch) >= limit {
+			flushBatch()
+			// Pausa mínima para ceder prioridad a escrituras interactivas del usuario (favoritos, ajustes)
+			time.Sleep(15 * time.Millisecond)
 		}
-
-		track := ls.parseTrackMetadata(path, rootPath, sourceName, info)
-		if track != nil {
-			batch = append(batch, track)
-			if len(batch) >= batchSize {
-				flushBatch()
-			}
-		}
-		return nil
-	})
-
+	}
 	flushBatch()
-	return count
+
+	return count, skipped
 }
 
 // parseTrackMetadata extrae título, artista, álbum, formato y carátula usando tags embebidos y fallback heurístico inteligente.
@@ -254,6 +372,7 @@ func (ls *LibraryScanner) parseTrackMetadata(filePath, rootPath, sourceName stri
 	var duration float64 = 0.0
 
 	// 1. Intentar leer etiquetas embebidas reales (Vorbis Comments para FLAC/OGG, ID3v2 para MP3)
+	// Nota: ReadAudioTags ya calcula duración, bitrate y sample rate de MP3/FLAC/WAV sin reabrir el fichero.
 	tagMeta := ReadAudioTags(filePath)
 	if tagMeta != nil {
 		if tagMeta.Artist != "" {
@@ -288,35 +407,25 @@ func (ls *LibraryScanner) parseTrackMetadata(filePath, rootPath, sourceName stri
 		}
 	}
 
-	// Si aún no tenemos duración, intentar leer propiedades de audio nativas
-	if duration <= 0 {
-		if dur, br, sr, err := ReadAudioProperties(filePath); err == nil && dur > 0 {
-			duration = dur
-			if br > 0 {
-				bitrate = br
-			}
-			if sr > 0 {
-				sampleRate = sr
-			}
-		}
-	}
-
-	// Si aún no se pudo calcular por stream VBR/CBR, estimar con tamaño del archivo
+	// Si aún no se pudo calcular duración por stream VBR/CBR, estimar con tamaño del archivo
 	if duration <= 0 && info != nil && info.Size() > 0 && bitrate > 0 {
 		duration = float64(info.Size()*8) / float64(bitrate*1000)
 	}
 
-	// 2. Si faltan metadatos clave, aplicar heurística jerárquica sobre los directorios
-	relPath, _ := filepath.Rel(rootPath, filePath)
+	// 2. Preparar heurística jerárquica sobre los directorios para completar metadatos ausentes
+	relPath := filepath.Base(filePath)
+	if rootPath != "" {
+		if rel, err := filepath.Rel(rootPath, filePath); err == nil && !strings.HasPrefix(rel, "..") {
+			relPath = rel
+		}
+	}
 	segments := strings.Split(filepath.ToSlash(relPath), "/")
 
-	// Reconocer carpetas de categoría raíz (ej: "04.indie", "07.rock", "01.clasica", "02.soundtrack")
-	catRegex := regexp.MustCompile(`^(\d{2}\.)?([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)$`)
 	isCategory := false
 	detectedCategoryGenre := ""
 
-	if len(segments) > 0 {
-		m := catRegex.FindStringSubmatch(segments[0])
+	if len(segments) > 1 {
+		m := catDirRegex.FindStringSubmatch(segments[0])
 		if len(m) > 2 {
 			isCategory = true
 			detectedCategoryGenre = capitalizeWords(m[2])
@@ -334,38 +443,37 @@ func (ls *LibraryScanner) parseTrackMetadata(filePath, rootPath, sourceName stri
 		}
 	}
 
+	fallbackArtist := "Artista Desconocido"
+	fallbackAlbum := "Colección"
+
+	if isCategory && len(segments) >= 4 {
+		// /music/nas/04.indie/izal/2018 - Autoterapia/01 - Autoterapia.flac
+		fallbackArtist = cleanArtistName(segments[1])
+		fallbackAlbum = cleanAlbumName(segments[2])
+		year = extractYear(segments[2], year)
+	} else if isCategory && len(segments) == 3 {
+		// /music/nas/01.clasica/Ludovico Einaudi/01 - Divenire.mp3 (sin subcarpeta de álbum)
+		fallbackArtist = cleanArtistName(segments[1])
+		fallbackAlbum = "Sencillos"
+	} else if isCategory && len(segments) == 2 {
+		// /music/nas/05.recopilatorios/01 - Tema.mp3
+		fallbackArtist = "Varios Artistas"
+		fallbackAlbum = detectedCategoryGenre
+	} else if len(segments) >= 3 {
+		// /music/local/The Beatles/Abbey Road/01 - Come Together.flac
+		fallbackArtist = cleanArtistName(segments[0])
+		fallbackAlbum = cleanAlbumName(segments[1])
+		year = extractYear(segments[1], year)
+	} else if len(segments) == 2 {
+		fallbackArtist = cleanArtistName(segments[0])
+		fallbackAlbum = "Sencillos"
+	}
+
 	if artist == "" || strings.HasPrefix(artist, "0") {
-		if isCategory && len(segments) >= 3 {
-			// /music/nas/04.indie/izal/2018 - Autoterapia/01 - Autoterapia.flac
-			artist = cleanArtistName(segments[1])
-			if album == "" {
-				album = cleanAlbumName(segments[2])
-				year = extractYear(segments[2], year)
-			}
-		} else if isCategory && len(segments) == 2 {
-			// /music/nas/05.recopilatorios/RockFM/...
-			artist = "Varios Artistas"
-			if album == "" {
-				album = cleanAlbumName(segments[1])
-			}
-		} else if len(segments) >= 3 {
-			// /music/local/The Beatles/Abbey Road/01 - Come Together.flac
-			artist = cleanArtistName(segments[0])
-			if album == "" {
-				album = cleanAlbumName(segments[1])
-				year = extractYear(segments[1], year)
-			}
-		} else if len(segments) == 2 {
-			artist = cleanArtistName(segments[0])
-			if album == "" {
-				album = "Sencillos"
-			}
-		} else {
-			artist = "Artista Desconocido"
-			if album == "" {
-				album = "Colección"
-			}
-		}
+		artist = fallbackArtist
+	}
+	if album == "" {
+		album = fallbackAlbum
 	}
 
 	// 3. Extracción y refinamiento del Título y Número de Pista si viene del nombre de archivo
@@ -496,13 +604,11 @@ func cleanArtistName(raw string) string {
 func cleanAlbumName(raw string) string {
 	raw = strings.TrimSpace(raw)
 	// Quitar sufijos entre corchetes o paréntesis con etiquetas técnicas
-	reClean := regexp.MustCompile(`(?i)\s*(\[[^\]]*\]|\((?:19|20)\d{2}[^)]*\)|FLAC|Lossless|Hunter|PMEDIA|FRG|320kbps|⭐️|\b\d+Bit[^\s]*)\s*`)
-	cleaned := reClean.ReplaceAllString(raw, " ")
+	cleaned := albumCleanRegex.ReplaceAllString(raw, " ")
 	cleaned = strings.TrimSpace(cleaned)
 
 	// Si el álbum empieza por año "2018 - Nombre", quitar el prefijo
-	rePrefix := regexp.MustCompile(`^(?:19|20)\d{2}\s*[-–]\s*(.+)`)
-	if m := rePrefix.FindStringSubmatch(cleaned); len(m) > 1 {
+	if m := albumYearPrefRegex.FindStringSubmatch(cleaned); len(m) > 1 {
 		cleaned = strings.TrimSpace(m[1])
 	}
 
@@ -517,8 +623,7 @@ func extractYear(name string, defaultYear int) int {
 	if defaultYear > 0 {
 		return defaultYear
 	}
-	re := regexp.MustCompile(`\b(19\d{2}|20\d{2})\b`)
-	m := re.FindString(name)
+	m := yearSearchRegex.FindString(name)
 	if m != "" {
 		if y, err := strconv.Atoi(m); err == nil {
 			return y
@@ -555,8 +660,7 @@ func parseFilename(base string) (trackNum int, artist string, title string) {
 	}
 
 	// Manejo de "14. Jeanne"
-	reDot := regexp.MustCompile(`^(\d+)\.\s*(.+)`)
-	if m := reDot.FindStringSubmatch(base); len(m) > 2 {
+	if m := trackDotRegex.FindStringSubmatch(base); len(m) > 2 {
 		if num, err := strconv.Atoi(m[1]); err == nil {
 			trackNum = num
 		}
@@ -601,7 +705,7 @@ func cleanMetadataString(s string) string {
 	}, s))
 }
 
-// findOrCacheCover localiza una imagen de carátula local y la enlaza a la URL estática con caché en memoria.
+// findOrCacheCover localiza una imagen de carátula local y la enlaza a la URL estática con caché en memoria segura para concurrencia.
 func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 	ls.cacheMu.RLock()
 	if cached, ok := ls.coverCache[dir]; ok {
@@ -610,26 +714,48 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 	}
 	ls.cacheMu.RUnlock()
 
-	candidates := []string{
-		"cover.jpg", "cover.png", "folder.jpg", "folder.png",
-		"front.jpg", "front.png", "Cover.jpg", "Folder.jpg",
-		"Front.jpg", "artwork.jpg",
+	// Serializar búsqueda y copia cuando una carpeta no está aún cacheada para evitar lecturas SMB duplicadas
+	ls.coverCopyMu.Lock()
+	defer ls.coverCopyMu.Unlock()
+
+	ls.cacheMu.RLock()
+	if cached, ok := ls.coverCache[dir]; ok {
+		ls.cacheMu.RUnlock()
+		return cached
+	}
+	ls.cacheMu.RUnlock()
+
+	preferredNames := []string{
+		"cover.jpg", "cover.jpeg", "cover.png",
+		"folder.jpg", "folder.jpeg", "folder.png",
+		"front.jpg", "front.jpeg", "front.png",
+		"artwork.jpg", "artwork.png",
 	}
 
 	result := ""
-	for _, cand := range candidates {
-		candPath := filepath.Join(dir, cand)
-		if info, err := os.Stat(candPath); err == nil && !info.IsDir() {
-			hash := md5.Sum([]byte(dir))
-			hashStr := hex.EncodeToString(hash[:])
-			destName := hashStr + filepath.Ext(cand)
-			destPath := filepath.Join(ls.coversDir, destName)
-
-			if _, err := os.Stat(destPath); os.IsNotExist(err) {
-				_ = copyFile(candPath, destPath)
+	if entries, err := os.ReadDir(dir); err == nil {
+		filesByLower := make(map[string]string, len(entries))
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				name := entry.Name()
+				filesByLower[strings.ToLower(name)] = name
 			}
-			result = fmt.Sprintf("/api/covers/%s", destName)
-			break
+		}
+		for _, pref := range preferredNames {
+			if actualName, ok := filesByLower[pref]; ok {
+				candPath := filepath.Join(dir, actualName)
+				hash := md5.Sum([]byte(dir))
+				hashStr := hex.EncodeToString(hash[:])
+				ext := strings.ToLower(filepath.Ext(actualName))
+				destName := hashStr + ext
+				destPath := filepath.Join(ls.coversDir, destName)
+
+				if _, err := os.Stat(destPath); os.IsNotExist(err) {
+					_ = copyFile(candPath, destPath)
+				}
+				result = fmt.Sprintf("/api/covers/%s", destName)
+				break
+			}
 		}
 	}
 
@@ -658,6 +784,20 @@ func copyFile(src, dst string) error {
 	return err
 }
 
+// detectSourceAndRoot determina la fuente (local/nas/usb) y su directorio raíz para preservar jerarquías de carpetas.
+func (ls *LibraryScanner) detectSourceAndRoot(targetPath string) (string, string) {
+	if ls.nasDir != "" && strings.HasPrefix(targetPath, ls.nasDir) {
+		return "nas", ls.nasDir
+	}
+	if ls.usbDir != "" && strings.HasPrefix(targetPath, ls.usbDir) {
+		return "usb", ls.usbDir
+	}
+	if ls.localDir != "" && strings.HasPrefix(targetPath, ls.localDir) {
+		return "local", ls.localDir
+	}
+	return "local", ""
+}
+
 // ParseAndSaveFile procesa un archivo de audio específico en disco y lo guarda en la base de datos.
 func (ls *LibraryScanner) ParseAndSaveFile(filePath string) *db.Track {
 	info, err := os.Stat(filePath)
@@ -665,14 +805,8 @@ func (ls *LibraryScanner) ParseAndSaveFile(filePath string) *db.Track {
 		return nil
 	}
 
-	source := "local"
-	if strings.HasPrefix(filePath, ls.nasDir) {
-		source = "nas"
-	} else if strings.HasPrefix(filePath, ls.usbDir) {
-		source = "usb"
-	}
-
-	track := ls.parseTrackMetadata(filePath, "", source, info)
+	source, rootDir := ls.detectSourceAndRoot(filePath)
+	track := ls.parseTrackMetadata(filePath, rootDir, source, info)
 	if track != nil {
 		_ = ls.database.UpsertTrack(track)
 	}
@@ -682,27 +816,25 @@ func (ls *LibraryScanner) ParseAndSaveFile(filePath string) *db.Track {
 // ScanFolderTracks recorre una carpeta en disco y extrae todas las pistas de audio encontradas.
 func (ls *LibraryScanner) ScanFolderTracks(folderPath string) []db.Track {
 	var tracks []db.Track
-	source := "local"
-	if strings.HasPrefix(folderPath, ls.nasDir) {
-		source = "nas"
-	} else if strings.HasPrefix(folderPath, ls.usbDir) {
-		source = "usb"
+	source, rootDir := ls.detectSourceAndRoot(folderPath)
+	if rootDir == "" {
+		rootDir = folderPath
 	}
 
 	supportedExts := map[string]bool{
 		".mp3": true, ".flac": true, ".ogg": true, ".m4a": true,
-		".wav": true, ".aac": true, ".opus": true, ".alac": true,
+		".wav": true, ".aac": true, ".opus": true, ".alac": true, ".wma": true,
 	}
 
 	_ = filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
 		if !supportedExts[ext] {
 			return nil
 		}
-		t := ls.parseTrackMetadata(path, folderPath, source, info)
+		t := ls.parseTrackMetadata(path, rootDir, source, info)
 		if t != nil {
 			_ = ls.database.UpsertTrack(t)
 			tracks = append(tracks, *t)

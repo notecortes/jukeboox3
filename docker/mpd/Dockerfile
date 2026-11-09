@@ -9,12 +9,14 @@ RUN apk add --no-cache \
     curl \
     tzdata
 
-RUN mkdir -p /var/lib/mpd/playlists /music /var/log/mpd && \
-    touch /var/lib/mpd/database /var/lib/mpd/state /var/lib/mpd/sticker.sql
+RUN mkdir -p /var/lib/mpd/playlists /music /var/log/mpd /run/mpd && \
+    touch /var/lib/mpd/database /var/lib/mpd/state /var/lib/mpd/sticker.sql && \
+    ln -sfn /music /rawmusic
 
 COPY config/mpd.conf /etc/mpd.conf
+COPY docker/mpd/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 6600 4082
 
-CMD ["mpd", "--no-daemon", "--stdout", "/etc/mpd.conf"]
-
+ENTRYPOINT ["/entrypoint.sh"]

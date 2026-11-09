@@ -65,6 +65,8 @@ func readFLACTags(r io.ReadSeeker, fileSize int64) *RawMetadata {
 		Bitrate:    960,
 	}
 	blockHeader := make([]byte, 4)
+	gotStreamInfo := false
+	gotVorbis := false
 
 	for {
 		if _, err := io.ReadFull(r, blockHeader); err != nil {
@@ -75,10 +77,15 @@ func readFLACTags(r io.ReadSeeker, fileSize int64) *RawMetadata {
 		length := int(blockHeader[1])<<16 | int(blockHeader[2])<<8 | int(blockHeader[3])
 
 		// Bloque 0: STREAMINFO (duración exacta, sample rate, canales, bits)
-		if blockType == 0 && length >= 34 {
-			infoData := make([]byte, length)
+		if blockType == 0 && length >= 34 && length <= 65536 {
+			infoData := make([]byte, 34)
 			if _, err := io.ReadFull(r, infoData); err != nil {
 				break
+			}
+			if length > 34 {
+				if _, err := r.Seek(int64(length-34), io.SeekCurrent); err != nil {
+					break
+				}
 			}
 			sr := uint32(infoData[10])<<12 | uint32(infoData[11])<<4 | uint32(infoData[12])>>4
 			totalSamples := (uint64(infoData[13]&0x0F) << 32) | (uint64(infoData[14]) << 24) |
@@ -92,20 +99,22 @@ func readFLACTags(r io.ReadSeeker, fileSize int64) *RawMetadata {
 					}
 				}
 			}
-		} else if blockType == 4 { // Bloque 4: Vorbis Comment
+			gotStreamInfo = true
+		} else if blockType == 4 && length > 0 && length <= 2*1024*1024 { // Bloque 4: Vorbis Comment
 			blockData := make([]byte, length)
 			if _, err := io.ReadFull(r, blockData); err != nil {
 				break
 			}
 			parseVorbisComments(blockData, meta)
+			gotVorbis = true
 		} else {
-			// Saltar otros bloques
-			if _, err := io.CopyN(io.Discard, r, int64(length)); err != nil {
+			// Saltar otros bloques (ej. PICTURE / PADDING) sin leer bytes de red por SMB
+			if _, err := r.Seek(int64(length), io.SeekCurrent); err != nil {
 				break
 			}
 		}
 
-		if isLast {
+		if isLast || (gotStreamInfo && gotVorbis) {
 			break
 		}
 	}
@@ -125,7 +134,7 @@ func parseVorbisComments(data []byte, meta *RawMetadata) {
 
 	// Vendor length & string
 	var vendorLen uint32
-	if err := binary.Read(reader, binary.LittleEndian, &vendorLen); err != nil || int(vendorLen) > len(data) {
+	if err := binary.Read(reader, binary.LittleEndian, &vendorLen); err != nil || int64(vendorLen) > int64(len(data)) {
 		return
 	}
 	if _, err := reader.Seek(int64(vendorLen), io.SeekCurrent); err != nil {
@@ -136,6 +145,9 @@ func parseVorbisComments(data []byte, meta *RawMetadata) {
 	var numComments uint32
 	if err := binary.Read(reader, binary.LittleEndian, &numComments); err != nil {
 		return
+	}
+	if numComments > 4096 {
+		numComments = 4096
 	}
 
 	for i := uint32(0); i < numComments; i++ {
@@ -186,6 +198,125 @@ func parseVorbisComments(data []byte, meta *RawMetadata) {
 	}
 }
 
+// isWantedID3Frame indica si el frame ID3v2 contiene metadatos de texto útiles y debe leerse.
+func isWantedID3Frame(frameID string) bool {
+	switch frameID {
+	case "TIT2", "TT2", "TPE1", "TP1", "TALB", "TAL", "TPE2", "TP2",
+		"TCON", "TCO", "TYER", "TYE", "TDRC", "TRCK", "TRK", "TLEN", "TLE":
+		return true
+	}
+	return false
+}
+
+// isValidFrameID comprueba que el identificador de frame ID3 esté compuesto por letras mayúsculas o dígitos ASCII.
+func isValidFrameID(id string) bool {
+	if len(id) == 0 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyID3TextFrame asigna el valor decodificado de un frame ID3 al struct RawMetadata.
+func applyID3TextFrame(frameID string, frameBody []byte, meta *RawMetadata) {
+	val := decodeTextFrame(frameBody)
+	if val == "" {
+		return
+	}
+	switch frameID {
+	case "TIT2", "TT2":
+		meta.Title = val
+	case "TPE1", "TP1":
+		meta.Artist = val
+	case "TALB", "TAL":
+		meta.Album = val
+	case "TPE2", "TP2":
+		meta.AlbumArtist = val
+	case "TCON", "TCO":
+		meta.Genre = val
+	case "TYER", "TYE", "TDRC":
+		if len(val) >= 4 {
+			if y, err := strconv.Atoi(val[:4]); err == nil {
+				meta.Year = y
+			}
+		}
+	case "TRCK", "TRK":
+		tParts := strings.Split(val, "/")
+		if num, err := strconv.Atoi(tParts[0]); err == nil {
+			meta.TrackNumber = num
+		}
+	case "TLEN", "TLE": // Duración en milisegundos en ID3v2
+		if ms, err := strconv.ParseFloat(val, 64); err == nil && ms > 0 {
+			meta.Duration = ms / 1000.0
+		}
+	}
+}
+
+// parseID3FrameHeader extrae el identificador y tamaño de un frame ID3v2 (v2.2, v2.3 o v2.4).
+func parseID3FrameHeader(hdr []byte, version byte) (string, int) {
+	if version == 2 {
+		if len(hdr) < 6 {
+			return "", 0
+		}
+		return string(hdr[:3]), int(hdr[3])<<16 | int(hdr[4])<<8 | int(hdr[5])
+	}
+	if len(hdr) < 10 {
+		return "", 0
+	}
+	frameID := string(hdr[:4])
+	var frameSize int
+	if version == 4 && (hdr[4]|hdr[5]|hdr[6]|hdr[7])&0x80 == 0 {
+		frameSize = syncSafeInt(hdr[4:8])
+	} else {
+		frameSize = int(binary.BigEndian.Uint32(hdr[4:8]))
+	}
+	return frameID, frameSize
+}
+
+// streamID3v2Frames recorre un bloque ID3v2 grande saltando por Seek los frames binarios (APIC, PRIV, GEOB).
+func streamID3v2Frames(r io.ReadSeeker, tagSize int, version byte, meta *RawMetadata) {
+	hdrLen := 10
+	if version == 2 {
+		hdrLen = 6
+	}
+	frameHdr := make([]byte, hdrLen)
+	pos := 0
+
+	for pos+hdrLen <= tagSize {
+		if _, err := io.ReadFull(r, frameHdr); err != nil {
+			break
+		}
+		pos += hdrLen
+
+		if frameHdr[0] == 0 {
+			break
+		}
+
+		frameID, frameSize := parseID3FrameHeader(frameHdr, version)
+		if !isValidFrameID(frameID) || frameSize <= 0 || int64(pos)+int64(frameSize) > int64(tagSize) {
+			break
+		}
+
+		if isWantedID3Frame(frameID) && frameSize <= 8192 {
+			frameBody := make([]byte, frameSize)
+			if _, err := io.ReadFull(r, frameBody); err != nil {
+				break
+			}
+			applyID3TextFrame(frameID, frameBody, meta)
+		} else {
+			if _, err := r.Seek(int64(frameSize), io.SeekCurrent); err != nil {
+				break
+			}
+		}
+		pos += frameSize
+	}
+}
+
 // readID3v2Tags decodifica frames estándar de ID3v2 en MP3 y analiza frames MPEG para calcular la duración exacta.
 func readID3v2Tags(r io.ReadSeeker, fileSize int64) *RawMetadata {
 	meta := &RawMetadata{
@@ -198,76 +329,61 @@ func readID3v2Tags(r io.ReadSeeker, fileSize int64) *RawMetadata {
 
 	if _, err := io.ReadFull(r, header); err == nil && string(header[:3]) == "ID3" {
 		version := header[3]
+		flags := header[5]
 		tagSize := syncSafeInt(header[6:10])
-		if tagSize > 0 && tagSize <= 10*1024*1024 {
-			audioStartOffset = int64(10 + tagSize)
-			tagData := make([]byte, tagSize)
-			if _, err := io.ReadFull(r, tagData); err == nil {
-				offset := 0
-				for offset < len(tagData)-10 {
-					var frameID string
-					var frameSize int
+		if version >= 2 && version <= 4 && tagSize > 0 && tagSize <= 20*1024*1024 {
+			audioStartOffset = int64(10) + int64(tagSize)
 
-					if version == 2 {
-						if offset+6 > len(tagData) {
-							break
+			// Saltar cabecera extendida opcional (bit 6) si existe
+			extSkip := 0
+			if (version == 3 || version == 4) && (flags&0x40) != 0 && tagSize > 4 {
+				extHdr := make([]byte, 4)
+				if _, err := io.ReadFull(r, extHdr); err == nil {
+					if version == 4 {
+						extSize := syncSafeInt(extHdr)
+						if extSize > 4 && extSize <= tagSize {
+							_, _ = r.Seek(int64(extSize-4), io.SeekCurrent)
+							extSkip = extSize
 						}
-						frameID = string(tagData[offset : offset+3])
-						frameSize = int(tagData[offset+3])<<16 | int(tagData[offset+4])<<8 | int(tagData[offset+5])
-						offset += 6
 					} else {
-						if offset+10 > len(tagData) {
-							break
-						}
-						frameID = string(tagData[offset : offset+4])
-						if version == 4 {
-							frameSize = syncSafeInt(tagData[offset+4 : offset+8])
-						} else {
-							frameSize = int(binary.BigEndian.Uint32(tagData[offset+4 : offset+8]))
-						}
-						offset += 10
-					}
-
-					if frameSize <= 0 || offset+frameSize > len(tagData) || frameID[0] == 0 {
-						break
-					}
-
-					frameBody := tagData[offset : offset+frameSize]
-					offset += frameSize
-
-					val := decodeTextFrame(frameBody)
-					if val == "" {
-						continue
-					}
-
-					switch frameID {
-					case "TIT2", "TT2":
-						meta.Title = val
-					case "TPE1", "TP1":
-						meta.Artist = val
-					case "TALB", "TAL":
-						meta.Album = val
-					case "TPE2", "TP2":
-						meta.AlbumArtist = val
-					case "TCON", "TCO":
-						meta.Genre = val
-					case "TYER", "TYE", "TDRC":
-						if len(val) >= 4 {
-							if y, err := strconv.Atoi(val[:4]); err == nil {
-								meta.Year = y
-							}
-						}
-					case "TRCK", "TRK":
-						tParts := strings.Split(val, "/")
-						if num, err := strconv.Atoi(tParts[0]); err == nil {
-							meta.TrackNumber = num
-						}
-					case "TLEN", "TLE": // Duración en milisegundos en ID3v2
-						if ms, err := strconv.ParseFloat(val, 64); err == nil && ms > 0 {
-							meta.Duration = ms / 1000.0
+						extSize := int(binary.BigEndian.Uint32(extHdr))
+						if extSize >= 0 && extSize+4 <= tagSize {
+							_, _ = r.Seek(int64(extSize), io.SeekCurrent)
+							extSkip = extSize + 4
 						}
 					}
 				}
+			}
+
+			remainingTagSize := tagSize - extSkip
+			if remainingTagSize > 0 && remainingTagSize <= 65536 {
+				// Lectura única en memoria para cabeceras ligeras sin carátula grande
+				tagData := make([]byte, remainingTagSize)
+				if _, err := io.ReadFull(r, tagData); err == nil {
+					hdrLen := 10
+					if version == 2 {
+						hdrLen = 6
+					}
+					offset := 0
+					for offset+hdrLen <= len(tagData) {
+						if tagData[offset] == 0 {
+							break
+						}
+						frameID, frameSize := parseID3FrameHeader(tagData[offset:offset+hdrLen], version)
+						offset += hdrLen
+						if !isValidFrameID(frameID) || frameSize <= 0 || offset+frameSize > len(tagData) {
+							break
+						}
+						frameBody := tagData[offset : offset+frameSize]
+						offset += frameSize
+						if isWantedID3Frame(frameID) && frameSize <= 8192 {
+							applyID3TextFrame(frameID, frameBody, meta)
+						}
+					}
+				}
+			} else if remainingTagSize > 65536 {
+				// Streaming por Seek para saltar carátulas APIC pesadas sin descargarlas por SMB
+				streamID3v2Frames(r, remainingTagSize, version, meta)
 			}
 		}
 	}
@@ -492,11 +608,21 @@ func decodeTextFrame(data []byte) string {
 		return cleanString(string(payload))
 	case 1: // UTF-16 con BOM
 		if len(payload) >= 2 {
-			runes := make([]rune, 0, len(payload)/2)
-			for i := 2; i+1 < len(payload); i += 2 {
-				r := rune(binary.LittleEndian.Uint16(payload[i : i+2]))
-				if r != 0 {
-					runes = append(runes, r)
+			bigEndian := (payload[0] == 0xFE && payload[1] == 0xFF)
+			start := 0
+			if (payload[0] == 0xFF && payload[1] == 0xFE) || bigEndian {
+				start = 2
+			}
+			runes := make([]rune, 0, (len(payload)-start)/2)
+			for i := start; i+1 < len(payload); i += 2 {
+				var code uint16
+				if bigEndian {
+					code = binary.BigEndian.Uint16(payload[i : i+2])
+				} else {
+					code = binary.LittleEndian.Uint16(payload[i : i+2])
+				}
+				if code != 0 {
+					runes = append(runes, rune(code))
 				}
 			}
 			return cleanString(string(runes))

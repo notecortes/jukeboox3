@@ -35,6 +35,7 @@ ENV DATA_DIR=/app/data
 ENV MUSIC_LOCAL=/music/local
 ENV MUSIC_NAS=/music/nas
 ENV MUSIC_USB=/music/usb
+ENV MPD_SOCKET=/run/mpd/socket
 ENV MPD_HOST=mpd
 ENV MPD_PORT=6600
 

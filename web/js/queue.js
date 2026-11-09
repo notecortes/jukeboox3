@@ -4,9 +4,20 @@
 // =====================================================================
 
 import * as api from './api.js';
-import { state, subscribe } from './state.js';
+import { state, subscribe, updatePlayerState } from './state.js';
 import { formatTime, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
+
+// escapeHtml escapa caracteres especiales HTML para prevenir inyecciones XSS en la cola.
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 // initQueue configura los escuchadores de la vista de cola.
 export function initQueue() {
@@ -88,12 +99,12 @@ export function renderQueueList() {
       </div>
 
       <div style="display:flex; align-items:center; gap:14px; cursor:pointer;" id="queueHeroClickableArea">
-        <img src="${cur.cover_url || '/assets/default-cover.svg'}" style="width:68px; height:68px; min-width:68px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.5);" alt="Carátula"/>
+        <img src="${escapeHtml(cur.cover_url || '/assets/default-cover.svg')}" onerror="this.onerror=null;this.src='/assets/default-cover.svg';" style="width:68px; height:68px; min-width:68px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.5);" alt="Carátula"/>
         <div style="flex:1; min-width:0;">
-          <div style="font-size:1.05rem; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cur.title || 'Canción'}</div>
-          <div style="font-size:0.88rem; color:var(--text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cur.artist || 'Artista'} • ${cur.album || 'Álbum'}</div>
+          <div style="font-size:1.05rem; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(cur.title || 'Canción')}</div>
+          <div style="font-size:0.88rem; color:var(--text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(cur.artist || 'Artista')} • ${escapeHtml(cur.album || 'Álbum')}</div>
           <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${cur.format || 'FLAC'} ${cur.bitrate || 320}kbps</span>
+            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${escapeHtml(cur.format || 'FLAC')} ${cur.bitrate || 320}kbps</span>
             <span style="font-size:0.75rem; color:var(--text-muted);">${formatTime(state.player.elapsed_time || 0)} / ${formatTime(cur.duration || 0)}</span>
           </div>
         </div>
@@ -133,8 +144,8 @@ export function renderQueueList() {
         </svg>
       </div>
       <div class="track-info">
-        <div class="track-title">${track.title}</div>
-        <div class="track-artist">${track.artist}</div>
+        <div class="track-title">${escapeHtml(track.title)}</div>
+        <div class="track-artist">${escapeHtml(track.artist)}</div>
       </div>
       <div class="track-right">
         <span class="track-duration">${formatTime(track.duration)}</span>
@@ -154,11 +165,17 @@ export function renderQueueList() {
       removeQueueItemWithAnimation(item, index);
     });
 
-    // Tap en el elemento para reproducir directamente
+    // Tap en el elemento para saltar a la posición exacta de la cola sin duplicar pistas
     item.addEventListener('click', () => {
-      api.seek(0);
-      // Salto a pista específica
-      api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+      container.querySelectorAll('.queue-item.active').forEach((el) => el.classList.remove('active'));
+      item.classList.add('active');
+      api.playQueueIndex(index)
+        .then((st) => {
+          if (st) updatePlayerState(st);
+        })
+        .catch(() => {
+          showToast('No se pudo reproducir la pista seleccionada');
+        });
     });
 
     // Activar gestos táctiles de arrastre y swipe-to-delete

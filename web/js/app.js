@@ -31,12 +31,44 @@ document.addEventListener('DOMContentLoaded', () => {
   // Registrar PWA Service Worker si es soportado
   registerServiceWorker();
 
-  // Cargar estado inicial
-  api.getStatus().then(updatePlayerState).catch(() => {});
-  api.getQueue().then((res) => {
-    if (res && res.queue) updateQueueState(res.queue);
-  }).catch(() => {});
+  // Cargar estado inicial y cola con reintento automático si hubiera fallo transitorio
+  syncPlayerAndQueue();
 });
+
+let syncRetryTimer = null;
+
+// syncPlayerAndQueue sincroniza estado y cola desde REST como respaldo ante reconexiones.
+function syncPlayerAndQueue() {
+  if (syncRetryTimer) {
+    clearTimeout(syncRetryTimer);
+    syncRetryTimer = null;
+  }
+
+  const scheduleRetry = () => {
+    if (!syncRetryTimer) {
+      syncRetryTimer = setTimeout(() => {
+        syncRetryTimer = null;
+        syncPlayerAndQueue();
+      }, 2000);
+    }
+  };
+
+  api.getStatus()
+    .then((st) => {
+      if (st) updatePlayerState(st);
+    })
+    .catch(() => {
+      scheduleRetry();
+    });
+
+  api.getQueue()
+    .then((res) => {
+      if (res && res.queue) updateQueueState(res.queue);
+    })
+    .catch(() => {
+      scheduleRetry();
+    });
+}
 
 // connectSSE mantiene el canal de eventos en tiempo real con reintento automático.
 function connectSSE() {
@@ -45,6 +77,7 @@ function connectSSE() {
   evtSource.addEventListener('connected', () => {
     console.log('[SSE] Conexión en tiempo real activa (<50ms latencia)');
     document.getElementById('headerStatusDot')?.style.setProperty('background-color', 'var(--color-success)');
+    syncPlayerAndQueue();
   });
 
   evtSource.addEventListener('player_state', (e) => {
@@ -67,8 +100,16 @@ function connectSSE() {
     }
   });
 
-  evtSource.addEventListener('library_updated', () => {
-    notifyListeners('library_updated');
+  evtSource.addEventListener('library_updated', (e) => {
+    let payload = null;
+    if (e && e.data) {
+      try {
+        payload = JSON.parse(e.data);
+      } catch (err) {
+        payload = null;
+      }
+    }
+    notifyListeners('library_updated', payload);
   });
 
   evtSource.onerror = () => {
@@ -210,7 +251,7 @@ function initWebStreamPlayer() {
 // registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=8').then((reg) => {
+    navigator.serviceWorker.register('/sw.js?v=10').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);

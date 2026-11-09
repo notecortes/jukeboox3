@@ -4,7 +4,7 @@
 // =====================================================================
 
 import * as api from './api.js';
-import { state, subscribe, notifyListeners } from './state.js';
+import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
 import { formatTime, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
@@ -26,6 +26,23 @@ let radioFilterQuery = '';
 let radioGenreFilter = 'Todos';
 let cachedRadios = [];
 let isGeneratingMix = false;
+let outputSwitchInFlight = false;
+let isLoadingLibrary = false;
+let pendingLibraryReload = null;
+let lastProgressiveFetchAt = 0;
+
+// shouldDeferLibraryRender comprueba si el usuario interactúa con una vista que no conviene sobrescribir durante un escaneo progresivo.
+function shouldDeferLibraryRender(isScanning = false) {
+  if (isSelectingAlbums) return true;
+  if (document.getElementById('albumTracksList') !== null) return true;
+  if (state.ui.activeSubTab === 'folders') return true;
+  if (document.activeElement && document.activeElement.id === 'albumFilterInput') return true;
+  if (isScanning) {
+    const mainEl = document.querySelector('.main-content');
+    if (mainEl && mainEl.scrollTop > 120) return true;
+  }
+  return false;
+}
 
 // initViews inicializa sub-pestañas, índice A-Z, buscador y panel de ajustes.
 export function initViews() {
@@ -40,16 +57,38 @@ export function initViews() {
   // Cargar catálogo inicial
   loadLibraryData();
 
-  subscribe((event) => {
-    if (event === 'library_updated') {
-      loadLibraryData();
+  const debouncedLibraryRefresh = debounce((payload) => {
+    const isScanning = Boolean(payload && payload.scanning === true);
+    const isFinalUpdate = (!payload || payload.scanning === false);
+    const now = Date.now();
+    // Si ya hay catálogo visible en pantalla, espaciar refrescos intermedios durante escaneos largos
+    if (isScanning && state.library.albums.length >= 50 && now - lastProgressiveFetchAt < 10000) {
+      return;
+    }
+    lastProgressiveFetchAt = now;
+    loadLibraryData({ skipRender: shouldDeferLibraryRender(isScanning) });
+    if (isFinalUpdate) {
       showToast('Biblioteca musical actualizada');
+    }
+  }, 800);
+
+  subscribe((event, payload) => {
+    if (event === 'library_updated') {
+      debouncedLibraryRefresh(payload);
+    } else if (event === 'player_updated') {
+      renderAudioOutputs();
     }
   });
 }
 
-// loadLibraryData descarga álbumes, artistas y pistas recientes desde la API Go.
-export async function loadLibraryData() {
+// loadLibraryData descarga álbumes, artistas y pistas recientes desde la API Go sin solapamientos.
+export async function loadLibraryData(options = {}) {
+  const { skipRender = false } = options;
+  if (isLoadingLibrary) {
+    pendingLibraryReload = { skipRender: Boolean(pendingLibraryReload?.skipRender && skipRender) };
+    return;
+  }
+  isLoadingLibrary = true;
   try {
     const [albums, artists, recent] = await Promise.all([
       api.getLibraryAlbums(),
@@ -60,10 +99,19 @@ export async function loadLibraryData() {
     state.library.artists = artists || [];
     state.library.recentTracks = recent || [];
 
-    renderActiveSubTab();
+    if (!skipRender) {
+      renderActiveSubTab();
+    }
     populateSmartMixArtists();
   } catch (err) {
     console.error('[Views] Error al cargar biblioteca:', err);
+  } finally {
+    isLoadingLibrary = false;
+    if (pendingLibraryReload) {
+      const nextOpts = pendingLibraryReload;
+      pendingLibraryReload = null;
+      loadLibraryData(nextOpts);
+    }
   }
 }
 
@@ -230,7 +278,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
 
         card.innerHTML = `
           <div class="album-card-checkbox">${isSelected ? '✓' : ''}</div>
-          <img class="album-card-cover" src="${cover}" alt="${displayTitle}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+          <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
           <div class="album-card-title" title="${escapeHtml(album.title)}">${escapeHtml(displayTitle)}</div>
           <div class="album-card-artist" title="${escapeHtml(album.artist)}">${escapeHtml(album.artist || 'Artista')}</div>
         `;
@@ -256,10 +304,10 @@ function renderAlbumCardsChunked(container, albums, isList) {
         const row = document.createElement('div');
         row.className = `album-list-row ${isSelected ? 'selected' : ''}`;
         row.innerHTML = `
-          <img class="album-list-cover" src="${cover}" alt="${displayTitle}" loading="lazy" decoding="async"/>
+          <img class="album-list-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
           <div class="album-list-info">
-            <div class="album-list-title">${displayTitle}</div>
-            <div class="album-list-artist">${album.artist} ${album.year > 0 ? '• ' + album.year : ''}</div>
+            <div class="album-list-title">${escapeHtml(displayTitle)}</div>
+            <div class="album-list-artist">${escapeHtml(album.artist || 'Artista')} ${album.year > 0 ? '• ' + album.year : ''}</div>
           </div>
           <div style="font-size:0.75rem; color:var(--text-muted);">${album.track_count || ''} temas</div>
         `;
@@ -339,8 +387,7 @@ function bindMultiSelectBar() {
     if (selectedAlbumIds.size === 0) return;
     const ids = Array.from(selectedAlbumIds);
     showToast(`Reproduciendo ${ids.length} álbumes seleccionados...`);
-    await api.clearQueue();
-    await api.addToQueue({ album_ids: ids, mode: 'play_now' });
+    await api.addToQueue({ album_ids: ids, mode: 'replace', clear_first: true });
     selectedAlbumIds.clear();
     isSelectingAlbums = false;
     updateMultiSelectBar();
@@ -383,10 +430,10 @@ async function openAlbumDetail(albumId) {
           ← Volver a Álbumes
         </button>
         <div style="display:flex; gap:16px; align-items:center;">
-          <img src="${cover}" alt="${album.title}" loading="lazy" decoding="async" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
+          <img src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
           <div>
-            <h2 style="font-size:1.25rem; font-weight:700;">${album.title}</h2>
-            <div style="color:var(--text-secondary); font-size:0.9rem;">${album.artist} • ${album.year || ''}</div>
+            <h2 style="font-size:1.25rem; font-weight:700;">${escapeHtml(album.title)}</h2>
+            <div style="color:var(--text-secondary); font-size:0.9rem;">${escapeHtml(album.artist || 'Artista')}${album.year ? ' • ' + escapeHtml(album.year) : ''}</div>
             <div style="margin-top:8px;">
               <button id="btnPlayAlbumNow" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#fff;">
                 ▶ Reproducir Álbum (${tracks.length} temas)
@@ -400,8 +447,7 @@ async function openAlbumDetail(albumId) {
 
     document.getElementById('btnBackToAlbums')?.addEventListener('click', () => renderActiveSubTab());
     document.getElementById('btnPlayAlbumNow')?.addEventListener('click', () => {
-      api.clearQueue();
-      api.addToQueue({ album_id: album.id, mode: 'append' });
+      api.addToQueue({ album_id: album.id, mode: 'replace', clear_first: true });
       showToast(`Reproduciendo álbum: ${album.title}`);
     });
 
@@ -429,17 +475,18 @@ function renderArtistsList(container) {
   const list = document.getElementById('artistsList');
 
   artists.forEach((art) => {
+    if (!art || !art.name) return;
     const row = document.createElement('div');
     row.className = 'artist-row';
-    row.id = `artist-${art.name.charAt(0).toUpperCase()}`;
-
     const initial = art.name.charAt(0).toUpperCase();
+    row.id = `artist-${initial}`;
+
     row.innerHTML = `
       <div class="artist-row-left">
-        <div class="artist-avatar">${initial}</div>
+        <div class="artist-avatar">${escapeHtml(initial)}</div>
         <div>
-          <div class="artist-name">${art.name}</div>
-          <div class="artist-meta">${art.track_count} temas • ${art.genre || 'Rock'}</div>
+          <div class="artist-name">${escapeHtml(art.name)}</div>
+          <div class="artist-meta">${art.track_count} temas • ${escapeHtml(art.genre || 'Rock')}</div>
         </div>
       </div>
       <button class="btn-secondary btn-quick-mix" style="padding:4px 10px; font-size:0.75rem;">
@@ -923,9 +970,9 @@ function renderSearchResults(container, data) {
       card.className = 'album-card';
       const cover = album.cover_url || '/assets/default-cover.svg';
       card.innerHTML = `
-        <img class="album-card-cover" src="${cover}" alt="${album.title}" loading="lazy" decoding="async"/>
-        <div class="album-card-title">${album.title}</div>
-        <div class="album-card-artist">${album.artist}</div>
+        <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+        <div class="album-card-title">${escapeHtml(album.title)}</div>
+        <div class="album-card-artist">${escapeHtml(album.artist)}</div>
       `;
       card.addEventListener('click', () => openAlbumDetail(album.id));
       grid.appendChild(card);
@@ -1115,8 +1162,7 @@ async function triggerSmartMix(artist) {
 
       document.getElementById('btnPlayMixNow')?.addEventListener('click', async (e) => {
         e.preventDefault();
-        await api.clearQueue();
-        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'play_now' });
+        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'replace', clear_first: true });
         showToast('Reproduciendo Smart Mix...');
       });
 
@@ -1316,25 +1362,155 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// bindSettingsView gestiona selectores de hardware ALSA, salvaguarda de volumen y ReplayGain.
+// describeAudioOutput asigna una etiqueta legible y descripción técnica a cada interfaz detectada por MPD.
+function describeAudioOutput(output) {
+  const plugin = (output.plugin || '').toLowerCase();
+  const nameLower = (output.name || '').toLowerCase();
+
+  if (plugin === 'httpd') {
+    return {
+      badge: 'STREAM',
+      description: 'Stream Hi-Fi 320kbps en puerto 4082'
+    };
+  }
+  if (plugin === 'pulse') {
+    return {
+      badge: 'PULSE',
+      description: 'Servidor de audio PulseAudio del sistema'
+    };
+  }
+  if (plugin === 'null') {
+    return {
+      badge: 'NULL',
+      description: 'Salida silenciosa de respaldo (sin tarjeta física)'
+    };
+  }
+  if (nameLower.includes('usb')) {
+    return {
+      badge: 'USB',
+      description: 'DAC USB externo Plug & Play detectado por ALSA'
+    };
+  }
+  if (nameLower.includes('i2s') || nameLower.includes('hifiberry') || nameLower.includes('dac')) {
+    return {
+      badge: 'I2S',
+      description: 'DAC Hardware de alta fidelidad en bus ALSA'
+    };
+  }
+  return {
+    badge: plugin ? plugin.toUpperCase() : 'ALSA',
+    description: 'Interfaz de audio detectada automáticamente'
+  };
+}
+
+// renderAudioOutputs dibuja dinámicamente las tarjetas de hardware real reportado por MPD sin IDs fijos.
+function renderAudioOutputs(force = false) {
+  const container = document.getElementById('audioOutputsList');
+  if (!container) return;
+
+  const outputs = Array.isArray(state.player.audio_outputs) ? state.player.audio_outputs : [];
+  if (outputs.length === 0) {
+    if (!force && container.dataset.sig === 'empty') return;
+    container.dataset.sig = 'empty';
+    container.innerHTML = `
+      <div style="font-size:0.85rem; color:var(--text-muted); padding:6px 2px;">
+        Buscando salidas de audio disponibles en MPD...
+      </div>
+    `;
+    return;
+  }
+
+  const sig = JSON.stringify(outputs.map((o) => [o.id, o.name, o.plugin, !!o.enabled]));
+  if (!force && container.dataset.sig === sig) {
+    return;
+  }
+  container.dataset.sig = sig;
+  container.innerHTML = '';
+
+  outputs.forEach((output) => {
+    const meta = describeAudioOutput(output);
+    const opt = document.createElement('div');
+    opt.className = `output-option ${output.enabled ? 'active' : ''}`;
+    opt.dataset.outputid = String(output.id);
+    opt.innerHTML = `
+      <div style="min-width:0; padding-right:10px;">
+        <div class="output-name">${escapeHtml(output.name)}</div>
+        <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(meta.description)}</div>
+      </div>
+      <span class="badge-format">${escapeHtml(meta.badge)}</span>
+    `;
+
+    opt.addEventListener('click', async () => {
+      if (outputSwitchInFlight) return;
+      outputSwitchInFlight = true;
+      try {
+        const updatedState = await api.selectAudioOutput(output.id);
+        if (updatedState) {
+          updatePlayerState(updatedState);
+          renderAudioOutputs(true);
+        }
+        showToast(`Salida conmutada a: ${output.name}`);
+      } catch (err) {
+        showToast(`No se pudo cambiar la salida: ${err.message}`);
+      } finally {
+        outputSwitchInFlight = false;
+      }
+    });
+
+    container.appendChild(opt);
+  });
+}
+
+// runForcedScan lanza un re-escaneo completo bloqueando pulsaciones repetidas mientras inicia.
+async function runForcedScan(btn, startMsg) {
+  if (btn && btn.disabled) return;
+  if (btn) btn.disabled = true;
+  showToast(startMsg);
+  try {
+    await api.triggerLibraryScan(true);
+  } catch (err) {
+    showToast(`Error al iniciar escaneo: ${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// bindSettingsView gestiona selectores dinámicos de audio, salvaguarda de volumen y configuración del NAS.
 function bindSettingsView() {
-  // Escaneo de biblioteca
-  document.getElementById('btnRescanLibrary')?.addEventListener('click', async () => {
-    showToast('Iniciando re-escaneo de música...');
-    await api.triggerLibraryScan();
+  // Renderizar inicialmente salidas de audio detectadas
+  renderAudioOutputs(true);
+
+  // Escaneo completo manual de biblioteca
+  const btnRescanLib = document.getElementById('btnRescanLibrary');
+  btnRescanLib?.addEventListener('click', () => {
+    runForcedScan(btnRescanLib, 'Iniciando re-escaneo completo de música...');
   });
 
-  // Conmutador de salidas de audio
-  const outOptions = document.querySelectorAll('.output-option');
-  outOptions.forEach((opt) => {
-    opt.addEventListener('click', async () => {
-      const id = parseInt(opt.dataset.outputid, 10);
-      await api.selectAudioOutput(id);
-      outOptions.forEach((o) => o.classList.remove('active'));
-      opt.classList.add('active');
-      showToast(`Salida conmutada a: ${opt.querySelector('.output-name').textContent}`);
+  // Límite máximo de salvaguarda de volumen
+  const maxVolSlider = document.getElementById('settingMaxVol');
+  const maxVolLabel = document.getElementById('labelMaxVol');
+  if (maxVolSlider) {
+    const initialMax = state.player.max_volume_limit || 85;
+    maxVolSlider.value = initialMax;
+    if (maxVolLabel) maxVolLabel.textContent = `${initialMax}%`;
+
+    maxVolSlider.addEventListener('input', () => {
+      if (maxVolLabel) {
+        maxVolLabel.textContent = `${maxVolSlider.value}%`;
+      }
     });
-  });
+
+    maxVolSlider.addEventListener('change', async () => {
+      const limit = parseInt(maxVolSlider.value, 10);
+      try {
+        const updated = await api.setMaxVolumeLimit(limit);
+        if (updated) updatePlayerState(updated);
+        showToast(`Límite máximo de volumen ajustado al ${limit}%`);
+      } catch (err) {
+        showToast(`Error al ajustar límite: ${err.message}`);
+      }
+    });
+  }
 
   // Temporizador de apagado (Sleep Timer)
   const sleepButtons = document.querySelectorAll('.btn-sleep-timer');
@@ -1373,10 +1549,10 @@ function bindSettingsView() {
     }
   });
 
-  // Re-escanear NAS
-  document.getElementById('btnRescanNAS')?.addEventListener('click', async () => {
-    showToast('Iniciando re-escaneo del almacenamiento NAS...');
-    await api.triggerLibraryScan();
+  // Re-escanear NAS completo
+  const btnRescanNAS = document.getElementById('btnRescanNAS');
+  btnRescanNAS?.addEventListener('click', () => {
+    runForcedScan(btnRescanNAS, 'Iniciando re-escaneo completo del almacenamiento NAS...');
   });
 }
 

@@ -14,27 +14,47 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB gestiona la conexión SQLite y operaciones concurrentes de la base de datos.
+// DB gestiona las conexiones SQLite separando un escritor único serializado y un pool concurrente de lectura en WAL.
 type DB struct {
-	conn *sql.DB
-	mu   sync.RWMutex
+	conn     *sql.DB
+	readConn *sql.DB
+	writeMu  sync.Mutex
+}
+
+// isMemorySQLiteDSN detecta si la ruta de SQLite apunta a una base de datos efímera en memoria.
+func isMemorySQLiteDSN(dbPath string) bool {
+	return dbPath == ":memory:" || strings.Contains(dbPath, ":memory:") || strings.Contains(dbPath, "mode=memory")
+}
+
+// reader devuelve el pool de solo lectura (o la conexión compartida en modo :memory:) sin bloquear escrituras WAL.
+func (d *DB) reader() *sql.DB {
+	if d.readConn != nil {
+		return d.readConn
+	}
+	return d.conn
 }
 
 // InitDB inicializa la conexión con SQLite, activa WAL y crea las tablas necesarias.
 func InitDB(dbPath string) (*DB, error) {
-	// Asegurar directorio padre
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("error al crear directorio para db: %w", err)
+	isMemory := isMemorySQLiteDSN(dbPath)
+	if !isMemory {
+		// Asegurar directorio padre para bases de datos en disco
+		dir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("error al crear directorio para db: %w", err)
+		}
 	}
 
 	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_cache_size=-16000&_foreign_keys=ON", dbPath)
+	if isMemory {
+		dsn = dbPath
+	}
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir SQLite: %w", err)
 	}
 
-	// Limitar conexiones concurrentes para evitar contención en SQLite y ahorrar memoria
+	// Limitar conexión de escritura a 1 para evitar SQLITE_BUSY entre escritores
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
 	conn.SetConnMaxLifetime(time.Hour)
@@ -47,15 +67,39 @@ func InitDB(dbPath string) (*DB, error) {
 		"PRAGMA cache_size = -16000;", // 16MB de memoria caché controlada (ideal para Raspberry Pi)
 		"PRAGMA mmap_size = 33554432;", // 32MB de lectura en memoria virtual sin copia de kernel
 		"PRAGMA temp_store = MEMORY;",
-		"PRAGMA wal_autocheckpoint = 1000;",
+		"PRAGMA wal_autocheckpoint = 500;",
 	}
 	for _, p := range pragmas {
 		_, _ = conn.Exec(p)
 	}
 
-	db := &DB{conn: conn}
+	var readConn *sql.DB
+	if isMemory {
+		readConn = conn
+	} else {
+		readDSN := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=10000&_synchronous=NORMAL&_cache_size=-8000&_foreign_keys=ON", dbPath)
+		readConn, err = sql.Open("sqlite3", readDSN)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("error al abrir pool de lectura SQLite: %w", err)
+		}
+		// Pool concurrente de lectura para que SELECT nunca espere a escaneos o checkpoints WAL
+		readConn.SetMaxOpenConns(4)
+		readConn.SetMaxIdleConns(4)
+		readConn.SetConnMaxLifetime(time.Hour)
+		for _, p := range []string{
+			"PRAGMA busy_timeout = 10000;",
+			"PRAGMA cache_size = -8000;",
+			"PRAGMA mmap_size = 33554432;",
+			"PRAGMA temp_store = MEMORY;",
+		} {
+			_, _ = readConn.Exec(p)
+		}
+	}
+
+	db := &DB{conn: conn, readConn: readConn}
 	if err := db.createSchema(); err != nil {
-		conn.Close()
+		db.Close()
 		return nil, fmt.Errorf("error al crear esquema: %w", err)
 	}
 
@@ -94,7 +138,9 @@ func (d *DB) createSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+	CREATE INDEX IF NOT EXISTS idx_tracks_artist_nocase ON tracks(artist COLLATE NOCASE);
 	CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
+	CREATE INDEX IF NOT EXISTS idx_tracks_album_nocase ON tracks(album COLLATE NOCASE);
 	CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album, artist);
 	CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE);
 	CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
@@ -276,8 +322,8 @@ func (d *DB) seedDefaultRadios() error {
 
 // UpsertTrack inserta o actualiza una pista de audio en la base de datos.
 func (d *DB) UpsertTrack(t *Track) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	query := `
 	INSERT INTO tracks (
@@ -310,6 +356,11 @@ func (d *DB) UpsertTrack(t *Track) error {
 		return err
 	}
 
+	var insertedID int64
+	if err := d.conn.QueryRow(`SELECT id FROM tracks WHERE path = ?`, t.Path).Scan(&insertedID); err == nil {
+		t.ID = insertedID
+	}
+
 	// Mantener catálogo de artistas y álbumes sincronizado
 	_, _ = d.conn.Exec(`
 		INSERT OR IGNORE INTO artists (name, genre) VALUES (?, ?)
@@ -329,8 +380,8 @@ func (d *DB) BatchUpsertTracks(tracks []*Track) error {
 		return nil
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	tx, err := d.conn.Begin()
 	if err != nil {
@@ -381,6 +432,9 @@ func (d *DB) BatchUpsertTracks(tracks []*Track) error {
 	}
 	defer stmtAlbum.Close()
 
+	seenArtists := make(map[string]struct{}, 16)
+	seenAlbums := make(map[string]struct{}, 16)
+
 	for _, t := range tracks {
 		if t == nil {
 			continue
@@ -393,19 +447,42 @@ func (d *DB) BatchUpsertTracks(tracks []*Track) error {
 		if err != nil {
 			return err
 		}
-		_, _ = stmtArtist.Exec(t.Artist, t.Genre)
-		_, _ = stmtAlbum.Exec(t.Album, t.Artist, t.Year, t.Genre, t.CoverURL, t.Source)
+		if _, ok := seenArtists[t.Artist]; !ok {
+			seenArtists[t.Artist] = struct{}{}
+			_, _ = stmtArtist.Exec(t.Artist, t.Genre)
+		}
+		albumKey := t.Album + "\x00" + t.Artist
+		if _, ok := seenAlbums[albumKey]; !ok {
+			seenAlbums[albumKey] = struct{}{}
+			_, _ = stmtAlbum.Exec(t.Album, t.Artist, t.Year, t.Genre, t.CoverURL, t.Source)
+		}
 	}
 
 	return tx.Commit()
 }
 
+// GetIndexedTrackDurations devuelve un mapa ruta -> duración para acelerar escaneos incrementales.
+func (d *DB) GetIndexedTrackDurations() (map[string]float64, error) {
+	rows, err := d.reader().Query(`SELECT path, duration FROM tracks`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	durations := make(map[string]float64)
+	for rows.Next() {
+		var p string
+		var dur float64
+		if err := rows.Scan(&p, &dur); err == nil {
+			durations[p] = dur
+		}
+	}
+	return durations, nil
+}
+
 // GetAllTracks devuelve todas las pistas registradas ordenadas alfabéticamente.
 func (d *DB) GetAllTracks() ([]Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -417,7 +494,7 @@ func (d *DB) GetAllTracks() ([]Track, error) {
 	}
 	defer rows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for rows.Next() {
 		var t Track
 		var fav int
@@ -438,10 +515,7 @@ func (d *DB) GetAllTracks() ([]Track, error) {
 
 // GetRecentTracks devuelve las últimas pistas indexadas en la biblioteca.
 func (d *DB) GetRecentTracks(limit int) ([]Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -454,7 +528,7 @@ func (d *DB) GetRecentTracks(limit int) ([]Track, error) {
 	}
 	defer rows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for rows.Next() {
 		var t Track
 		var fav int
@@ -475,10 +549,7 @@ func (d *DB) GetRecentTracks(limit int) ([]Track, error) {
 
 // GetAlbums devuelve la lista consolidada de álbumes agrupados por título (sin duplicados).
 func (d *DB) GetAlbums() ([]Album, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT 
 			MIN(t.id) as id,
 			t.album as title,
@@ -506,7 +577,7 @@ func (d *DB) GetAlbums() ([]Album, error) {
 	}
 	defer rows.Close()
 
-	var albums []Album
+	albums := make([]Album, 0)
 	for rows.Next() {
 		var a Album
 		if err := rows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.TotalDuration, &a.Source); err != nil {
@@ -519,14 +590,13 @@ func (d *DB) GetAlbums() ([]Album, error) {
 
 // GetAlbumByID devuelve un álbum y todas sus canciones agrupadas por el título del álbum.
 func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	rDB := d.reader()
 
 	// 1. Obtener el título del álbum correspondiente al ID (desde tracks o de albums histórico)
 	var albumTitle string
-	err := d.conn.QueryRow(`SELECT album FROM tracks WHERE id = ?`, id).Scan(&albumTitle)
+	err := rDB.QueryRow(`SELECT album FROM tracks WHERE id = ?`, id).Scan(&albumTitle)
 	if err != nil || albumTitle == "" {
-		_ = d.conn.QueryRow(`SELECT title FROM albums WHERE id = ?`, id).Scan(&albumTitle)
+		_ = rDB.QueryRow(`SELECT title FROM albums WHERE id = ?`, id).Scan(&albumTitle)
 	}
 	if albumTitle == "" {
 		return nil, nil, fmt.Errorf("álbum no encontrado")
@@ -534,7 +604,7 @@ func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
 
 	// 2. Obtener metadatos consolidados del álbum
 	var a Album
-	err = d.conn.QueryRow(`
+	err = rDB.QueryRow(`
 		SELECT 
 			MIN(t.id) as id,
 			t.album as title,
@@ -561,7 +631,7 @@ func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
 	}
 
 	// 3. Obtener TODAS las pistas de este álbum, ordenadas por track_number y nombre de archivo
-	rows, err := d.conn.Query(`
+	rows, err := rDB.Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -600,17 +670,13 @@ func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
 
 // GetArtists devuelve todos los artistas con conteo de canciones y álbumes.
 func (d *DB) GetArtists() ([]Artist, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT ar.id, ar.name, ar.bio, ar.image_url, ar.genre,
-		       COUNT(DISTINCT t.id) as track_count,
+		       COUNT(t.id) as track_count,
 		       COUNT(DISTINCT t.album) as album_count
 		FROM artists ar
-		LEFT JOIN tracks t ON t.artist = ar.name
+		INNER JOIN tracks t ON t.artist = ar.name
 		GROUP BY ar.id, ar.name
-		HAVING track_count > 0
 		ORDER BY ar.name COLLATE NOCASE ASC
 	`)
 	if err != nil {
@@ -618,7 +684,7 @@ func (d *DB) GetArtists() ([]Artist, error) {
 	}
 	defer rows.Close()
 
-	var artists []Artist
+	artists := make([]Artist, 0)
 	for rows.Next() {
 		var a Artist
 		if err := rows.Scan(&a.ID, &a.Name, &a.Bio, &a.ImageURL, &a.Genre, &a.TrackCount, &a.AlbumCount); err != nil {
@@ -631,10 +697,7 @@ func (d *DB) GetArtists() ([]Artist, error) {
 
 // GetTracksByArtist devuelve todas las pistas de un artista en específico.
 func (d *DB) GetTracksByArtist(artistName string) ([]Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -647,7 +710,7 @@ func (d *DB) GetTracksByArtist(artistName string) ([]Track, error) {
 	}
 	defer rows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for rows.Next() {
 		var t Track
 		var fav int
@@ -668,13 +731,10 @@ func (d *DB) GetTracksByArtist(artistName string) ([]Track, error) {
 
 // GetTracksByPathPrefix busca todas las pistas dentro de una carpeta o sus subcarpetas.
 func (d *DB) GetTracksByPathPrefix(folderPath string) ([]Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
 	clean := strings.TrimRight(folderPath, "/")
 	pattern := clean + "/%"
 
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -687,7 +747,7 @@ func (d *DB) GetTracksByPathPrefix(folderPath string) ([]Track, error) {
 	}
 	defer rows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for rows.Next() {
 		var t Track
 		var fav int
@@ -708,10 +768,7 @@ func (d *DB) GetTracksByPathPrefix(folderPath string) ([]Track, error) {
 
 // GetTrackByPath busca una canción específica por su ruta exacta en el almacenamiento.
 func (d *DB) GetTrackByPath(filePath string) (*Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	row := d.conn.QueryRow(`
+	row := d.reader().QueryRow(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -735,46 +792,61 @@ func (d *DB) GetTrackByPath(filePath string) (*Track, error) {
 	return &t, nil
 }
 
-// GetTracksByIDs devuelve las canciones específicas por sus identificadores sin cargar toda la tabla.
+// GetTracksByIDs devuelve las canciones específicas por sus identificadores preservando el orden solicitado.
 func (d *DB) GetTracksByIDs(ids []int64) ([]Track, error) {
+	tracks := make([]Track, 0, len(ids))
 	if len(ids) == 0 {
-		return nil, nil
-	}
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
+		return tracks, nil
 	}
 
-	query := fmt.Sprintf(`
-		SELECT id, path, filename, title, artist, album, album_artist, genre,
-		       year, duration, track_number, bitrate, sample_rate, format,
-		       source, cover_url, favorite, play_count, bpm, created_at
-		FROM tracks
-		WHERE id IN (%s)
-	`, strings.Join(placeholders, ","))
+	byID := make(map[int64]Track, len(ids))
+	const chunkSize = 500
+	rDB := d.reader()
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
 
-	rows, err := d.conn.Query(query, args...)
-	if err != nil {
-		return nil, err
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+
+		query := fmt.Sprintf(`
+			SELECT id, path, filename, title, artist, album, album_artist, genre,
+			       year, duration, track_number, bitrate, sample_rate, format,
+			       source, cover_url, favorite, play_count, bpm, created_at
+			FROM tracks
+			WHERE id IN (%s)
+		`, strings.Join(placeholders, ","))
+
+		rows, err := rDB.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var t Track
+			var fav int
+			var createdAt string
+			if err := rows.Scan(
+				&t.ID, &t.Path, &t.Filename, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.Genre,
+				&t.Year, &t.Duration, &t.TrackNumber, &t.Bitrate, &t.SampleRate, &t.Format,
+				&t.Source, &t.CoverURL, &fav, &t.PlayCount, &t.BPM, &createdAt,
+			); err == nil {
+				t.Favorite = (fav == 1)
+				byID[t.ID] = t
+			}
+		}
+		_ = rows.Close()
 	}
-	defer rows.Close()
 
-	var tracks []Track
-	for rows.Next() {
-		var t Track
-		var fav int
-		var createdAt string
-		if err := rows.Scan(
-			&t.ID, &t.Path, &t.Filename, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.Genre,
-			&t.Year, &t.Duration, &t.TrackNumber, &t.Bitrate, &t.SampleRate, &t.Format,
-			&t.Source, &t.CoverURL, &fav, &t.PlayCount, &t.BPM, &createdAt,
-		); err == nil {
-			t.Favorite = (fav == 1)
+	for _, id := range ids {
+		if t, ok := byID[id]; ok {
 			tracks = append(tracks, t)
 		}
 	}
@@ -783,13 +855,11 @@ func (d *DB) GetTracksByIDs(ids []int64) ([]Track, error) {
 
 // Search efectúa búsquedas instantáneas en pistas, álbumes y artistas con coincidencia parcial.
 func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
 	pattern := "%" + strings.TrimSpace(query) + "%"
+	rDB := d.reader()
 
 	// Pistas
-	tRows, err := d.conn.Query(`
+	tRows, err := rDB.Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -801,9 +871,8 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer tRows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for tRows.Next() {
 		var t Track
 		var fav int
@@ -817,9 +886,10 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 			tracks = append(tracks, t)
 		}
 	}
+	_ = tRows.Close()
 
 	// Álbumes agrupados por título (sin repetición)
-	aRows, err := d.conn.Query(`
+	aRows, err := rDB.Query(`
 		SELECT 
 			MIN(t.id) as id,
 			t.album as title,
@@ -839,18 +909,18 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	if err != nil {
 		return tracks, nil, nil, err
 	}
-	defer aRows.Close()
 
-	var albums []Album
+	albums := make([]Album, 0)
 	for aRows.Next() {
 		var a Album
 		if err := aRows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.Source); err == nil {
 			albums = append(albums, a)
 		}
 	}
+	_ = aRows.Close()
 
 	// Artistas
-	arRows, err := d.conn.Query(`
+	arRows, err := rDB.Query(`
 		SELECT id, name, bio, image_url, genre
 		FROM artists
 		WHERE name LIKE ?
@@ -861,7 +931,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	}
 	defer arRows.Close()
 
-	var artists []Artist
+	artists := make([]Artist, 0)
 	for arRows.Next() {
 		var ar Artist
 		if err := arRows.Scan(&ar.ID, &ar.Name, &ar.Bio, &ar.ImageURL, &ar.Genre); err == nil {
@@ -874,8 +944,8 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 
 // ToggleFavorite alterna el estado de favorito de una pista dada.
 func (d *DB) ToggleFavorite(trackID int64) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	var currentFav int
 	err := d.conn.QueryRow("SELECT favorite FROM tracks WHERE id = ?", trackID).Scan(&currentFav)
@@ -894,10 +964,7 @@ func (d *DB) ToggleFavorite(trackID int64) (bool, error) {
 
 // GetFavorites devuelve todas las pistas marcadas como favoritas en la biblioteca.
 func (d *DB) GetFavorites() ([]Track, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query(`
+	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
@@ -910,7 +977,7 @@ func (d *DB) GetFavorites() ([]Track, error) {
 	}
 	defer rows.Close()
 
-	var tracks []Track
+	tracks := make([]Track, 0)
 	for rows.Next() {
 		var t Track
 		var fav int
@@ -932,8 +999,8 @@ func (d *DB) GetFavorites() ([]Track, error) {
 
 // RecordPlayback incrementa el contador de reproducción y guarda en el historial.
 func (d *DB) RecordPlayback(trackID int64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	_, err := d.conn.Exec(`
 		UPDATE tracks
@@ -952,8 +1019,8 @@ func (d *DB) RecordPlayback(trackID int64) error {
 
 // UpdateTrackDuration actualiza la duración real en segundos de una pista en la base de datos.
 func (d *DB) UpdateTrackDuration(trackID int64, duration float64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	_, err := d.conn.Exec("UPDATE tracks SET duration = ? WHERE id = ?", duration, trackID)
 	return err
@@ -978,8 +1045,8 @@ func (d *DB) BatchUpdateTrackProperties(updates []TrackPropertyUpdate) error {
 	if len(updates) == 0 {
 		return nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	tx, err := d.conn.Begin()
 	if err != nil {
@@ -1010,16 +1077,13 @@ func (d *DB) BatchUpdateTrackProperties(updates []TrackPropertyUpdate) error {
 
 // GetTracksNeedingDuration localiza pistas que tienen la duración por defecto (240s) o <= 0.
 func (d *DB) GetTracksNeedingDuration() ([]TrackPathID, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query("SELECT id, path FROM tracks WHERE duration = 240.0 OR duration <= 0")
+	rows, err := d.reader().Query("SELECT id, path FROM tracks WHERE duration = 240.0 OR duration <= 0")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var list []TrackPathID
+	list := make([]TrackPathID, 0)
 	for rows.Next() {
 		var item TrackPathID
 		if err := rows.Scan(&item.ID, &item.Path); err == nil {
@@ -1031,11 +1095,8 @@ func (d *DB) GetTracksNeedingDuration() ([]TrackPathID, error) {
 
 // GetSetting lee un valor de configuración persistente con valor por defecto.
 func (d *DB) GetSetting(key, defaultValue string) string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
 	var val string
-	err := d.conn.QueryRow("SELECT value FROM app_settings WHERE key = ?", key).Scan(&val)
+	err := d.reader().QueryRow("SELECT value FROM app_settings WHERE key = ?", key).Scan(&val)
 	if err != nil {
 		return defaultValue
 	}
@@ -1044,8 +1105,8 @@ func (d *DB) GetSetting(key, defaultValue string) string {
 
 // SetSetting guarda un valor de configuración en la base de datos.
 func (d *DB) SetSetting(key, value string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
 	query := `
 		INSERT INTO app_settings (key, value, updated_at)
@@ -1058,16 +1119,13 @@ func (d *DB) SetSetting(key, value string) error {
 
 // GetRadios devuelve la lista de emisoras de radio web guardadas.
 func (d *DB) GetRadios() ([]RadioStation, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	rows, err := d.conn.Query("SELECT id, name, stream_url, logo_url, genre, COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default FROM radio_stations ORDER BY name COLLATE NOCASE ASC")
+	rows, err := d.reader().Query("SELECT id, name, stream_url, logo_url, genre, COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default FROM radio_stations ORDER BY name COLLATE NOCASE ASC")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var list []RadioStation
+	list := make([]RadioStation, 0)
 	for rows.Next() {
 		var r RadioStation
 		var def int
@@ -1081,13 +1139,12 @@ func (d *DB) GetRadios() ([]RadioStation, error) {
 
 // GetSimilarArtistsOffline calcula similitud de artistas usando géneros, décadas y conteo en SQLite.
 func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	rDB := d.reader()
 
 	// Obtener géneros y año promedio del artista semilla
 	var seedGenre string
 	var avgYear float64
-	_ = d.conn.QueryRow(`
+	_ = rDB.QueryRow(`
 		SELECT COALESCE(genre, ''), COALESCE(AVG(year), 0)
 		FROM tracks
 		WHERE artist = ? COLLATE NOCASE AND genre != ''
@@ -1096,7 +1153,7 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 
 	if seedGenre == "" {
 		// Fallback: 10 artistas más prolíficos de la biblioteca
-		rows, err := d.conn.Query(`
+		rows, err := rDB.Query(`
 			SELECT artist FROM tracks
 			WHERE artist != ? COLLATE NOCASE AND artist != 'Artista Desconocido' AND artist != 'Varios Artistas'
 			GROUP BY artist
@@ -1107,7 +1164,7 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 			return nil, err
 		}
 		defer rows.Close()
-		var res []string
+		res := make([]string, 0)
 		for rows.Next() {
 			var art string
 			if err := rows.Scan(&art); err == nil && art != "" {
@@ -1118,7 +1175,7 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 	}
 
 	// Buscar hasta 10 artistas con géneros coincidentes o épocas cercanas
-	rows, err := d.conn.Query(`
+	rows, err := rDB.Query(`
 		SELECT artist,
 		       (CASE WHEN genre LIKE ? THEN 3 ELSE 0 END +
 		        CASE WHEN ABS(AVG(year) - ?) <= 10 THEN 2 ELSE 0 END) AS similarity_score
@@ -1133,7 +1190,7 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 	}
 	defer rows.Close()
 
-	var result []string
+	result := make([]string, 0)
 	for rows.Next() {
 		var art string
 		var score int
@@ -1144,8 +1201,14 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 	return result, nil
 }
 
-// Close cierra la conexión de la base de datos de manera ordenada.
+// Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.
 func (d *DB) Close() error {
-	return d.conn.Close()
+	if d.readConn != nil && d.readConn != d.conn {
+		_ = d.readConn.Close()
+	}
+	if d.conn != nil {
+		return d.conn.Close()
+	}
+	return nil
 }
 

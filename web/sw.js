@@ -2,7 +2,7 @@
 // AuraBox Service Worker - PWA Caching & Offline Capabilities
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v8';
+const CACHE_NAME = 'aurabox-v10';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -44,7 +44,14 @@ self.addEventListener('activate', (event) => {
 
 // fetchListener utiliza estrategia Network-First para asegurar que el navegador siempre reciba el código más reciente.
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) {
+    return;
+  }
 
   // No interceptar peticiones dinámicas de API ni flujo SSE
   if (url.pathname.startsWith('/api/')) {

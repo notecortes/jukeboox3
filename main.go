@@ -49,6 +49,7 @@ func main() {
 
 	port := getEnv("PORT", "4080")
 	adminPort := getEnv("ADMIN_PORT", "4081")
+	mpdSocket := getEnv("MPD_SOCKET", "/run/mpd/socket")
 	mpdHost := getEnv("MPD_HOST", "localhost")
 	mpdPort := getEnv("MPD_PORT", "6600")
 
@@ -73,8 +74,20 @@ func main() {
 	// Inicializar hub de eventos SSE en tiempo real
 	hub := events.NewHub()
 
-	// Inicializar controlador de audio MPD / ALSA
-	player := mpd.NewClient(mpdHost, mpdPort, hub, database)
+	// Inicializar controlador de audio MPD / ALSA (Unix socket preferido + fallback TCP)
+	player := mpd.NewClient(mpdSocket, mpdHost, mpdPort, hub, database)
+	defer player.Close()
+
+	// Hidratar estado y cola al instante cuando cualquier cliente abre el canal SSE
+	hub.SetOnConnect(func(send func(string, interface{})) {
+		st := player.GetState()
+		q := player.GetQueue()
+		send("player_state", st)
+		send("queue_update", map[string]interface{}{
+			"queue":  q,
+			"length": len(q),
+		})
+	})
 
 	// Inicializar escáner de biblioteca musical
 	libScanner := scanner.NewLibraryScanner(database, hub, musicLocal, musicNas, musicUsb, coversDir)
@@ -99,9 +112,8 @@ func main() {
 		startTime: time.Now(),
 	}
 
-	// Ejecutar escaneo inicial y reparación de duraciones en segundo plano
+	// Ejecutar escaneo incremental inicial (la reparación de duraciones corre tras indexar)
 	libScanner.ScanLibraryAll()
-	libScanner.RepairDurationsInBackground()
 
 	// Enrutador HTTP principal
 	mux := http.NewServeMux()
@@ -173,6 +185,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/player/next", s.handleNext)
 	mux.HandleFunc("/api/player/prev", s.handlePrev)
 	mux.HandleFunc("/api/player/seek", s.handleSeek)
+	mux.HandleFunc("/api/player/repeat", s.handleRepeat)
 	mux.HandleFunc("/api/player/volume", s.handleVolume)
 	mux.HandleFunc("/api/player/volume/step", s.handleVolumeStep)
 	mux.HandleFunc("/api/player/volume/max", s.handleVolumeMax)
@@ -183,6 +196,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 5. API de Cola (Jukebox Queue)
 	mux.HandleFunc("/api/queue", s.handleQueue)
 	mux.HandleFunc("/api/queue/add", s.handleQueueAdd)
+	mux.HandleFunc("/api/queue/play", s.handleQueuePlay)
 	mux.HandleFunc("/api/queue/move", s.handleQueueMove)
 	mux.HandleFunc("/api/queue/remove", s.handleQueueRemove)
 	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
@@ -372,6 +386,19 @@ func (s *Server) handleSeek(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleRepeat activa o desactiva el modo de repetición de la cola de reproducción.
+func (s *Server) handleRepeat(w http.ResponseWriter, r *http.Request) {
+	enabledStr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("enabled")))
+	var enabled bool
+	if enabledStr == "" {
+		enabled = !s.player.GetState().Repeat
+	} else {
+		enabled = (enabledStr == "true" || enabledStr == "1")
+	}
+	s.player.SetRepeat(enabled)
+	jsonResponse(w, http.StatusOK, s.player.GetState())
+}
+
 // handleVolume ajusta el volumen general con salvaguarda acústica.
 func (s *Server) handleVolume(w http.ResponseWriter, r *http.Request) {
 	valStr := r.URL.Query().Get("value")
@@ -415,7 +442,10 @@ func (s *Server) handleSelectOutput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parámetro id inválido", http.StatusBadRequest)
 		return
 	}
-	_ = s.player.SelectAudioOutput(id)
+	if err := s.player.SelectAudioOutput(id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
 
@@ -557,10 +587,9 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Limpieza previa si se especificó modo de reemplazo o ClearFirst
+	// Limpieza previa atómica si se especificó modo de reemplazo o ClearFirst
 	if payload.ClearFirst || payload.Mode == "replace" {
-		s.player.ClearQueue()
-		s.player.EnqueueTracks(tracksToEnqueue, "play_now")
+		s.player.ReplaceQueue(tracksToEnqueue, true)
 	} else {
 		s.player.EnqueueTracks(tracksToEnqueue, payload.Mode)
 	}
@@ -569,6 +598,18 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		"status":   "ok",
 		"enqueued": len(tracksToEnqueue),
 	})
+}
+
+// handleQueuePlay salta directamente a reproducir la pista en el índice indicado de la cola.
+func (s *Server) handleQueuePlay(w http.ResponseWriter, r *http.Request) {
+	idxStr := r.URL.Query().Get("index")
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 {
+		http.Error(w, "parámetro index inválido", http.StatusBadRequest)
+		return
+	}
+	s.player.PlayIndex(idx)
+	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
 
 // handleQueueMove mueve una pista dentro de la cola (Drag & Drop táctil).
@@ -794,11 +835,13 @@ func naturalLess(s1, s2 string) bool {
 	return len(r1) < len(r2)
 }
 
-// handleLibraryScan inicia un nuevo barrido de metadatos en segundo plano.
+// handleLibraryScan inicia un nuevo barrido de metadatos en segundo plano (?force=true para reindexado completo).
 func (s *Server) handleLibraryScan(w http.ResponseWriter, r *http.Request) {
-	s.scanner.ScanLibraryAll()
-	jsonResponse(w, http.StatusOK, map[string]string{
+	force := (strings.ToLower(r.URL.Query().Get("force")) == "true" || r.URL.Query().Get("force") == "1")
+	s.scanner.ScanLibrary(force)
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"status":  "scanning",
+		"force":   force,
 		"message": "Escaneo de biblioteca iniciado en segundo plano",
 	})
 }
@@ -869,8 +912,7 @@ func (s *Server) handlePlayFavorites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if payload.Mode == "play_now" {
-		s.player.ClearQueue()
-		s.player.EnqueueTracks(tracks, "append")
+		s.player.ReplaceQueue(tracks, true)
 	} else {
 		s.player.EnqueueTracks(tracks, "append")
 	}
@@ -933,8 +975,7 @@ func (s *Server) handleSmartMix(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if payload.PlayNow && len(mixTracks) > 0 {
-		s.player.ClearQueue()
-		s.player.EnqueueTracks(mixTracks, "append")
+		s.player.ReplaceQueue(mixTracks, true)
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
@@ -1038,9 +1079,7 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 		Duration:   0,
 	}
 
-	s.player.ClearQueue()
-	s.player.EnqueueTracks([]db.Track{radioTrack}, "append")
-	s.player.Play()
+	s.player.ReplaceQueue([]db.Track{radioTrack}, true)
 
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "playing_radio"})
 }

@@ -22,6 +22,7 @@ services:
     environment:
       - PORT=4080
       - ADMIN_PORT=4081
+      - MPD_SOCKET=/run/mpd/socket
       - MPD_HOST=mpd
       - MPD_PORT=6600
       - MUSIC_LOCAL=/music/local
@@ -39,10 +40,11 @@ services:
       - ./music/local:/music/local:ro
       - nas_music:/music/nas:ro
       - ./music/usb:/music/usb:ro
-      # Persistencia de base de datos SQLite y caché de carátulas
+      # Persistencia de base de datos SQLite, socket MPD y caché de carátulas
       - ./data:/app/data
       - ./config:/app/config:ro
       - ./web:/app/web:ro
+      - mpd_run:/run/mpd
     depends_on:
       - mpd
     networks:
@@ -71,6 +73,7 @@ services:
     volumes:
       - ./config/mpd.conf:/etc/mpd.conf:ro
       - ./data/mpd:/var/lib/mpd
+      - mpd_run:/run/mpd
       - ./music/local:/music/local:ro
       - nas_music:/music/nas:ro
       - ./music/usb:/music/usb:ro
@@ -80,6 +83,7 @@ services:
       - aurabox-net
 
 volumes:
+  mpd_run:
   nas_music:
     driver: local
     driver_opts:

@@ -15,9 +15,9 @@
   <link rel="apple-touch-icon" href="/assets/default-cover.svg"/>
 
   <!-- Hojas de estilo CSS modulares -->
-  <link rel="stylesheet" href="/css/app.css?v=9"/>
-  <link rel="stylesheet" href="/css/player.css?v=9"/>
-  <link rel="stylesheet" href="/css/views.css?v=9"/>
+  <link rel="stylesheet" href="/css/app.css?v=10"/>
+  <link rel="stylesheet" href="/css/player.css?v=10"/>
+  <link rel="stylesheet" href="/css/views.css?v=10"/>
 </head>
 <body>
   <div id="app">
@@ -151,37 +151,9 @@
         <!-- Salidas de Audio -->
         <div class="settings-section">
           <div class="settings-section-title">Salida de Audio Conmutable (Hardware)</div>
-          <div class="settings-card">
-            <div class="output-option active" data-outputid="0">
-              <div>
-                <div class="output-name">Jack 3.5mm Analógico</div>
-                <div style="font-size:0.75rem; color:var(--text-muted);">snd_bcm2835 integrado en Raspberry Pi</div>
-              </div>
-              <span class="badge-format">ALSA</span>
-            </div>
-
-            <div class="output-option" data-outputid="1">
-              <div>
-                <div class="output-name">DAC USB Externo</div>
-                <div style="font-size:0.75rem; color:var(--text-muted);">Interfaz Plug & Play (hw:1,0)</div>
-              </div>
-              <span class="badge-format">USB</span>
-            </div>
-
-            <div class="output-option" data-outputid="2">
-              <div>
-                <div class="output-name">DAC I2S HAT</div>
-                <div style="font-size:0.75rem; color:var(--text-muted);">HiFiBerry / Allo Boss / IQaudio</div>
-              </div>
-              <span class="badge-format">I2S</span>
-            </div>
-
-            <div class="output-option" data-outputid="3">
-              <div>
-                <div class="output-name">Transmisión Web HTTP</div>
-                <div style="font-size:0.75rem; color:var(--text-muted);">Stream Hi-Fi 320kbps en puerto 4082</div>
-              </div>
-              <span class="badge-format">STREAM</span>
+          <div class="settings-card" id="audioOutputsList">
+            <div style="font-size:0.85rem; color:var(--text-muted); padding:6px 2px;">
+              Detectando salidas de audio en MPD...
             </div>
           </div>
         </div>
@@ -558,7 +530,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=12"></script>
+  <script type="module" src="/js/app.js?v=13"></script>
 </body>
 </html>
 

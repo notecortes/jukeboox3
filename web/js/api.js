@@ -60,6 +60,11 @@ export function seek(seconds) {
   return requestHelper(`/player/seek?seconds=${encodeURIComponent(seconds)}`, { method: 'POST' });
 }
 
+// setRepeat activa o desactiva el modo de repetición de la cola en el servidor.
+export function setRepeat(enabled) {
+  return requestHelper(`/player/repeat?enabled=${enabled ? 'true' : 'false'}`, { method: 'POST' });
+}
+
 // setVolume ajusta el volumen general respetando la salvaguarda de volumen.
 export function setVolume(value) {
   return requestHelper(`/player/volume?value=${encodeURIComponent(value)}`, { method: 'POST' });
@@ -95,12 +100,17 @@ export function getQueue() {
   return requestHelper('/queue');
 }
 
-// addToQueue añade canciones a la cola (play_now, play_next, append).
+// addToQueue añade canciones a la cola (play_now, play_next, append, replace).
 export function addToQueue(payload) {
   return requestHelper('/queue/add', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
+}
+
+// playQueueIndex salta directamente a reproducir la pista en el índice indicado de la cola.
+export function playQueueIndex(index) {
+  return requestHelper(`/queue/play?index=${encodeURIComponent(index)}`, { method: 'POST' });
 }
 
 // moveInQueue reordena una pista dentro de la lista (Drag & Drop táctil).
@@ -193,9 +203,10 @@ export function enqueueFile(filePath) {
   });
 }
 
-// triggerLibraryScan solicita un re-escaneo reactivo de las carpetas de música.
-export function triggerLibraryScan() {
-  return requestHelper('/library/scan', { method: 'POST' });
+// triggerLibraryScan solicita un re-escaneo reactivo (incremental o forzado) de las carpetas de música.
+export function triggerLibraryScan(force = false) {
+  const query = force ? '?force=true' : '';
+  return requestHelper(`/library/scan${query}`, { method: 'POST' });
 }
 
 // toggleFavorite alterna el marcado de favorito (corazón) de una pista.
