@@ -76,9 +76,9 @@ EOF
     sudo udevadm control --reload-rules || true
 fi
 
-# 6. Despliegue de los contenedores Docker
+# 6. Despliegue de los contenedores Docker (secuencial para no saturar RAM/microSD)
 echo "[6/6] Compilando e iniciando AuraBox con Docker Compose..."
-sudo docker compose up -d --build
+sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
 
 # Obtener dirección IP local
 LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')

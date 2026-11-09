@@ -27,6 +27,25 @@ AuraBox utiliza estrictamente puertos en el rango **4000** para garantizar cero 
 
 La Raspberry Pi actúa como el núcleo de audio dedicado conectado físicamente a tu amplificador estéreo o equipo de alta fidelidad, funcionando 24/7 de forma silenciosa y eficiente.
 
+### 1.0. Preparar la Tarjeta microSD desde Cero (Sistema Operativo)
+
+Si partes de una tarjeta microSD vacía o recién formateada:
+
+1. **Descarga Raspberry Pi Imager** en tu ordenador (disponible gratis en [raspberrypi.com/software](https://www.raspberrypi.com/software/) para Linux, Windows y macOS).
+2. **Elige las opciones en Raspberry Pi Imager:**
+   * **Dispositivo:** Tu modelo de Raspberry Pi (`3`, `4` o `5`).
+   * **Sistema Operativo:** `Raspberry Pi OS (other)` → **`Raspberry Pi OS Lite (64-bit)`** *(recomendado: sin entorno gráfico pesado, deja toda la RAM libre para audio y Docker)*.
+   * **Almacenamiento:** Selecciona tu tarjeta microSD.
+3. **Configuración previa (*Editar ajustes / OS Customisation*):** *(muy recomendado para no necesitar monitor ni teclado)*
+   * **Hostname:** `aurabox` (luego podrás conectar como `aurabox.local`).
+   * **Usuario y contraseña:** Define tu usuario de acceso (ej. `pi`) y su contraseña.
+   * **Wi-Fi (si no usas cable Ethernet):** Introduce tu red Wi-Fi y contraseña, y selecciona el país (`ES`).
+   * **Servicios → Activar SSH:** Marca **Usar autenticación por contraseña**.
+4. **Graba la tarjeta**, insértala en la Raspberry Pi y enciéndela. Espera ~60 segundos al primer arranque y entra desde tu PC por SSH:
+   ```bash
+   ssh pi@aurabox.local
+   ```
+
 ### 1.1. Conexión de Hardware al Amplificador
 
 Elige una de las siguientes tres opciones de audio según tu equipo:
@@ -66,8 +85,9 @@ Elige una de las siguientes tres opciones de audio según tu equipo:
 
 Hemos incluido un instalador desatendido que configura dependencias, Docker, grupos de usuario, permisos de sonido ALSA y el montaje del NAS en un solo paso:
 
-1. **Clona el proyecto en tu Raspberry Pi:**
+1. **Instala Git y clona el proyecto en tu Raspberry Pi:**
    ```bash
+   sudo apt update && sudo apt install -y git
    git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
    cd ~/aurabox
    ```

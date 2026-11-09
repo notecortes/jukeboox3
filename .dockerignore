@@ -1,5 +1,8 @@
 aurabox-bin
 .git
+.env
 data/
+docs/
+music/
 *.log
 
