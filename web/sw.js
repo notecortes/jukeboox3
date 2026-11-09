@@ -2,7 +2,7 @@
 // AuraBox Service Worker - PWA Caching & Offline Capabilities
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v11';
+const CACHE_NAME = 'aurabox-v12';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

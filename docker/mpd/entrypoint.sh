@@ -55,16 +55,23 @@ parse_aplay_cards() {
         dnum = right
         sub(/:.*/, "", dnum)
         dname = ""
+        dpcm = right
+        sub(/^[0-9]+: */, "", dpcm)
         dbpos = index(right, "[")
         depos = index(right, "]")
         if (dbpos > 0 && depos > dbpos) {
             dname = substr(right, dbpos + 1, depos - dbpos - 1)
         }
+        dpcmp = index(dpcm, " [")
+        if (dpcmp > 0) {
+            dpcm = substr(dpcm, 1, dpcmp - 1)
+        }
 
         gsub(/\t/, " ", cid)
         gsub(/\t/, " ", cname)
         gsub(/\t/, " ", dname)
-        print cnum "\t" cid "\t" cname "\t" dnum "\t" dname
+        gsub(/\t/, " ", dpcm)
+        print cnum "\t" cid "\t" cname "\t" dnum "\t" dname "\t" dpcm
     }
     '
 }
@@ -130,7 +137,7 @@ EOF
     # Prioridad: 1) DAC USB / I2S HAT -> 2) Jack 3.5mm / Analógico -> 3) Digital / HDMI
     DEFAULT_CLASS=""
     if [ "$HAS_PULSE" -eq 0 ] && [ -s "$TMP_CARDS" ]; then
-        if grep -qiE 'usb|dac|codec|uac|xmos|amanero|sabre|es90|ak44|cs43|pcm2|pcm5|pcm17|cm10|burr|topping|fiio|smsl|ifi|focusrite|scarlett|audient|dragonfly|behringer|khadas|chord|schiit|cambridge|hifiberry|allo|iqaudio|justboom|pisound|dacberry|innomaker|rpi-dac|boss|wm8960|sndrpi|snd_rpi' "$TMP_CARDS"; then
+        if grep -viE 'hdmi|vc4hdmi|vc4-hdmi' "$TMP_CARDS" | grep -qiE 'usb|dac|codec|uac|xmos|amanero|sabre|es90|ak44|cs43|pcm2|pcm5|pcm17|cm10|burr|topping|fiio|smsl|(^|[^a-z0-9])ifi([^a-z0-9]|$)|focusrite|scarlett|audient|dragonfly|behringer|khadas|chord|schiit|cambridge|hifiberry|allo|iqaudio|justboom|pisound|dacberry|innomaker|rpi-dac|boss|wm8960|sndrpi|snd_rpi'; then
             DEFAULT_CLASS="usb_or_hat"
         elif grep -qiE 'headphone|bcm2835|analog|alc|pch|realtek|built-in|speaker' "$TMP_CARDS"; then
             DEFAULT_CLASS="analog"
@@ -144,13 +151,13 @@ EOF
     SEEN_HDMI_CARD=""
     TAB=$(printf '\t')
 
-    while IFS="$TAB" read -r CARD_NUM CARD_ID CARD_NAME DEV_NUM DEV_NAME; do
+    while IFS="$TAB" read -r CARD_NUM CARD_ID CARD_NAME DEV_NUM DEV_NAME DEV_PCM; do
         [ -z "$CARD_NUM" ] && continue
         [ -z "$DEV_NUM" ] && DEV_NUM="0"
         [ -z "$CARD_NAME" ] && CARD_NAME="$CARD_ID"
         [ -z "$CARD_NAME" ] && CARD_NAME="Tarjeta $CARD_NUM"
 
-        LOWER=$(printf '%s %s %s' "$CARD_ID" "$CARD_NAME" "$DEV_NAME" | tr 'A-Z' 'a-z')
+        LOWER=$(printf '%s %s %s %s' "$CARD_ID" "$CARD_NAME" "$DEV_NAME" "$DEV_PCM" | tr 'A-Z' 'a-z')
 
         KIND="other"
         DISPLAY_NAME=""
@@ -159,22 +166,22 @@ EOF
                 KIND="usb_or_hat"
                 DISPLAY_NAME="DAC I2S HAT (${CARD_NAME})"
                 ;;
-            *"usb audio"*|*usb*|*dac*|*codec*|*uac*|*xmos*|*amanero*|*sabre*|*es90*|*ak44*|*cs43*|*pcm2*|*cm10*|*burr*|*topping*|*fiio*|*smsl*|*"ifi "*|*ifi-*|*focusrite*|*scarlett*|*audient*|*dragonfly*|*behringer*|*khadas*|*chord*|*schiit*|*cambridge*)
-                KIND="usb_or_hat"
-                DISPLAY_NAME="DAC USB (${CARD_NAME})"
-                ;;
-            *headphone*|*bcm2835*|*analog*|*built-in*|*speaker*)
-                KIND="analog"
-                DISPLAY_NAME="Jack 3.5mm / Analógico (${CARD_NAME})"
-                ;;
             *hdmi*|*vc4hdmi*|*vc4-hdmi*)
-                # Evitar listar múltiples puertos HDMI vacíos en la misma tarjeta
+                # Evitar listar múltiples puertos HDMI vacíos en la misma tarjeta (y evitar falsos positivos como i2s-hifi-0)
                 case " $SEEN_HDMI_CARD " in
                     *" $CARD_NUM "*) continue ;;
                 esac
                 SEEN_HDMI_CARD="$SEEN_HDMI_CARD $CARD_NUM"
                 KIND="hdmi"
                 DISPLAY_NAME="HDMI Audio (${CARD_NAME})"
+                ;;
+            *"usb audio"*|*usb*|*dac*|*codec*|*uac*|*xmos*|*amanero*|*sabre*|*es90*|*ak44*|*cs43*|*pcm2*|*cm10*|*burr*|*topping*|*fiio*|*smsl*|*" ifi"*|ifi-*|*"zen dac"*|*focusrite*|*scarlett*|*audient*|*dragonfly*|*behringer*|*khadas*|*chord*|*schiit*|*cambridge*)
+                KIND="usb_or_hat"
+                DISPLAY_NAME="DAC USB (${CARD_NAME})"
+                ;;
+            *headphone*|*bcm2835*|*analog*|*built-in*|*speaker*)
+                KIND="analog"
+                DISPLAY_NAME="Jack 3.5mm / Analógico (${CARD_NAME})"
                 ;;
             *digital*|*spdif*|*iec958*)
                 KIND="digital"

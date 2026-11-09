@@ -2,10 +2,12 @@ package main
 
 import (
 	"compress/gzip"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,21 +26,26 @@ import (
 	"aurabox/internal/mpd"
 	"aurabox/internal/scanner"
 	"aurabox/internal/smartmix"
+	"aurabox/internal/tlsutil"
 )
 
 // Server encapsula todas las dependencias y servicios activos de AuraBox.
 type Server struct {
-	database  *db.DB
-	eventsHub *events.Hub
-	player    *mpd.Client
-	scanner   *scanner.LibraryScanner
-	smartmix  *smartmix.SmartMixService
-	lyrics    *lyrics.Service
-	localDir  string
-	nasDir    string
-	usbDir    string
-	coversDir string
-	startTime time.Time
+	database        *db.DB
+	eventsHub       *events.Hub
+	player          *mpd.Client
+	scanner         *scanner.LibraryScanner
+	smartmix        *smartmix.SmartMixService
+	lyrics          *lyrics.Service
+	certManager     *tlsutil.CertManager
+	localDir        string
+	nasDir          string
+	usbDir          string
+	coversDir       string
+	httpsPort       string
+	httpsPublicPort string
+	forceHTTPS      bool
+	startTime       time.Time
 }
 
 // main punto de entrada principal del servicio AuraBox en Linux / Raspberry Pi.
@@ -48,6 +55,12 @@ func main() {
 	log.Println("==================================================")
 
 	port := getEnv("PORT", "4080")
+	httpsPort := strings.TrimSpace(getEnv("HTTPS_PORT", "4443"))
+	if strings.EqualFold(httpsPort, "off") || httpsPort == "0" {
+		httpsPort = ""
+	}
+	httpsPublicPort := strings.TrimSpace(getEnv("HTTPS_PUBLIC_PORT", httpsPort))
+	forceHTTPS := strings.EqualFold(getEnv("FORCE_HTTPS", "false"), "true")
 	adminPort := getEnv("ADMIN_PORT", "4081")
 	mpdSocket := getEnv("MPD_SOCKET", "/run/mpd/socket")
 	mpdHost := getEnv("MPD_HOST", "localhost")
@@ -59,9 +72,27 @@ func main() {
 	musicUsb := getEnv("MUSIC_USB", "./music/usb")
 	dbPath := filepath.Join(dataDir, "aurabox.db")
 	coversDir := filepath.Join(dataDir, "covers")
+	certsDir := filepath.Join(dataDir, "certs")
 
 	_ = os.MkdirAll(dataDir, 0755)
 	_ = os.MkdirAll(coversDir, 0755)
+
+	var certMgr *tlsutil.CertManager
+	if httpsPort != "" {
+		var tlsErr error
+		certMgr, tlsErr = tlsutil.InitCertManager(
+			certsDir,
+			splitCSVTrim(getEnv("TLS_EXTRA_HOSTS", "")),
+			getEnv("TLS_CERT_FILE", ""),
+			getEnv("TLS_KEY_FILE", ""),
+		)
+		if tlsErr != nil {
+			log.Printf("[HTTPS] Advertencia inicializando TLS (%v); se mantiene solo HTTP", tlsErr)
+			httpsPort = ""
+		} else {
+			log.Printf("[HTTPS] Certificados TLS listos en %s (SANs: %s)", certsDir, strings.Join(certMgr.SANHosts(), ", "))
+		}
+	}
 
 	// Inicializar SQLite
 	database, err := db.InitDB(dbPath)
@@ -99,17 +130,21 @@ func main() {
 	lyrService := lyrics.NewService()
 
 	srv := &Server{
-		database:  database,
-		eventsHub: hub,
-		player:    player,
-		scanner:   libScanner,
-		smartmix:  smService,
-		lyrics:    lyrService,
-		localDir:  musicLocal,
-		nasDir:    musicNas,
-		usbDir:    musicUsb,
-		coversDir: coversDir,
-		startTime: time.Now(),
+		database:        database,
+		eventsHub:       hub,
+		player:          player,
+		scanner:         libScanner,
+		smartmix:        smService,
+		lyrics:          lyrService,
+		certManager:     certMgr,
+		localDir:        musicLocal,
+		nasDir:          musicNas,
+		usbDir:          musicUsb,
+		coversDir:       coversDir,
+		httpsPort:       httpsPort,
+		httpsPublicPort: httpsPublicPort,
+		forceHTTPS:      forceHTTPS,
+		startTime:       time.Now(),
 	}
 
 	// Ejecutar escaneo incremental inicial (la reparación de duraciones corre tras indexar)
@@ -119,14 +154,30 @@ func main() {
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 
-	// Servidor Web principal en puerto 4080 con compresión Gzip, cabeceras seguras y soporte de streaming continuo
+	baseHandler := compressionAndSecurityMiddleware(mux)
+
+	// Servidor Web HTTP en puerto 4080 (redirige si entra sin puerto :4080 o si FORCE_HTTPS=true)
 	httpServer := &http.Server{
 		Addr:              ":" + port,
-		Handler:           corsMiddleware(compressionAndSecurityMiddleware(mux)),
+		Handler:           corsMiddleware(srv.httpsRedirectMiddleware(baseHandler)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		WriteTimeout:      0, // Sin corte abrupto para permitir transmisión SSE continua y streaming de audio
+	}
+
+	// Servidor Web HTTPS nativo en puerto 4443 con TLS 1.2+ y certificados SAN dinámicos
+	var httpsServer *http.Server
+	if httpsPort != "" && certMgr != nil {
+		httpsServer = &http.Server{
+			Addr:              ":" + httpsPort,
+			Handler:           corsMiddleware(baseHandler),
+			TLSConfig:         certMgr.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			WriteTimeout:      0,
+		}
 	}
 
 	// Servidor secundario de métricas y administración en puerto 4081
@@ -155,6 +206,21 @@ func main() {
 		}
 	}()
 
+	if httpsServer != nil {
+		go func() {
+			ln, err := net.Listen("tcp", ":"+httpsPort)
+			if err != nil {
+				log.Printf("[HTTPS] No se pudo abrir puerto %s: %v", httpsPort, err)
+				return
+			}
+			log.Printf("[HTTPS] AuraBox Web & API TLS escuchando en https://0.0.0.0:%s", httpsPort)
+			tlsLn := tls.NewListener(ln, httpsServer.TLSConfig)
+			if err := httpsServer.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
+				log.Printf("[HTTPS] Servidor TLS detenido: %v", err)
+			}
+		}()
+	}
+
 	// Captura de señales para apagado elegante
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -162,6 +228,9 @@ func main() {
 
 	log.Println("[Sistema] Deteniendo AuraBox de manera ordenada...")
 	_ = httpServer.Close()
+	if httpsServer != nil {
+		_ = httpsServer.Close()
+	}
 	_ = adminServer.Close()
 }
 
@@ -224,12 +293,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 8. API de Letras LRCLIB
 	mux.HandleFunc("/api/lyrics", s.handleLyrics)
 
-	// 9. Emisoras de Radio, Stream y Ajustes
+	// 9. Emisoras de Radio, Stream, Seguridad TLS y Ajustes
 	mux.HandleFunc("/api/stream", s.handleAudioStream)
 	mux.HandleFunc("/api/radios", s.handleRadios)
 	mux.HandleFunc("/api/radios/play", s.handleRadioPlay)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/settings/nas", s.handleNASConfig)
+	mux.HandleFunc("/api/security/status", s.handleSecurityStatus)
+	mux.HandleFunc("/api/security/ca.crt", s.handleDownloadCACert)
 }
 
 // noCacheMiddleware previene que el navegador almacene en caché HTML, JS o CSS desactualizados.
@@ -1269,6 +1340,123 @@ func (s *Server) handleNASConfig(w http.ResponseWriter, r *http.Request) {
 		"items_found": dirCount,
 		"path":        pathDisplay,
 	})
+}
+
+// httpsRedirectMiddleware redirige HTTP a HTTPS si FORCE_HTTPS=true o si entra sin puerto explícito (puerto 80).
+func (s *Server) httpsRedirectMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.certManager != nil && r.Host != "" {
+			s.certManager.EnsureHost(r.Host)
+		}
+
+		if r.TLS == nil &&
+			r.Method != http.MethodOptions &&
+			s.httpsPort != "" &&
+			s.certManager != nil &&
+			r.Host != "" &&
+			r.URL.Path != "/api/security/ca.crt" &&
+			r.URL.Path != "/api/stream" {
+			_, reqPort, splitErr := net.SplitHostPort(r.Host)
+			arrivedWithoutAppPort := (splitErr != nil || reqPort == "" || reqPort == "80")
+			if s.forceHTTPS || arrivedWithoutAppPort {
+				target := buildHTTPSURLForHost(r.Host, s.httpsPublicPort, r.URL.RequestURI())
+				if target != "" {
+					http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+					return
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleSecurityStatus informa sobre el estado TLS/HTTPS activo, URL segura y hosts cubiertos por el certificado.
+func (s *Server) handleSecurityStatus(w http.ResponseWriter, r *http.Request) {
+	if s.certManager != nil && r.Host != "" {
+		s.certManager.EnsureHost(r.Host)
+	}
+	var sanHosts []string
+	caReady := false
+	if s.certManager != nil {
+		sanHosts = s.certManager.SANHosts()
+		caReady = s.certManager.HasCA()
+	}
+
+	reqHTTPS := (r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"))
+	httpsURL := ""
+	if s.httpsPort != "" && s.certManager != nil && r.Host != "" {
+		httpsURL = buildHTTPSURLForHost(r.Host, s.httpsPublicPort, "/")
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"https_enabled":     s.httpsPort != "" && s.certManager != nil,
+		"https_port":        s.httpsPort,
+		"https_public_port": s.httpsPublicPort,
+		"force_https":       s.forceHTTPS,
+		"request_is_https":  reqHTTPS,
+		"ca_ready":          caReady,
+		"san_hosts":         sanHosts,
+		"https_url":         httpsURL,
+	})
+}
+
+// handleDownloadCACert sirve la autoridad certificadora local en PEM para eliminar avisos en navegadores de red LAN.
+func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
+	if s.certManager == nil || !s.certManager.HasCA() {
+		http.Error(w, "CA local no disponible (posible certificado externo configurado)", http.StatusNotFound)
+		return
+	}
+	pemBytes := s.certManager.CACertPEM()
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="aurabox-ca.crt"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(pemBytes)
+}
+
+// buildHTTPSURLForHost construye la URL HTTPS segura conservando IP/host y evitando redirecciones abiertas.
+func buildHTTPSURLForHost(rawHost, publicPort, reqURI string) string {
+	hostOnly := strings.TrimSpace(rawHost)
+	if hostOnly == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(hostOnly); err == nil {
+		hostOnly = h
+	}
+	hostOnly = strings.TrimPrefix(hostOnly, "[")
+	hostOnly = strings.TrimSuffix(hostOnly, "]")
+	if hostOnly == "" || strings.ContainsAny(hostOnly, " \t\r\n/@\\") {
+		return ""
+	}
+	if !strings.HasPrefix(reqURI, "/") {
+		reqURI = "/"
+	}
+
+	authority := hostOnly
+	if strings.Contains(hostOnly, ":") {
+		authority = "[" + hostOnly + "]"
+	}
+	if publicPort != "" && publicPort != "443" {
+		authority = net.JoinHostPort(hostOnly, publicPort)
+	}
+	return "https://" + authority + reqURI
+}
+
+// splitCSVTrim divide listas separadas por comas eliminando espacios y entradas vacías.
+func splitCSVTrim(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var out []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // getEnv obtiene una variable de entorno o recurre a un valor por defecto.

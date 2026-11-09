@@ -30,6 +30,7 @@ COPY --from=builder /app/config /app/config
 RUN mkdir -p /app/data/covers /music/local /music/nas /music/usb
 
 ENV PORT=4080
+ENV HTTPS_PORT=4443
 ENV ADMIN_PORT=4081
 ENV DATA_DIR=/app/data
 ENV MUSIC_LOCAL=/music/local
@@ -39,7 +40,7 @@ ENV MPD_SOCKET=/run/mpd/socket
 ENV MPD_HOST=mpd
 ENV MPD_PORT=6600
 
-EXPOSE 4080 4081
+EXPOSE 4080 4081 4443
 
 ENTRYPOINT ["/app/aurabox"]
 

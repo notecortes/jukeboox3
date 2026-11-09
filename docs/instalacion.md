@@ -16,7 +16,8 @@ AuraBox utiliza estrictamente puertos en el rango **4000** para garantizar cero 
 
 | Puerto | Protocolo | Servicio | Descripción |
 |---|---|---|---|
-| **4080** | HTTP | PWA / API / SSE | Interfaz web principal para móviles y PC, API REST y eventos en tiempo real (<50ms). |
+| **4080** | HTTP | PWA / API / Redirect | Interfaz web HTTP (y redirección automática a HTTPS si entra por puerto 80 o `FORCE_HTTPS=true`). |
+| **4443** | HTTPS | PWA / API TLS | Interfaz web segura HTTPS con certificado SAN automático y descarga de CA local (`/api/security/ca.crt`). |
 | **4081** | HTTP | Administración | Panel de métricas del sistema, comprobación de estado de salud (`/health`, `/metrics`). |
 | **4082** | HTTP | Hi-Fi Web Stream | Flujo de audio MP3 320kbps / FLAC para escuchar la música directamente en el navegador del móvil o portátil. |
 | **4600** | TCP | MPD Control | Puerto de control MPD mapeado externamente (aislado del puerto estándar 6600). |
@@ -289,6 +290,26 @@ Accede a la pestaña **Ajustes** en la aplicación para configurar:
    * Ajusta el fundido suave entre canciones de 0 a 15 segundos (0s para modo Gapless sin pausas).
 4. **Salvaguarda de Volumen:**
    * Limita el volumen máximo (por ejemplo al 85%) para proteger tus altavoces y oídos de pulsaciones accidentales al 100%.
+
+### 🔒 HTTPS y Acceso Directo poniendo solo la IP (sin escribir `:4080` ni `:4443`)
+
+AuraBox incluye un servidor **HTTPS nativo en el puerto 4443** (con generación automática de certificado TLS SAN para tus IPs locales y `aurabox.local`).
+
+1. **Acceso rápido HTTPS:** Abre directamente `https://<IP_RASPBERRY>:4443` (o pulsa **🔒 Abrir en HTTPS** dentro de **Ajustes**).
+2. **Entrar escribiendo únicamente la IP (`http://192.168.x.x` → `https://192.168.x.x`):**
+   Ejecuta en la Raspberry Pi el configurador automático (usa `systemd-socket-proxyd` del sistema para enrutar los puertos `80` y `443` del host hacia `4080` y `4443` sin alterar el rango 4000 de Docker):
+   ```bash
+   cd ~/aurabox
+   chmod +x scripts/setup-https-pi.sh
+   ./scripts/setup-https-pi.sh
+   ```
+   A partir de ese momento, escribir solo la IP de tu Raspberry Pi en el navegador redirige automáticamente a **`https://<IP>`** (puerto 443 limpio, sin mostrar `:4080` ni `:4443`). Si algún día quieres deshacer esa redirección de puertos `80`/`443`:
+   ```bash
+   ./scripts/setup-https-pi.sh --disable
+   ```
+3. **Eliminar el aviso de certificado en el navegador (Recomendado para instalar la PWA):**
+   * Al tratarse de una IP privada de red local (`192.168.x.x`), las autoridades públicas (como Let's Encrypt) no emiten certificados para IPs privadas. AuraBox crea automáticamente una autoridad raíz local (`aurabox-ca.crt`).
+   * En **Ajustes → Conexión Segura HTTPS**, pulsa **📜 Descargar Certificado CA** (o descarga `https://<IP>/api/security/ca.crt`) e instálalo como **certificado de entidad emisora raíz de confianza** en tu móvil o PC. Así tendrás candado válido sin alertas de seguridad y podrás instalar la PWA en pantalla de inicio.
 
 ---
 

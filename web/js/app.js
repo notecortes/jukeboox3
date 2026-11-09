@@ -229,6 +229,13 @@ function initWebStreamPlayer() {
           if (btnText) btnText.textContent = 'En Vivo';
           if (icon) icon.textContent = '🔊';
         }).catch((err) => {
+          if (window.location.protocol === 'https:') {
+            console.error('[Stream] No se pudo reproducir stream sobre HTTPS:', err);
+            btn.style.background = 'rgba(255, 255, 255, 0.08)';
+            if (btnText) btnText.textContent = 'Móvil';
+            if (icon) icon.textContent = '📻';
+            return;
+          }
           console.warn('[Stream] Intentando conexión directa a 4082:', err);
           audio.src = `http://${window.location.hostname}:4082/?_t=${Date.now()}`;
           audio.load();

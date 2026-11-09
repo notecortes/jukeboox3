@@ -1632,9 +1632,10 @@ function bindSettingsView() {
     });
   });
 
-  // Cargar emisoras de radio y configuración del NAS
+  // Cargar emisoras de radio, configuración del NAS y estado HTTPS
   loadRadioStations();
   loadNASConfig();
+  loadSecurityStatus();
 
   // Guardar configuración del NAS
   document.getElementById('btnSaveNAS')?.addEventListener('click', async () => {
@@ -1694,6 +1695,55 @@ async function loadNASConfig() {
     }
   } catch (err) {
     console.warn('[NAS] No se pudo leer configuración:', err);
+  }
+}
+
+// loadSecurityStatus consulta el estado HTTPS del servidor y actualiza los controles de certificado/redirección.
+async function loadSecurityStatus() {
+  const titleEl = document.getElementById('securityStatusTitle');
+  const badgeEl = document.getElementById('securityProtocolBadge');
+  const descEl = document.getElementById('securityStatusDesc');
+  const cardEl = document.getElementById('securityStatusCard');
+  const btnOpenHTTPS = document.getElementById('btnOpenHTTPS');
+  const btnDownloadCA = document.getElementById('btnDownloadCACert');
+  if (!titleEl || !badgeEl || !descEl) return;
+
+  try {
+    const sec = await api.getSecurityStatus();
+    if (!sec) return;
+
+    const isHTTPS = window.location.protocol === 'https:' || Boolean(sec.request_is_https);
+    if (isHTTPS) {
+      titleEl.textContent = 'Conexión cifrada activa (HTTPS)';
+      badgeEl.textContent = 'HTTPS 🔒';
+      badgeEl.style.background = 'rgba(16,185,129,0.15)';
+      badgeEl.style.color = 'var(--color-success)';
+      badgeEl.style.borderColor = 'rgba(16,185,129,0.3)';
+      if (cardEl) cardEl.style.borderLeft = '4px solid var(--color-success)';
+      descEl.innerHTML = 'Tu tráfico y credenciales del NAS viajan cifrados por TLS. ' +
+        'Para eliminar el aviso inicial del navegador y permitir instalación PWA completa, instala el certificado raíz <code>aurabox-ca.crt</code> como CA de confianza en este dispositivo.';
+      if (btnOpenHTTPS) btnOpenHTTPS.style.display = 'none';
+    } else if (sec.https_enabled && sec.https_url) {
+      titleEl.textContent = 'Conectado por HTTP sin cifrar';
+      badgeEl.textContent = 'HTTP';
+      if (cardEl) cardEl.style.borderLeft = '4px solid var(--accent)';
+      descEl.innerHTML = `AuraBox ya escucha por HTTPS en <code>${escapeHtml(sec.https_url)}</code>. ` +
+        'Para entrar poniendo solo la IP de la Raspberry Pi (<code>80/443 → 4080/4443</code>), ejecuta <code>./scripts/setup-https-pi.sh</code> en la Pi.';
+      if (btnOpenHTTPS) {
+        btnOpenHTTPS.href = sec.https_url;
+        btnOpenHTTPS.style.display = 'flex';
+      }
+    } else {
+      titleEl.textContent = 'HTTPS desactivado en el servidor';
+      badgeEl.textContent = 'HTTP';
+      if (btnOpenHTTPS) btnOpenHTTPS.style.display = 'none';
+    }
+
+    if (btnDownloadCA) {
+      btnDownloadCA.style.display = sec.ca_ready ? 'flex' : 'none';
+    }
+  } catch (err) {
+    console.warn('[Security] No se pudo consultar estado HTTPS:', err);
   }
 }
 

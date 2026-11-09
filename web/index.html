@@ -287,6 +287,28 @@
           </div>
         </div>
 
+        <!-- Conexión Segura HTTPS y Redirección por IP -->
+        <div class="settings-section">
+          <div class="settings-section-title">Conexión Segura HTTPS y Acceso por IP</div>
+          <div class="settings-card" id="securityStatusCard">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+              <div style="font-size:0.9rem; font-weight:700;" id="securityStatusTitle">Comprobando estado TLS...</div>
+              <span class="badge-format" id="securityProtocolBadge">HTTP</span>
+            </div>
+            <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;" id="securityStatusDesc">
+              Usa HTTPS para cifrar contraseñas del NAS e instalar AuraBox como aplicación PWA.
+            </p>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <a id="btnOpenHTTPS" href="#" class="btn-secondary" style="flex:1; min-width:140px; height:38px; justify-content:center; text-decoration:none; display:none;">
+                🔒 Abrir en HTTPS
+              </a>
+              <a id="btnDownloadCACert" href="/api/security/ca.crt" download="aurabox-ca.crt" class="btn-secondary" style="flex:1; min-width:150px; height:38px; justify-content:center; text-decoration:none; display:none;">
+                📜 Descargar Certificado CA
+              </a>
+            </div>
+          </div>
+        </div>
+
         <!-- Emisoras de Radio Streaming -->
         <div class="settings-section">
           <div class="settings-section-title">Emisoras de Radio Web Hi-Fi</div>
@@ -538,7 +560,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=14"></script>
+  <script type="module" src="/js/app.js?v=15"></script>
 </body>
 </html>
 

@@ -297,4 +297,9 @@ export function saveNASConfig(nasPayload) {
   });
 }
 
+// getSecurityStatus consulta el estado TLS/HTTPS, la URL segura disponible y la CA descargable.
+export function getSecurityStatus() {
+  return requestHelper('/security/status');
+}
+
 
