@@ -5,8 +5,9 @@
 Esta guía cubre:
 1. **Despliegue e Instalación en una Raspberry Pi (3B+, 4 o 5)** conectada al NAS y al amplificador.
 2. **Uso en Cualquier Otro Ordenador con Docker** (Linux, Windows o macOS).
-3. **Configuración de Salidas de Audio y Conectividad Hi-Fi**.
-4. **Mantenimiento y Solución de Problemas**.
+3. **Configuración de Salidas de Audio Hi-Fi (USB DAC, I2S HAT y Jack)**.
+4. **Activación de HTTPS, Redirección Automática por IP e Instalación de Certificado CA**.
+5. **Mantenimiento y Solución de Problemas**.
 
 ---
 
@@ -141,13 +142,23 @@ nano .env
 ```
 Contenido del archivo `.env`:
 ```ini
+# Puertos internos Docker (rango 4000) y opciones HTTPS
+PORT=4080
+HTTPS_PORT=4443
+HTTPS_PUBLIC_PORT=4443
+FORCE_HTTPS=false
+TLS_EXTRA_HOSTS=
+ADMIN_PORT=4081
+
 # Configuración del servidor NAS (SMB / CIFS)
 NAS_ALIAS=mi-nas
 NAS_HOST=192.168.1.100
 NAS_SHARE=music
 NAS_USER=tu_usuario_nas
 NAS_PASS=TuContraseñaDelNAS
+NAS_OPTIONS=vers=3.0,sec=ntlmssp,ro,iocharset=utf8
 ```
+*(Si posteriormente ejecutas `./scripts/setup-https-pi.sh`, el propio script ajustará automáticamente `HTTPS_PUBLIC_PORT=443`, `FORCE_HTTPS=true` y `TLS_EXTRA_HOSTS` con la IP de tu Raspberry Pi sin sobrescribir tus credenciales del NAS).*
 
 #### Paso 4: Arrancar AuraBox
 ```bash
@@ -261,10 +272,13 @@ En Windows, Docker se ejecuta sobre el subsistema WSL2.
 AuraBox está optimizado con ergonomía **Thumb-First** para manejarse cómodamente con una sola mano desde cualquier teléfono móvil conectado a la misma red WiFi.
 
 1. **Averigua la IP local del equipo donde corre AuraBox:**
-   * En la Raspberry Pi o Linux: `hostname -I` (ejemplo: `192.168.1.80`).
+   * En la Raspberry Pi o Linux: `hostname -I` (ejemplo: `192.168.1.113`).
 2. **Abre el navegador en tu smartphone:**
-   Navega a `http://192.168.1.80:4080`.
+   * **Acceso estándar HTTP:** `http://192.168.1.113:4080`
+   * **Acceso cifrado HTTPS:** `https://192.168.1.113:4443` (o directamente **`https://192.168.1.113`** / `192.168.1.113` sin puerto si activas la redirección automática explicada en la sección **HTTPS y Acceso Directo** más abajo).
+   > 💡 **Recomendado usar HTTPS en móviles y navegadores modernos:** Evita alertas como *«Campos de contraseña presentes en una página insegura»* al configurar el NAS en **Ajustes** y habilita la instalación completa como **PWA** y controles nativos en pantalla de bloqueo (`MediaSession`).
 3. **Instalar como Aplicación Nativa (PWA):**
+   * *(Si usas HTTPS con la CA local, instala primero `aurabox-ca.crt` como se detalla más abajo para que el navegador reconozca la conexión como de confianza total).*
    * **En Android (Chrome):** Toca los tres puntos de la esquina superior derecha y selecciona **«Añadir a pantalla de inicio»** o **«Instalar aplicación»**.
    * **En iPhone / iPad (Safari):** Toca el botón Compartir (icono con flecha hacia arriba) y selecciona **«Añadir a la pantalla de inicio»**.
 4. **Características disponibles en el móvil:**
@@ -293,23 +307,112 @@ Accede a la pestaña **Ajustes** en la aplicación para configurar:
 
 ### 🔒 HTTPS y Acceso Directo poniendo solo la IP (sin escribir `:4080` ni `:4443`)
 
-AuraBox incluye un servidor **HTTPS nativo en el puerto 4443** (con generación automática de certificado TLS SAN para tus IPs locales y `aurabox.local`).
+AuraBox incorpora un servidor **HTTPS nativo (TLS 1.2+) en el puerto `4443`**, manteniendo `docker-compose.yml` estrictamente dentro del rango `4000`:
 
-1. **Acceso rápido HTTPS:** Abre directamente `https://<IP_RASPBERRY>:4443` (o pulsa **🔒 Abrir en HTTPS** dentro de **Ajustes**).
-2. **Entrar escribiendo únicamente la IP (`http://192.168.x.x` → `https://192.168.x.x`):**
-   Ejecuta en la Raspberry Pi el configurador automático (usa `systemd-socket-proxyd` del sistema para enrutar los puertos `80` y `443` del host hacia `4080` y `4443` sin alterar el rango 4000 de Docker):
-   ```bash
-   cd ~/aurabox
-   chmod +x scripts/setup-https-pi.sh
-   ./scripts/setup-https-pi.sh
-   ```
-   A partir de ese momento, escribir solo la IP de tu Raspberry Pi en el navegador redirige automáticamente a **`https://<IP>`** (puerto 443 limpio, sin mostrar `:4080` ni `:4443`). Si algún día quieres deshacer esa redirección de puertos `80`/`443`:
-   ```bash
-   ./scripts/setup-https-pi.sh --disable
-   ```
-3. **Eliminar el aviso de certificado en el navegador (Recomendado para instalar la PWA):**
-   * Al tratarse de una IP privada de red local (`192.168.x.x`), las autoridades públicas (como Let's Encrypt) no emiten certificados para IPs privadas. AuraBox crea automáticamente una autoridad raíz local (`aurabox-ca.crt`).
-   * En **Ajustes → Conexión Segura HTTPS**, pulsa **📜 Descargar Certificado CA** (o descarga `https://<IP>/api/security/ca.crt`) e instálalo como **certificado de entidad emisora raíz de confianza** en tu móvil o PC. Así tendrás candado válido sin alertas de seguridad y podrás instalar la PWA en pantalla de inicio.
+* Al arrancar por primera vez, genera automáticamente en `./data/certs/` una **Autoridad Certificadora local persistente** (`aurabox-ca.crt` + `aurabox-ca.key`, válida 10 años) y un certificado de servidor ECDSA (`aurabox.crt` + `aurabox.key`, válido 800 días para cumplir el límite ≤ 825 días de iOS/macOS).
+* Cada acceso por una nueva IP de tu LAN o nombre mDNS (`aurabox.local`) añade dinámicamente esa dirección a los **SAN** (*Subject Alternative Names*) del certificado sin reiniciar el servidor.
+* Cuando navegas por **HTTPS**, el botón **📻 Móvil / Web** reproduce automáticamente el audio a través de `/api/stream` (mismo origen cifrado), evitando bloqueos por *Mixed Content* de `http://...:4082`.
+
+#### Opción A: Acceso rápido por HTTPS en el puerto `:4443` (sin cambios en el sistema)
+
+1. Abre directamente en tu navegador: `https://<IP_RASPBERRY>:4443` (o dentro de AuraBox entra en **Ajustes → Conexión Segura HTTPS y Acceso por IP** y pulsa **🔒 Abrir en HTTPS**).
+
+#### Opción B: Entrar poniendo únicamente la IP (`192.168.x.x` → `https://192.168.x.x`)
+
+Si quieres teclear solo la IP en el navegador (o en el móvil) y que redirija automáticamente al puerto correcto con HTTPS limpio en el puerto `443`, ejecuta el asistente incluido en tu Raspberry Pi:
+
+```bash
+cd ~/aurabox
+git pull
+chmod +x scripts/setup-https-pi.sh
+./scripts/setup-https-pi.sh
+```
+
+**Qué realiza exactamente `scripts/setup-https-pi.sh`:**
+1. Verifica que ningún otro servicio web (`nginx`, `apache2`, `caddy`, etc.) esté ocupando los puertos `80` o `443`.
+2. Detecta la IP LAN (`hostname -I`) y `<hostname>.local`, y actualiza `.env` preservando tus credenciales del NAS:
+   * `HTTPS_PORT=4443`
+   * `HTTPS_PUBLIC_PORT=443`
+   * `FORCE_HTTPS=true`
+   * `TLS_EXTRA_HOSTS=<IP_LAN>,<hostname>.local,aurabox.local`
+3. Configura cuatro unidades ligeras de `systemd` usando `/lib/systemd/systemd-socket-proxyd` (nativo en Debian/Raspberry Pi OS, sin instalar proxies externos y manteniendo Docker en `4080`/`4443`):
+   * `aurabox-port80.socket` / `.service`: redirige `0.0.0.0:80` → `127.0.0.1:4080` (donde AuraBox emite `307 Temporary Redirect` hacia `https://<IP>/`).
+   * `aurabox-port443.socket` / `.service`: redirige `0.0.0.0:443` → `127.0.0.1:4443` (pasarela TLS transparente).
+4. Si `ufw` está activo, abre `80/tcp` y `443/tcp`.
+5. Reconstruye y reinicia `aurabox` (`sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build aurabox`) y valida tanto la redirección `307` en el puerto `80` como la respuesta HTTPS en el puerto `443`.
+
+Para **deshacer** el enrutado de puertos `80`/`443` en cualquier momento y volver a `:4080`/`:4443`:
+```bash
+./scripts/setup-https-pi.sh --disable
+```
+
+#### Cómo instalar el certificado `aurabox-ca.crt` para eliminar el aviso del navegador
+
+Al tratarse de una IP privada de red doméstica (`192.168.x.x`), las autoridades públicas como Let's Encrypt **no pueden emitir certificados** para IPs privadas. Tienes dos posibilidades:
+* **Uso rápido:** Aceptar una vez la advertencia inicial (*Avanzado → Continuar*); la conexión ya viajará cifrada y los formularios HTTP dejarán de alertar.
+* **Recomendado (candado válido sin avisos e instalación PWA completa):** Descarga `aurabox-ca.crt` (exento de redirección para poder descargarlo incluso antes de confiar en HTTPS) desde **Ajustes → Conexión Segura HTTPS → 📜 Descargar Certificado CA** o en:
+  * `http://<IP_RASPBERRY>/api/security/ca.crt` (o `:4080/api/security/ca.crt`)
+
+Instálalo como **Entidad emisora raíz de confianza** en los dispositivos que uses habitualmente:
+
+* **Android (Chrome):**
+  1. Descarga `aurabox-ca.crt`.
+  2. Ve a **Ajustes → Seguridad y privacidad → Más ajustes de seguridad → Cifrado y credenciales → Instalar un certificado → Certificado de CA** *(la ruta exacta puede variar según fabricante, busca «certificado» en Ajustes)*.
+  3. Confirma *Instalar de todos modos*, selecciona `aurabox-ca.crt` y reinicia Chrome.
+* **iPhone / iPad (iOS / iPadOS):**
+  1. Abre el enlace de descarga desde **Safari** y pulsa **Permitir**.
+  2. Ve a **Ajustes → Perfil descargado** *(o **General → VPN y gestión de dispositivos**)* → **Instalar** `AuraBox Local Root CA`.
+  3. **Paso imprescindible en Apple:** Ve a **Ajustes → General → Información → Ajustes de confianza de certificados** y **activa la casilla** junto a `AuraBox Local Root CA`.
+* **Linux (Chrome / Edge / Firefox / Sistema):**
+  * **Chrome / Chromium / Brave / Edge:** `chrome://settings/certificates` → pestaña **Autoridades** → **Importar** `aurabox-ca.crt` → marca *«Confiar en este certificado para identificar sitios web»*.
+  * **Firefox:** `about:preferences#privacy` → *Certificados → Ver certificados → Autoridades → Importar* → marca *«Confiar en esta CA para identificar sitios web»*.
+  * **A nivel de sistema (Debian / Ubuntu / Raspberry Pi OS):**
+    ```bash
+    sudo cp aurabox-ca.crt /usr/local/share/ca-certificates/aurabox-ca.crt
+    sudo update-ca-certificates
+    ```
+* **Windows (Edge / Chrome):**
+  * Doble clic en `aurabox-ca.crt` → **Instalar certificado...** → elige *Usuario actual* o *Equipo local* → **Colocar todos los certificados en el siguiente almacén → Entidades de certificación raíz de confianza**.
+* **macOS (Safari / Chrome):**
+  * Doble clic en `aurabox-ca.crt` para abrir **Acceso a Llaveros** → añade a *Inicio de sesión* o *Sistema* → doble clic sobre `AuraBox Local Root CA` → despliega **Confiar** → *Al usar este certificado: **Confiar siempre***.
+
+#### Variables de entorno TLS disponibles (`.env`) y Proxy Inverso externo
+
+| Variable | Valor por defecto | Función |
+|---|---|---|
+| `HTTPS_PORT` | `4443` | Puerto TLS interno/Docker (`off` o `0` lo desactiva). |
+| `HTTPS_PUBLIC_PORT` | `4443` | Puerto anunciado en las redirecciones (`443` al usar `setup-https-pi.sh` o proxy externo). |
+| `FORCE_HTTPS` | `false` | Si es `true`, cualquier entrada HTTP (incluso `:4080`) redirige con `307` a HTTPS. |
+| `TLS_EXTRA_HOSTS` | *(vacío)* | Lista CSV de IPs/hostnames extra a pre-incluir en el SAN del certificado. |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | *(vacío)* | Rutas opcionales dentro del contenedor si prefieres aportar un certificado externo (p. ej. Tailscale o dominio propio). |
+
+> **Si ya tienes Nginx o Caddy ocupando los puertos `80`/`443` en la Raspberry Pi:**
+> `./scripts/setup-https-pi.sh` se detendrá con aviso para no pisar tu servidor web actual. Si tu proxy ya gestiona el certificado TLS externo, fija `HTTPS_PORT=off` en `.env` (para que AuraBox delegue TLS en tu proxy sin redirigir) y reenvía hacia `http://127.0.0.1:4080`, o mantén `HTTPS_PORT=4443` y apunta el upstream a `https://127.0.0.1:4443`:
+> ```nginx
+> location / {
+>     proxy_pass https://127.0.0.1:4443;
+>     proxy_ssl_verify off;
+>     proxy_set_header Host $host;
+>     proxy_set_header X-Forwarded-Proto $scheme;
+>     proxy_http_version 1.1;
+>     proxy_buffering off;
+>     proxy_read_timeout 3600s;
+> }
+> ```
+> O en **Caddy** (con `HTTPS_PORT=off` en `.env`): `reverse_proxy 127.0.0.1:4080`.
+
+#### Comprobación y diagnóstico de HTTPS
+
+```bash
+# 1. Ver estado de los sockets de redirección 80/443 en la Raspberry Pi
+sudo systemctl status aurabox-port80.socket aurabox-port443.socket
+
+# 2. Comprobar que entrar sin puerto devuelve redirección 307 hacia https://
+curl -I http://<IP_RASPBERRY>/
+
+# 3. Consultar estado TLS, URL segura y SAN activos
+curl -sk https://<IP_RASPBERRY>/api/security/status
+```
 
 ---
 
@@ -331,31 +434,37 @@ docker compose restart
 
 ### Actualizar a la última versión:
 ```bash
+cd ~/aurabox
 git pull
-docker compose up -d --build
+sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
 ```
+*(En Raspberry Pi, `COMPOSE_PARALLEL_LIMIT=1` evita picos simultáneos de memoria al recompilar `aurabox` y `mpd`).*
 
 ### Problemas comunes:
 * **No aparece el DAC USB o I2S HAT en la lista de salidas de Ajustes:**
   1. **Si usas un DAC USB externo:**
      * Comprueba que el DAC está encendido y bien conectado a un puerto USB de la Raspberry Pi (algunos DACs requieren alimentación propia o seleccionar entrada USB).
      * Pulsa el botón **🔄 Redetectar DAC** en **Ajustes → Salida de Audio Conmutable** (AuraBox usa mapeo dinámico `/dev/snd` + cgroup `116:*` para detectar DACs enchufados o encendidos en caliente sin reiniciar Docker).
-  2. **Si usas una placa DAC I2S HAT sobre los pines GPIO (HiFiBerry, Allo Boss, IQaudio, InnoMaker, etc.):**
+  2. **Si usas una placa DAC I2S HAT sobre los pines GPIO (Dual ES9023, HiFiBerry, Allo Boss, IQaudio, InnoMaker, etc.):**
      * Tras grabar una microSD nueva con Raspberry Pi OS, Linux **no activa el driver I2S automáticamente** hasta declararlo en el gestor de arranque.
      * Edita el archivo de configuración de arranque en la Raspberry Pi:
        ```bash
        sudo nano /boot/firmware/config.txt
        ```
-       Añade al final la línea `dtoverlay=` exacta de tu placa, por ejemplo:
+       Asegúrate de activar el bus I2S (`dtparam=i2s=on`) y añade al final la línea `dtoverlay=` exacta de tu placa, por ejemplo:
+       * **DAC I2S Dual ES9023 / ESS Sabre / PCM5102A genérico:** `dtparam=i2s=on` y `dtoverlay=hifiberry-dac`
        * HiFiBerry DAC+ / Standard / InnoMaker DAC: `dtoverlay=hifiberry-dacplus`
        * HiFiBerry DAC2 HD: `dtoverlay=hifiberry-dacplushd`
        * IQaudio DAC+ / Pi-DAC PRO: `dtoverlay=iqaudio-dacplus`
        * Allo Boss DAC: `dtoverlay=allo-boss-dac-pcm512x-audio`
-       * DAC I2S genérico PCM5102A: `dtoverlay=hifiberry-dac`
      * Reinicia la Raspberry Pi (`sudo reboot`) y verifica por SSH con `aplay -l` que aparece la nueva tarjeta antes de seleccionarla en **Ajustes**.
   3. Revisa debajo de las salidas el cuadro **«¿No aparece tu DAC?»**: AuraBox te mostrará exactamente las tarjetas ALSA (`card 0`, `card 1`…) que detecta el kernel dentro del contenedor.
+* **Aviso de certificado «Tu conexión no es privada» o `setup-https-pi.sh` dice que el puerto `80`/`443` está ocupado:**
+  1. Si el navegador muestra aviso de certificado en `https://<IP>`, es normal hasta instalar `aurabox-ca.crt` como autoridad de confianza en ese móvil u ordenador (consulta las instrucciones por sistema en la sección anterior).
+  2. Si `setup-https-pi.sh` avisa de conflicto en puerto `80` o `443`, tienes otro servicio web en la Pi (por ejemplo Apache, Nginx o Pi-hole): libera esos puertos o añade un proxy inverso apuntando a `127.0.0.1:4080` / `127.0.0.1:4443`.
+  3. Si usas iPhone/iPad, recuerda activar además **Ajustes → General → Información → Ajustes de confianza de certificados** tras instalar el perfil `AuraBox Local Root CA`.
 * **No suena la música por el amplificador en Raspberry Pi:**
-  1. Ve a **Ajustes** en la web (`http://<IP>:4080`) y verifica qué salida está seleccionada.
+  1. Ve a **Ajustes** en la web (`https://<IP>` o `http://<IP>:4080`) y verifica qué salida está seleccionada.
   2. Ejecuta en la terminal de la Raspberry Pi: `aplay -l` para verificar qué tarjetas ALSA reconoce Linux.
   3. Si usas Docker en la Pi y el DAC no aparecía al arrancar, pulsa **🔄 Redetectar DAC** o actualiza con `git pull && sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build`.
 * **Error `permission denied` al montar el volumen del NAS (`nas_music`):**
