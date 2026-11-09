@@ -66,19 +66,25 @@ Elige una de las siguientes tres opciones de audio según tu equipo:
 
 Hemos incluido un instalador desatendido que configura dependencias, Docker, grupos de usuario, permisos de sonido ALSA y el montaje del NAS en un solo paso:
 
-1. **Clona o copia el proyecto en tu Raspberry Pi:**
+1. **Clona el proyecto en tu Raspberry Pi:**
    ```bash
-   git clone https://github.com/tu-usuario/aurabox.git /home/pi/aurabox
-   cd /home/pi/aurabox
+   git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
+   cd ~/aurabox
    ```
 
-2. **Otorga permisos y ejecuta el instalador:**
+2. **(Opcional) Preconfigura el acceso a tu NAS antes de instalar:**
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
+
+3. **Otorga permisos y ejecuta el instalador:**
    ```bash
    chmod +x scripts/install-rpi.sh
    ./scripts/install-rpi.sh
    ```
 
-3. **Qué realiza automáticamente el instalador:**
+4. **Qué realiza automáticamente el instalador:**
    * Actualiza el sistema e instala `cifs-utils`, `alsa-utils` y `curl`.
    * Instala Docker Engine y Docker Compose si no están presentes.
    * Añade el usuario a los grupos de sistema `docker` y `audio` (imprescindible para el bus de sonido `/dev/snd`).
@@ -100,7 +106,13 @@ sudo usermod -aG docker,audio $USER
 newgrp docker
 ```
 
-#### Paso 2: Configurar las variables del NAS
+#### Paso 2: Clonar el repositorio
+```bash
+git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
+cd ~/aurabox
+```
+
+#### Paso 3: Configurar las variables del NAS
 Copia la plantilla `.env.example` a `.env` (el archivo `.env` está protegido por `.gitignore` para no subir nunca tus contraseñas) y añade los datos de acceso de tu servidor de red o disco compartido:
 ```bash
 cp .env.example .env
@@ -116,12 +128,12 @@ NAS_USER=tu_usuario_nas
 NAS_PASS=TuContraseñaDelNAS
 ```
 
-#### Paso 3: Arrancar AuraBox
+#### Paso 4: Arrancar AuraBox
 ```bash
 docker compose up -d --build
 ```
 
-#### Paso 4: Comprobar que los contenedores están activos
+#### Paso 5: Comprobar que los contenedores están activos
 ```bash
 docker compose ps
 ```
@@ -139,11 +151,20 @@ AuraBox es totalmente portable y puede ejecutarse en cualquier ordenador de sobr
 
 En Linux, los contenedores acceden directamente a tu tarjeta de sonido interna o DAC USB mediante `/dev/snd`.
 
-1. **Asegúrate de que tu usuario pertenece al grupo de sonido:**
+1. **Clona el proyecto y entra en la carpeta:**
+   ```bash
+   git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
+   cd ~/aurabox
+   ```
+2. **Asegúrate de que tu usuario pertenece al grupo de sonido:**
    ```bash
    sudo usermod -aG audio $USER
    ```
-2. **Configura el archivo `.env`:**
+3. **Configura el archivo `.env`:**
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
    Si la música está en una carpeta local de tu disco duro, puedes mapearla en `docker-compose.yml`:
    ```yaml
    volumes:
@@ -151,11 +172,11 @@ En Linux, los contenedores acceden directamente a tu tarjeta de sonido interna o
      - nas_music:/music/nas:ro
    ```
    Si accedes al NAS, indica la IP y credenciales en `.env`.
-3. **Inicia el sistema:**
+4. **Inicia el sistema:**
    ```bash
-   docker compose up -d
+   docker compose up -d --build
    ```
-4. **Abre tu navegador en:**
+5. **Abre tu navegador en:**
    `http://localhost:4080`
 
 ---
@@ -166,10 +187,12 @@ En Windows, Docker se ejecuta sobre el subsistema WSL2.
 
 1. **Instalar requisitos:**
    * Instala **Docker Desktop para Windows** con el backend WSL2 habilitado.
-2. **Descarga o clona el proyecto:**
-   Abre una terminal de PowerShell o WSL2 y accede a la carpeta:
+2. **Clona el proyecto:**
+   Abre una terminal de PowerShell o WSL2 y clona el repositorio:
    ```powershell
+   git clone https://github.com/notecortes/jukeboox3.git C:\aurabox
    cd C:\aurabox
+   copy .env.example .env
    ```
 3. **Mapeo de tu música local:**
    En Windows, edita `docker-compose.yml` para apuntar a tu carpeta de música de Windows (por ejemplo, `C:\Users\TuUsuario\Music`):
@@ -180,7 +203,7 @@ En Windows, Docker se ejecuta sobre el subsistema WSL2.
    ```
 4. **Iniciar AuraBox:**
    ```powershell
-   docker compose up -d
+   docker compose up -d --build
    ```
 5. **Reproducción de sonido en Windows (Modo Transmisión Web):**
    * Debido a que Docker Desktop en Windows no tiene acceso directo a la tarjeta de sonido ALSA de la placa base, AuraBox incluye el modo **«Transmisión Web HTTP (Hi-Fi Stream)»** integrado en el puerto `4082`.
@@ -191,17 +214,23 @@ En Windows, Docker se ejecuta sobre el subsistema WSL2.
 ### 2.3. Despliegue en macOS (Apple Silicon M1/M2/M3 o Intel)
 
 1. **Instalar Docker Desktop para Mac**.
-2. **Configurar la carpeta de música:**
+2. **Clona el proyecto:**
+   ```bash
+   git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
+   cd ~/aurabox
+   cp .env.example .env
+   ```
+3. **Configurar la carpeta de música:**
    En `docker-compose.yml`, vincula tu carpeta de música de Mac:
    ```yaml
    volumes:
      - "/Users/tuusuario/Music:/music/local:ro"
    ```
-3. **Levantar los contenedores:**
+4. **Levantar los contenedores:**
    ```bash
-   docker compose up -d
+   docker compose up -d --build
    ```
-4. **Reproducción:**
+5. **Reproducción:**
    Abre `http://localhost:4080`. Puedes escuchar la música por los altavoces de tu Mac activando el botón de **Transmisión Web**.
 
 ---

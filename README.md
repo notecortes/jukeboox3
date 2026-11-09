@@ -84,8 +84,10 @@ Al seleccionar **«Crear Smart Mix de [Artista]»**:
 > 📖 **Guía Completa Detallada:** Consulta el manual paso a paso con diagramas de cableado de amplificador, montaje NAS, configuración de DACs Hi-Fi y despliegue en PC/Mac en [`docs/instalacion.md`](docs/instalacion.md).
 
 ### Opción 1: Instalación Automatizada en Raspberry Pi (Recomendada)
-Ejecuta el script instalador en tu Raspberry Pi para configurar Docker, permisos de audio, montaje del NAS y auto-arranque 24/7 en un solo paso:
+Clona el repositorio y ejecuta el script instalador en tu Raspberry Pi para configurar Docker, permisos de audio, montaje del NAS y auto-arranque 24/7 en un solo paso:
 ```bash
+git clone https://github.com/notecortes/jukeboox3.git ~/aurabox
+cd ~/aurabox
 chmod +x scripts/install-rpi.sh
 ./scripts/install-rpi.sh
 ```
