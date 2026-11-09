@@ -6,6 +6,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +24,15 @@ type OutputInfo struct {
 	Name    string `json:"name"`
 	Plugin  string `json:"plugin"`
 	Enabled bool   `json:"enabled"`
+}
+
+// AudioDiagnostics expone las salidas de MPD junto con la lectura cruda de aplay -l en el contenedor.
+type AudioDiagnostics struct {
+	Outputs     []OutputInfo `json:"outputs"`
+	Active      string       `json:"active_output"`
+	AlsaRaw     string       `json:"alsa_raw"`
+	HasDAC      bool         `json:"has_dac"`
+	HasHardware bool         `json:"has_hardware"`
 }
 
 // PlayerState representa el estado completo de reproducción sincronizado hacia el frontend.
@@ -1733,14 +1744,19 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 	c.mu.Unlock()
 
 	if c.isConnected() {
+		var enableErr error
 		for _, o := range outsCopy {
 			if o.ID == outputID {
-				_, _ = c.sendRawCommand(fmt.Sprintf("enableoutput %d\n", o.ID))
+				_, enableErr = c.sendRawCommand(fmt.Sprintf("enableoutput %d\n", o.ID))
 			} else if selectedPlugin != "httpd" && o.Plugin != "httpd" {
 				_, _ = c.sendRawCommand(fmt.Sprintf("disableoutput %d\n", o.ID))
 			}
 		}
 		c.syncOutputsFromMPD()
+		if enableErr != nil {
+			c.broadcastState()
+			return fmt.Errorf("no se pudo activar %s en MPD: %w", selectedName, enableErr)
+		}
 	}
 
 	outIDStr := strconv.Itoa(outputID)
@@ -1754,6 +1770,128 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 	})
 	c.broadcastState()
 	return nil
+}
+
+// isDACOutputName identifica si el nombre de una salida corresponde a un DAC USB o tarjeta I2S HAT externa.
+func isDACOutputName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, kw := range []string{"dac", "usb", "i2s", "hifiberry", "allo", "iqaudio", "justboom", "pisound", "topping", "fiio", "smsl", "codec", "uac", "xmos"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetAudioDiagnostics devuelve las salidas actuales en MPD y la lectura hardware de aplay -l en el contenedor.
+func (c *Client) GetAudioDiagnostics() AudioDiagnostics {
+	if c.isConnected() {
+		c.syncOutputsFromMPD()
+	}
+	st := c.GetState()
+	hasDAC := false
+	hasHW := false
+	for _, o := range st.AudioOutputs {
+		if o.Plugin == "alsa" || o.Plugin == "pulse" {
+			hasHW = true
+		}
+		if isDACOutputName(o.Name) {
+			hasDAC = true
+		}
+	}
+
+	alsaRaw := ""
+	if c.socketPath != "" {
+		diagPath := filepath.Join(filepath.Dir(c.socketPath), "alsa_cards.txt")
+		if raw, err := os.ReadFile(diagPath); err == nil {
+			alsaRaw = strings.TrimSpace(string(raw))
+		}
+	}
+
+	return AudioDiagnostics{
+		Outputs:     st.AudioOutputs,
+		Active:      st.ActiveOutput,
+		AlsaRaw:     alsaRaw,
+		HasDAC:      hasDAC,
+		HasHardware: hasHW,
+	}
+}
+
+// RefreshAudioOutputs solicita a MPD regenerar las tarjetas ALSA detectadas, reconecta y sincroniza la cola si es necesario.
+func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
+	if c.socketPath != "" {
+		dir := filepath.Dir(c.socketPath)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			triggerPath := filepath.Join(dir, "reload_outputs")
+			_ = os.WriteFile(triggerPath, []byte(fmt.Sprintf("%d\n", time.Now().UnixNano())), 0644)
+
+			// Esperar brevemente a que entrypoint.sh recoja el trigger y reinicie MPD
+			deadline := time.Now().Add(3500 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				if _, statErr := os.Stat(triggerPath); os.IsNotExist(statErr) {
+					break
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+			_ = os.Remove(triggerPath)
+		}
+	}
+
+	// Esperar a que MPD vuelva a responder en el socket/puerto tras regenerar mpd.runtime.conf
+	reconnDeadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(reconnDeadline) {
+		c.connMu.Lock()
+		c.lastDialFail = time.Time{}
+		c.connMu.Unlock()
+		if _, err := c.sendRawCommand("outputs\n"); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	c.mu.RLock()
+	rg := c.state.ReplayGain
+	cf := c.state.Crossfade
+	vol := c.state.Volume
+	maxVol := c.state.MaxVolumeLimit
+	c.mu.RUnlock()
+	if vol > maxVol {
+		vol = maxVol
+	}
+	_, _ = c.sendRawCommand(fmt.Sprintf("replay_gain_mode %s\n", rg))
+	_, _ = c.sendRawCommand(fmt.Sprintf("crossfade %d\n", cf))
+	_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", vol))
+
+	c.syncOutputsFromMPD()
+
+	// Comprobar si MPD perdió la cola durante el reinicio rápido y restaurarla desde memoria
+	if lines, err := c.sendRawCommand("status\n"); err == nil {
+		mpdPlaylistLen := -1
+		for _, ln := range lines {
+			if strings.HasPrefix(ln, "playlistlength: ") {
+				mpdPlaylistLen, _ = strconv.Atoi(strings.TrimPrefix(ln, "playlistlength: "))
+				break
+			}
+		}
+		c.mu.RLock()
+		qLen := len(c.queue)
+		currIdx := c.state.CurrentIndex
+		wasPlaying := (c.state.Status == "play")
+		var qCopy []db.Track
+		if qLen > 0 && mpdPlaylistLen == 0 {
+			qCopy = make([]db.Track, qLen)
+			copy(qCopy, c.queue)
+		}
+		ver := c.queueVersion.Load()
+		c.mu.RUnlock()
+
+		if len(qCopy) > 0 {
+			go c.pushQueueToMPD(ver, qCopy, currIdx, wasPlaying)
+		}
+	}
+
+	c.broadcastState()
+	return c.GetAudioDiagnostics(), nil
 }
 
 // SetAudioConfig configura opciones audiófilas de ReplayGain y Crossfade en MPD y SQLite.

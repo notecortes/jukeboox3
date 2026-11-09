@@ -27,6 +27,9 @@ let radioGenreFilter = 'Todos';
 let cachedRadios = [];
 let isGeneratingMix = false;
 let outputSwitchInFlight = false;
+let outputRefreshInFlight = false;
+let lastDiagnosticsFetchAt = 0;
+let cachedDiagnostics = null;
 let isLoadingLibrary = false;
 let pendingLibraryReload = null;
 let lastProgressiveFetchAt = 0;
@@ -1370,37 +1373,107 @@ function describeAudioOutput(output) {
   if (plugin === 'httpd') {
     return {
       badge: 'STREAM',
+      isDAC: false,
       description: 'Stream Hi-Fi 320kbps en puerto 4082'
     };
   }
   if (plugin === 'pulse') {
     return {
       badge: 'PULSE',
+      isDAC: false,
       description: 'Servidor de audio PulseAudio del sistema'
     };
   }
   if (plugin === 'null') {
     return {
       badge: 'NULL',
+      isDAC: false,
       description: 'Salida silenciosa de respaldo (sin tarjeta física)'
     };
   }
-  if (nameLower.includes('usb')) {
+  if (nameLower.includes('i2s') || nameLower.includes('hifiberry') || nameLower.includes('allo') || nameLower.includes('iqaudio') || nameLower.includes('justboom') || nameLower.includes('pisound')) {
+    return {
+      badge: 'I2S',
+      isDAC: true,
+      description: 'DAC Hardware I2S HAT detectado en ALSA'
+    };
+  }
+  if (nameLower.includes('usb') || nameLower.includes('dac') || nameLower.includes('codec') || nameLower.includes('topping') || nameLower.includes('fiio') || nameLower.includes('smsl')) {
     return {
       badge: 'USB',
+      isDAC: true,
       description: 'DAC USB externo Plug & Play detectado por ALSA'
     };
   }
-  if (nameLower.includes('i2s') || nameLower.includes('hifiberry') || nameLower.includes('dac')) {
+  if (nameLower.includes('hdmi') || nameLower.includes('vc4')) {
     return {
-      badge: 'I2S',
-      description: 'DAC Hardware de alta fidelidad en bus ALSA'
+      badge: 'HDMI',
+      isDAC: false,
+      description: 'Salida de audio digital HDMI'
+    };
+  }
+  if (nameLower.includes('jack') || nameLower.includes('bcm2835') || nameLower.includes('headphone') || nameLower.includes('analóg') || nameLower.includes('analog')) {
+    return {
+      badge: 'JACK',
+      isDAC: false,
+      description: 'Salida analógica integrada de hardware'
     };
   }
   return {
     badge: plugin ? plugin.toUpperCase() : 'ALSA',
+    isDAC: false,
     description: 'Interfaz de audio detectada automáticamente'
   };
+}
+
+// renderAudioDiagnostics muestra ayuda contextual y tarjetas ALSA crudas si no se detecta ningún DAC externo/HAT.
+function renderAudioDiagnostics(diag, outputs) {
+  const diagEl = document.getElementById('audioOutputsDiagnostics');
+  if (!diagEl) return;
+
+  const list = Array.isArray(outputs) ? outputs : (state.player.audio_outputs || []);
+  const hasDAC = (diag && typeof diag.has_dac === 'boolean')
+    ? diag.has_dac
+    : list.some((o) => describeAudioOutput(o).isDAC);
+
+  if (hasDAC) {
+    diagEl.innerHTML = '';
+    return;
+  }
+
+  const rawLines = (diag && diag.alsa_raw)
+    ? diag.alsa_raw.split('\n').filter((l) => l.startsWith('card ')).join('\n')
+    : '';
+
+  diagEl.innerHTML = `
+    <div style="margin-top:8px; padding:10px 12px; border-radius:var(--radius-sm); background:rgba(255,255,255,0.03); border:1px dashed var(--border-subtle); font-size:0.78rem; color:var(--text-secondary); line-height:1.45;">
+      <div style="font-weight:700; color:var(--text-primary); margin-bottom:4px;">¿No aparece tu DAC?</div>
+      <div>• <b>DAC USB:</b> enciéndelo/conéctalo a la Raspberry Pi y pulsa <b>🔄 Redetectar DAC</b>.</div>
+      <div>• <b>DAC I2S HAT</b> (HiFiBerry, Allo Boss, IQaudio…): en Raspberry Pi OS nuevo añade su <code>dtoverlay=</code> en <code>/boot/firmware/config.txt</code> y reinicia.</div>
+      ${rawLines ? `<pre style="margin:8px 0 0; padding:6px 8px; border-radius:4px; background:rgba(0,0,0,0.28); font-size:0.7rem; color:var(--text-muted); white-space:pre-wrap; overflow-x:auto;">${escapeHtml(rawLines)}</pre>` : ''}
+    </div>
+  `;
+}
+
+// ensureAudioDiagnosticsLoaded consulta una sola vez (con caché de 15s) los detalles ALSA si no hay DAC visible.
+async function ensureAudioDiagnosticsLoaded(outputs) {
+  const hasDAC = (outputs || []).some((o) => describeAudioOutput(o).isDAC);
+  if (hasDAC) {
+    renderAudioDiagnostics(cachedDiagnostics, outputs);
+    return;
+  }
+
+  renderAudioDiagnostics(cachedDiagnostics, outputs);
+  const now = Date.now();
+  if (now - lastDiagnosticsFetchAt < 15000) return;
+  lastDiagnosticsFetchAt = now;
+
+  try {
+    cachedDiagnostics = await api.getAudioDiagnostics();
+    renderAudioDiagnostics(cachedDiagnostics, state.player.audio_outputs);
+  } catch (_) {
+    // Silencioso en caso de reconexión transitoria
+  }
 }
 
 // renderAudioOutputs dibuja dinámicamente las tarjetas de hardware real reportado por MPD sin IDs fijos.
@@ -1417,6 +1490,7 @@ function renderAudioOutputs(force = false) {
         Buscando salidas de audio disponibles en MPD...
       </div>
     `;
+    renderAudioDiagnostics(cachedDiagnostics, outputs);
     return;
   }
 
@@ -1459,6 +1533,8 @@ function renderAudioOutputs(force = false) {
 
     container.appendChild(opt);
   });
+
+  ensureAudioDiagnosticsLoaded(outputs);
 }
 
 // runForcedScan lanza un re-escaneo completo bloqueando pulsaciones repetidas mientras inicia.
@@ -1479,6 +1555,36 @@ async function runForcedScan(btn, startMsg) {
 function bindSettingsView() {
   // Renderizar inicialmente salidas de audio detectadas
   renderAudioOutputs(true);
+
+  // Botón para redetectar DAC USB y salidas ALSA en caliente sin reiniciar Docker
+  const btnRefreshOutputs = document.getElementById('btnRefreshOutputs');
+  btnRefreshOutputs?.addEventListener('click', async () => {
+    if (outputRefreshInFlight) return;
+    outputRefreshInFlight = true;
+    const origText = btnRefreshOutputs.textContent;
+    btnRefreshOutputs.disabled = true;
+    btnRefreshOutputs.textContent = 'Detectando...';
+    try {
+      const res = await api.refreshAudioOutputs();
+      if (res && res.diagnostics) {
+        cachedDiagnostics = res.diagnostics;
+        lastDiagnosticsFetchAt = Date.now();
+      }
+      if (res && res.state) {
+        updatePlayerState(res.state);
+      }
+      renderAudioOutputs(true);
+      renderAudioDiagnostics(cachedDiagnostics, state.player.audio_outputs);
+      const hasDAC = cachedDiagnostics ? cachedDiagnostics.has_dac : false;
+      showToast(hasDAC ? 'DAC detectado y salidas actualizadas' : 'Salidas ALSA re-escaneadas');
+    } catch (err) {
+      showToast(`Error al redetectar salidas: ${err.message}`);
+    } finally {
+      btnRefreshOutputs.disabled = false;
+      btnRefreshOutputs.textContent = origText;
+      outputRefreshInFlight = false;
+    }
+  });
 
   // Escaneo completo manual de biblioteca
   const btnRescanLib = document.getElementById('btnRescanLibrary');

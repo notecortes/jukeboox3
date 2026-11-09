@@ -313,3 +313,48 @@ func TestNonBlockingControlUnderConcurrentDBWrites(t *testing.T) {
 		t.Fatalf("play_count debería haberse incrementado en segundo plano (err=%v, track=%+v)", err, saved)
 	}
 }
+
+// TestAudioDiagnosticsAndRefresh verifica la lectura de alsa_cards.txt y el disparo de reload_outputs.
+func TestAudioDiagnosticsAndRefresh(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "mpd.sock")
+	startMockMPDServer(t, sockPath)
+
+	diagFile := filepath.Join(tmpDir, "alsa_cards.txt")
+	sampleAlsa := "**** List of PLAYBACK Hardware Devices ****\ncard 0: Headphones [bcm2835 Headphones], device 0: bcm2835 Headphones [bcm2835 Headphones]\ncard 2: USB Audio CODEC [USB Audio CODEC], device 0: USB Audio [USB Audio]\n"
+	if err := os.WriteFile(diagFile, []byte(sampleAlsa), 0644); err != nil {
+		t.Fatalf("WriteFile alsa_cards.txt falló: %v", err)
+	}
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	// Simular el bucle del entrypoint consumiendo reload_outputs en paralelo
+	doneWatch := make(chan struct{})
+	go func() {
+		defer close(doneWatch)
+		triggerPath := filepath.Join(tmpDir, "reload_outputs")
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(triggerPath); err == nil {
+				_ = os.Remove(triggerPath)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	diag, err := c.RefreshAudioOutputs()
+	if err != nil {
+		t.Fatalf("RefreshAudioOutputs devolvió error: %v", err)
+	}
+	<-doneWatch
+
+	if !diag.HasDAC || !diag.HasHardware {
+		t.Fatalf("se esperaba HasDAC=true y HasHardware=true, obtenido: %+v", diag)
+	}
+	if !strings.Contains(diag.AlsaRaw, "USB Audio CODEC") {
+		t.Fatalf("AlsaRaw no contiene la tarjeta esperada: %q", diag.AlsaRaw)
+	}
+}

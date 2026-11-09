@@ -1,6 +1,6 @@
 #!/bin/sh
 # =====================================================================
-# AuraBox MPD Entrypoint — Autodetección de salidas ALSA / Pulse / HTTP
+# AuraBox MPD Entrypoint — Autodetección dinámica ALSA / Pulse / HTTP
 # =====================================================================
 set -e
 
@@ -13,9 +13,65 @@ touch /var/lib/mpd/state /var/lib/mpd/sticker.sql
 ln -sfn /music /rawmusic
 
 CONF_OUT="/tmp/mpd.runtime.conf"
+RELOAD_FLAG="/run/mpd/reload_outputs"
+ALSA_DIAG_FILE="/run/mpd/alsa_cards.txt"
 ENABLE_HTTPD="yes"
+LAST_CARDS_SIG=""
+MPD_PID=""
+STOP_REQUESTED=0
 
-cat << 'EOF' > "$CONF_OUT"
+# parse_aplay_cards extrae tarjetas y dispositivos ALSA reales tolerando espacios o símbolos en el ID.
+parse_aplay_cards() {
+    awk '
+    /^card [0-9]+: / {
+        line = $0
+        sub(/^card /, "", line)
+        cnum = line
+        sub(/:.*/, "", cnum)
+        sub(/^[0-9]+: /, "", line)
+
+        pos = index(line, "], device ")
+        if (pos == 0) next
+        left = substr(line, 1, pos - 1)
+        right = substr(line, pos + 10)
+
+        bpos = 0
+        for (i = length(left) - 1; i >= 1; i--) {
+            if (substr(left, i, 2) == " [") {
+                bpos = i
+                break
+            }
+        }
+        if (bpos > 0) {
+            cid = substr(left, 1, bpos - 1)
+            cname = substr(left, bpos + 2)
+        } else {
+            cid = left
+            cname = left
+        }
+        gsub(/^ +| +$/, "", cid)
+        gsub(/^ +| +$/, "", cname)
+
+        dnum = right
+        sub(/:.*/, "", dnum)
+        dname = ""
+        dbpos = index(right, "[")
+        depos = index(right, "]")
+        if (dbpos > 0 && depos > dbpos) {
+            dname = substr(right, dbpos + 1, depos - dbpos - 1)
+        }
+
+        gsub(/\t/, " ", cid)
+        gsub(/\t/, " ", cname)
+        gsub(/\t/, " ", dname)
+        print cnum "\t" cid "\t" cname "\t" dnum "\t" dname
+    }
+    '
+}
+
+# generate_conf escanea /dev/snd mediante aplay -l y genera /tmp/mpd.runtime.conf actualizado.
+generate_conf() {
+    cat << 'EOF' > "$CONF_OUT"
 # =====================================================================
 # AuraBox MPD Runtime Config (Generado automáticamente al arranque)
 # =====================================================================
@@ -47,10 +103,10 @@ volume_normalization    "yes"
 
 EOF
 
-HAS_PULSE=0
-if [ -S /tmp/pulse-socket ]; then
-    HAS_PULSE=1
-    cat << 'EOF' >> "$CONF_OUT"
+    HAS_PULSE=0
+    if [ -S /tmp/pulse-socket ]; then
+        HAS_PULSE=1
+        cat << 'EOF' >> "$CONF_OUT"
 audio_output {
     type        "pulse"
     name        "Altavoces del Sistema (PipeWire / PulseAudio)"
@@ -60,108 +116,121 @@ audio_output {
 }
 
 EOF
-fi
-
-# Descubrir dispositivos ALSA reales mediante ioctls de /dev/snd (aplay -l)
-TMP_CARDS="/tmp/aplay_cards.txt"
-LC_ALL=C aplay -l 2>/dev/null | grep '^card ' > "$TMP_CARDS" || true
-
-# Determinar qué tipo de salida física debe quedar activa por defecto si no hay PulseAudio:
-# Prioridad: 1) USB / I2S HAT -> 2) Jack 3.5mm / Analógico -> 3) Digital / HDMI
-DEFAULT_CLASS=""
-if [ "$HAS_PULSE" -eq 0 ] && [ -s "$TMP_CARDS" ]; then
-    if grep -qiE 'usb|dac|topping|fiio|smsl|focusrite|scarlett|dragonfly|behringer|hifiberry|allo|iqaudio|justboom|pisound|dacberry|pcm51|es90|sndrpi' "$TMP_CARDS"; then
-        DEFAULT_CLASS="usb_or_hat"
-    elif grep -qiE 'headphone|bcm2835|analog|alc|pch|realtek|built-in|speaker' "$TMP_CARDS"; then
-        DEFAULT_CLASS="analog"
-    else
-        DEFAULT_CLASS="any"
     fi
-fi
 
-ADDED_ALSA=0
-ENABLED_ONE=0
-SEEN_HDMI_CARD=""
+    RAW_APLAY=$(LC_ALL=C aplay -l 2>&1 || true)
+    printf '%s\n' "$RAW_APLAY" > "$ALSA_DIAG_FILE"
+    chmod 644 "$ALSA_DIAG_FILE" 2>/dev/null || true
 
-while IFS= read -r line; do
-    # Ejemplo de línea: card 0: PCH [HDA Intel PCH], device 0: ALC897 Analog [ALC897 Analog]
-    CARD_NUM=$(printf '%s' "$line" | sed -n 's/^card \([0-9][0-9]*\):.*/\1/p')
-    CARD_ID=$(printf '%s' "$line" | sed -n 's/^card [0-9][0-9]*: \([^ ]*\) \[.*/\1/p')
-    CARD_NAME=$(printf '%s' "$line" | sed -n 's/^card [0-9][0-9]*: [^ ]* \[\([^]]*\)\], device.*/\1/p')
-    DEV_NUM=$(printf '%s' "$line" | sed -n 's/.*, device \([0-9][0-9]*\):.*/\1/p')
-    DEV_NAME=$(printf '%s' "$line" | sed -n 's/.*, device [0-9][0-9]*: [^[]*\[\([^]]*\)\].*/\1/p')
+    TMP_CARDS="/tmp/aplay_cards.tsv"
+    printf '%s\n' "$RAW_APLAY" | grep '^card ' | parse_aplay_cards > "$TMP_CARDS" || true
+    LAST_CARDS_SIG=$(printf '%s\n' "$RAW_APLAY" | grep '^card ' || true)
 
-    [ -z "$CARD_ID" ] && continue
-    [ -z "$DEV_NUM" ] && DEV_NUM="0"
-    [ -z "$CARD_NAME" ] && CARD_NAME="$CARD_ID"
-
-    LOWER=$(printf '%s %s %s' "$CARD_ID" "$CARD_NAME" "$DEV_NAME" | tr 'A-Z' 'a-z')
-
-    KIND="other"
-    DISPLAY_NAME=""
-    case "$LOWER" in
-        *hifiberry*|*allo*|*iqaudio*|*justboom*|*pisound*|*dacberry*|*wm8960*|*sndrpi*|*pcm51*|*es90*|*boss*dac*)
-            KIND="usb_or_hat"
-            DISPLAY_NAME="DAC I2S HAT (${CARD_NAME})"
-            ;;
-        *"usb audio"*|*usb*|*dac*|*topping*|*fiio*|*smsl*|*focusrite*|*scarlett*|*dragonfly*|*behringer*|*khadas*|*chord*|*schiit*)
-            KIND="usb_or_hat"
-            DISPLAY_NAME="DAC USB (${CARD_NAME})"
-            ;;
-        *headphone*|*bcm2835*|*analog*|*built-in*|*speaker*)
-            KIND="analog"
-            DISPLAY_NAME="Jack 3.5mm / Analógico (${CARD_NAME})"
-            ;;
-        *hdmi*|*vc4hdmi*|*vc4-hdmi*)
-            # Evitar listar múltiples puertos HDMI vacíos en la misma tarjeta
-            case " $SEEN_HDMI_CARD " in
-                *" $CARD_NUM "*) continue ;;
-            esac
-            SEEN_HDMI_CARD="$SEEN_HDMI_CARD $CARD_NUM"
-            KIND="hdmi"
-            DISPLAY_NAME="HDMI Audio (${CARD_NAME})"
-            ;;
-        *digital*|*spdif*|*iec958*)
-            KIND="digital"
-            DISPLAY_NAME="Salida Digital S/PDIF (${CARD_NAME})"
-            ;;
-        *)
-            KIND="other"
-            DISPLAY_NAME="Salida ALSA (${CARD_NAME})"
-            ;;
-    esac
-
-    OUT_ENABLED="no"
-    if [ "$HAS_PULSE" -eq 0 ] && [ "$ENABLED_ONE" -eq 0 ]; then
-        if [ "$DEFAULT_CLASS" = "usb_or_hat" ] && [ "$KIND" = "usb_or_hat" ]; then
-            OUT_ENABLED="yes"
-            ENABLED_ONE=1
-        elif [ "$DEFAULT_CLASS" = "analog" ] && [ "$KIND" = "analog" ]; then
-            OUT_ENABLED="yes"
-            ENABLED_ONE=1
-        elif [ "$DEFAULT_CLASS" = "any" ]; then
-            OUT_ENABLED="yes"
-            ENABLED_ONE=1
+    # Determinar salida física preferida si no hay PulseAudio:
+    # Prioridad: 1) DAC USB / I2S HAT -> 2) Jack 3.5mm / Analógico -> 3) Digital / HDMI
+    DEFAULT_CLASS=""
+    if [ "$HAS_PULSE" -eq 0 ] && [ -s "$TMP_CARDS" ]; then
+        if grep -qiE 'usb|dac|codec|uac|xmos|amanero|sabre|es90|ak44|cs43|pcm2|pcm5|pcm17|cm10|burr|topping|fiio|smsl|ifi|focusrite|scarlett|audient|dragonfly|behringer|khadas|chord|schiit|cambridge|hifiberry|allo|iqaudio|justboom|pisound|dacberry|innomaker|rpi-dac|boss|wm8960|sndrpi|snd_rpi' "$TMP_CARDS"; then
+            DEFAULT_CLASS="usb_or_hat"
+        elif grep -qiE 'headphone|bcm2835|analog|alc|pch|realtek|built-in|speaker' "$TMP_CARDS"; then
+            DEFAULT_CLASS="analog"
+        else
+            DEFAULT_CLASS="any"
         fi
     fi
 
-    cat << EOF >> "$CONF_OUT"
+    ADDED_ALSA=0
+    ENABLED_ONE=0
+    SEEN_HDMI_CARD=""
+    TAB=$(printf '\t')
+
+    while IFS="$TAB" read -r CARD_NUM CARD_ID CARD_NAME DEV_NUM DEV_NAME; do
+        [ -z "$CARD_NUM" ] && continue
+        [ -z "$DEV_NUM" ] && DEV_NUM="0"
+        [ -z "$CARD_NAME" ] && CARD_NAME="$CARD_ID"
+        [ -z "$CARD_NAME" ] && CARD_NAME="Tarjeta $CARD_NUM"
+
+        LOWER=$(printf '%s %s %s' "$CARD_ID" "$CARD_NAME" "$DEV_NAME" | tr 'A-Z' 'a-z')
+
+        KIND="other"
+        DISPLAY_NAME=""
+        case "$LOWER" in
+            *hifiberry*|*allo*|*iqaudio*|*justboom*|*pisound*|*dacberry*|*innomaker*|*wm8960*|*sndrpi*|*snd_rpi*|*rpi-dac*|*pcm51*|*pcm17*|*boss*dac*|*boss*)
+                KIND="usb_or_hat"
+                DISPLAY_NAME="DAC I2S HAT (${CARD_NAME})"
+                ;;
+            *"usb audio"*|*usb*|*dac*|*codec*|*uac*|*xmos*|*amanero*|*sabre*|*es90*|*ak44*|*cs43*|*pcm2*|*cm10*|*burr*|*topping*|*fiio*|*smsl*|*"ifi "*|*ifi-*|*focusrite*|*scarlett*|*audient*|*dragonfly*|*behringer*|*khadas*|*chord*|*schiit*|*cambridge*)
+                KIND="usb_or_hat"
+                DISPLAY_NAME="DAC USB (${CARD_NAME})"
+                ;;
+            *headphone*|*bcm2835*|*analog*|*built-in*|*speaker*)
+                KIND="analog"
+                DISPLAY_NAME="Jack 3.5mm / Analógico (${CARD_NAME})"
+                ;;
+            *hdmi*|*vc4hdmi*|*vc4-hdmi*)
+                # Evitar listar múltiples puertos HDMI vacíos en la misma tarjeta
+                case " $SEEN_HDMI_CARD " in
+                    *" $CARD_NUM "*) continue ;;
+                esac
+                SEEN_HDMI_CARD="$SEEN_HDMI_CARD $CARD_NUM"
+                KIND="hdmi"
+                DISPLAY_NAME="HDMI Audio (${CARD_NAME})"
+                ;;
+            *digital*|*spdif*|*iec958*)
+                KIND="digital"
+                DISPLAY_NAME="Salida Digital S/PDIF (${CARD_NAME})"
+                ;;
+            *)
+                KIND="other"
+                DISPLAY_NAME="Salida ALSA (${CARD_NAME})"
+                ;;
+        esac
+
+        if [ "$DEV_NUM" != "0" ] && [ -n "$DEV_NAME" ] && [ "$DEV_NAME" != "$CARD_NAME" ] && [ "$KIND" != "hdmi" ]; then
+            DISPLAY_NAME="${DISPLAY_NAME} - ${DEV_NAME}"
+        fi
+
+        # Usar nombre ALSA si es identificador seguro; si contiene espacios/símbolos usar índice numérico estable
+        case "$CARD_ID" in
+            *[!A-Za-z0-9_.-]*|"")
+                ALSA_DEV="plughw:${CARD_NUM},${DEV_NUM}"
+                ;;
+            *)
+                ALSA_DEV="plughw:CARD=${CARD_ID},DEV=${DEV_NUM}"
+                ;;
+        esac
+
+        OUT_ENABLED="no"
+        if [ "$HAS_PULSE" -eq 0 ] && [ "$ENABLED_ONE" -eq 0 ]; then
+            if [ "$DEFAULT_CLASS" = "usb_or_hat" ] && [ "$KIND" = "usb_or_hat" ]; then
+                OUT_ENABLED="yes"
+                ENABLED_ONE=1
+            elif [ "$DEFAULT_CLASS" = "analog" ] && [ "$KIND" = "analog" ]; then
+                OUT_ENABLED="yes"
+                ENABLED_ONE=1
+            elif [ "$DEFAULT_CLASS" = "any" ]; then
+                OUT_ENABLED="yes"
+                ENABLED_ONE=1
+            fi
+        fi
+
+        cat << EOF >> "$CONF_OUT"
 audio_output {
     type        "alsa"
     name        "${DISPLAY_NAME}"
-    device      "plughw:CARD=${CARD_ID},DEV=${DEV_NUM}"
+    device      "${ALSA_DEV}"
     mixer_type  "software"
     enabled     "${OUT_ENABLED}"
 }
 
 EOF
-    ADDED_ALSA=$((ADDED_ALSA + 1))
-done < "$TMP_CARDS"
-rm -f "$TMP_CARDS"
+        ADDED_ALSA=$((ADDED_ALSA + 1))
+    done < "$TMP_CARDS"
+    rm -f "$TMP_CARDS"
 
-# Si no hay ningún hardware de audio físico ni PulseAudio, agregar salida virtual para que httpd funcione
-if [ "$HAS_PULSE" -eq 0 ] && [ "$ADDED_ALSA" -eq 0 ]; then
-    cat << 'EOF' >> "$CONF_OUT"
+    # Si no hay hardware físico ni PulseAudio, agregar salida nula para mantener el stream HTTP operativo
+    if [ "$HAS_PULSE" -eq 0 ] && [ "$ADDED_ALSA" -eq 0 ]; then
+        cat << 'EOF' >> "$CONF_OUT"
 audio_output {
     type        "null"
     name        "Salida Virtual (Sin DAC/Altavoces detectados)"
@@ -170,9 +239,9 @@ audio_output {
 }
 
 EOF
-fi
+    fi
 
-cat << EOF >> "$CONF_OUT"
+    cat << EOF >> "$CONF_OUT"
 audio_output {
     type            "httpd"
     name            "Transmisión Web HTTP (Hi-Fi Stream)"
@@ -188,5 +257,64 @@ audio_output {
 }
 EOF
 
-echo "[AuraBox MPD] Configuración generada ($ADDED_ALSA dispositivos ALSA detectados, PulseAudio=$HAS_PULSE)"
-exec mpd --no-daemon --stdout "$CONF_OUT"
+    echo "[AuraBox MPD] Configuración generada ($ADDED_ALSA dispositivos ALSA detectados, PulseAudio=$HAS_PULSE)"
+}
+
+# start_mpd lanza MPD en segundo plano supervisado para permitir recarga en caliente de DACs.
+start_mpd() {
+    generate_conf
+    mpd --no-daemon --stdout "$CONF_OUT" &
+    MPD_PID=$!
+}
+
+# stop_mpd detiene MPD limpiamente guardando su archivo de estado antes de reiniciar o salir.
+stop_mpd() {
+    if [ -n "$MPD_PID" ] && kill -0 "$MPD_PID" 2>/dev/null; then
+        kill -TERM "$MPD_PID" 2>/dev/null || true
+        wait "$MPD_PID" 2>/dev/null || true
+    fi
+    MPD_PID=""
+}
+
+trap 'STOP_REQUESTED=1; stop_mpd; exit 0' TERM INT
+
+rm -f "$RELOAD_FLAG"
+start_mpd
+
+while [ "$STOP_REQUESTED" -eq 0 ]; do
+    sleep 2 &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || true
+    [ "$STOP_REQUESTED" -eq 1 ] && break
+
+    if [ -f "$RELOAD_FLAG" ]; then
+        echo "[AuraBox MPD] Recargando salidas de audio bajo demanda..."
+        rm -f "$RELOAD_FLAG"
+        stop_mpd
+        start_mpd
+        continue
+    fi
+
+    if [ -z "$MPD_PID" ] || ! kill -0 "$MPD_PID" 2>/dev/null; then
+        echo "[AuraBox MPD] Proceso MPD finalizado inesperadamente; reiniciando..."
+        sleep 1
+        start_mpd
+        continue
+    fi
+
+    # Detectar conexión o encendido posterior de DACs USB sin reiniciar el contenedor
+    CUR_RAW=$(LC_ALL=C aplay -l 2>&1 || true)
+    CUR_SIG=$(printf '%s\n' "$CUR_RAW" | grep '^card ' || true)
+    if [ "$CUR_SIG" != "$LAST_CARDS_SIG" ]; then
+        printf '%s\n' "$CUR_RAW" > "$ALSA_DIAG_FILE"
+        chmod 644 "$ALSA_DIAG_FILE" 2>/dev/null || true
+        if ! MPD_HOST=/run/mpd/socket mpc status 2>/dev/null | grep -q '\[playing\]'; then
+            echo "[AuraBox MPD] Cambio detectado en hardware ALSA en reposo; recargando salidas..."
+            stop_mpd
+            start_mpd
+        else
+            LAST_CARDS_SIG="$CUR_SIG"
+            echo "[AuraBox MPD] Cambio ALSA detectado mientras suena música (pulsa Redetectar DAC para aplicar)."
+        fi
+    fi
+done

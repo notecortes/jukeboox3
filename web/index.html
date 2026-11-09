@@ -15,9 +15,9 @@
   <link rel="apple-touch-icon" href="/assets/default-cover.svg"/>
 
   <!-- Hojas de estilo CSS modulares -->
-  <link rel="stylesheet" href="/css/app.css?v=10"/>
-  <link rel="stylesheet" href="/css/player.css?v=10"/>
-  <link rel="stylesheet" href="/css/views.css?v=10"/>
+  <link rel="stylesheet" href="/css/app.css?v=11"/>
+  <link rel="stylesheet" href="/css/player.css?v=11"/>
+  <link rel="stylesheet" href="/css/views.css?v=11"/>
 </head>
 <body>
   <div id="app">
@@ -150,11 +150,19 @@
       <section id="viewSettings" class="view-container">
         <!-- Salidas de Audio -->
         <div class="settings-section">
-          <div class="settings-section-title">Salida de Audio Conmutable (Hardware)</div>
-          <div class="settings-card" id="audioOutputsList">
-            <div style="font-size:0.85rem; color:var(--text-muted); padding:6px 2px;">
-              Detectando salidas de audio en MPD...
+          <div class="settings-section-title" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Salida de Audio Conmutable (Hardware)</span>
+            <button type="button" id="btnRefreshOutputs" class="btn-secondary" style="height:28px; padding:0 10px; font-size:0.74rem; border-radius:var(--radius-full);">
+              🔄 Redetectar DAC
+            </button>
+          </div>
+          <div class="settings-card">
+            <div id="audioOutputsList">
+              <div style="font-size:0.85rem; color:var(--text-muted); padding:6px 2px;">
+                Detectando salidas de audio en MPD...
+              </div>
             </div>
+            <div id="audioOutputsDiagnostics" style="margin-top:8px;"></div>
           </div>
         </div>
 
@@ -530,7 +538,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=13"></script>
+  <script type="module" src="/js/app.js?v=14"></script>
 </body>
 </html>
 

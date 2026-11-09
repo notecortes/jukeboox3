@@ -15,10 +15,10 @@ services:
     ports:
       - "4080:4080"  # Interfaz Web Principal PWA y API REST
       - "4081:4081"  # Métricas del Sistema y Panel de Administración
-    devices:
-      - "/dev/snd:/dev/snd"
     group_add:
       - "audio"
+    device_cgroup_rules:
+      - "c 116:* rmw"
     environment:
       - PORT=4080
       - ADMIN_PORT=4081
@@ -36,7 +36,8 @@ services:
       - NAS_PASS=${NAS_PASS:-}
       - NAS_OPTIONS=${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8}
     volumes:
-      # Puntos de montaje de almacenamiento de música
+      # Puntos de montaje de almacenamiento de música y bus ALSA dinámico (hotplug USB DAC)
+      - /dev/snd:/dev/snd
       - ./music/local:/music/local:ro
       - nas_music:/music/nas:ro
       - ./music/usb:/music/usb:ro
@@ -66,11 +67,12 @@ services:
     ports:
       - "4600:6600"  # Puerto de control MPD en rango 4000 (evita colisión con 6600)
       - "4082:4082"  # Transmisión Web HTTP Hi-Fi para smartphones o navegadores
-    devices:
-      - "/dev/snd:/dev/snd"
     group_add:
       - "audio"
+    device_cgroup_rules:
+      - "c 116:* rmw"
     volumes:
+      - /dev/snd:/dev/snd
       - ./config/mpd.conf:/etc/mpd.conf:ro
       - ./data/mpd:/var/lib/mpd
       - mpd_run:/run/mpd

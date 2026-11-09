@@ -190,6 +190,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/player/volume/step", s.handleVolumeStep)
 	mux.HandleFunc("/api/player/volume/max", s.handleVolumeMax)
 	mux.HandleFunc("/api/player/output", s.handleSelectOutput)
+	mux.HandleFunc("/api/player/outputs/refresh", s.handleRefreshOutputs)
+	mux.HandleFunc("/api/player/outputs/diagnostics", s.handleAudioDiagnostics)
 	mux.HandleFunc("/api/player/config", s.handleAudioConfig)
 	mux.HandleFunc("/api/player/sleeptimer", s.handleSleepTimer)
 
@@ -447,6 +449,24 @@ func (s *Server) handleSelectOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, s.player.GetState())
+}
+
+// handleRefreshOutputs re-escanea los dispositivos ALSA del host/contenedor y actualiza MPD en caliente.
+func (s *Server) handleRefreshOutputs(w http.ResponseWriter, r *http.Request) {
+	diag, err := s.player.RefreshAudioOutputs()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"state":       s.player.GetState(),
+		"diagnostics": diag,
+	})
+}
+
+// handleAudioDiagnostics devuelve las salidas de audio activas y la lectura cruda de tarjetas ALSA.
+func (s *Server) handleAudioDiagnostics(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, s.player.GetAudioDiagnostics())
 }
 
 // handleAudioConfig ajusta ReplayGain y Crossfade en MPD.

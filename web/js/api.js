@@ -85,6 +85,16 @@ export function selectAudioOutput(outputId) {
   return requestHelper(`/player/output?id=${encodeURIComponent(outputId)}`, { method: 'POST' });
 }
 
+// refreshAudioOutputs fuerza a MPD a re-escanear tarjetas ALSA / DAC USB conectados tras el arranque.
+export function refreshAudioOutputs() {
+  return requestHelper('/player/outputs/refresh', { method: 'POST' });
+}
+
+// getAudioDiagnostics consulta las salidas actuales en MPD y la lista ALSA (aplay -l) del contenedor.
+export function getAudioDiagnostics() {
+  return requestHelper('/player/outputs/diagnostics');
+}
+
 // setAudioConfig ajusta parámetros audiófilos de ReplayGain y Crossfade.
 export function setAudioConfig(replayGain, crossfade) {
   return requestHelper(`/player/config?replay_gain=${encodeURIComponent(replayGain)}&crossfade=${encodeURIComponent(crossfade)}`, { method: 'POST' });

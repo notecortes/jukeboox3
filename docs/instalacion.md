@@ -278,10 +278,10 @@ AuraBox está optimizado con ergonomía **Thumb-First** para manejarse cómodame
 
 Accede a la pestaña **Ajustes** en la aplicación para configurar:
 
-1. **Selector de Salida en Caliente:**
+1. **Selector de Salida en Caliente (Hardware + Hotplug):**
    * **Jack 3.5mm Analógico:** Para la salida de auriculares de la Raspberry Pi (`snd_bcm2835`).
-   * **DAC USB Externo (`hw:1,0`):** Máxima fidelidad mediante convertidor digital-analógico USB externo.
-   * **DAC I2S HAT:** Para tarjetas dedicadas de audio conectadas en GPIO (HiFiBerry, IQaudio, etc.).
+   * **DAC USB Externo:** Máxima fidelidad Plug & Play mediante convertidor digital-analógico USB externo (`plughw:CARD=...`). Si enciendes o conectas el DAC después de arrancar AuraBox, pulsa **🔄 Redetectar DAC** en **Ajustes** (el sistema también lo detecta automáticamente en reposo).
+   * **DAC I2S HAT:** Para tarjetas dedicadas de audio conectadas en GPIO (HiFiBerry, IQaudio, Allo Boss, etc.). *(En una microSD nueva con Raspberry Pi OS, requiere activar su línea `dtoverlay=` en `/boot/firmware/config.txt` y reiniciar la Pi).*
    * **Transmisión Web HTTP:** Para retransmitir la música a móviles o navegadores web remotos.
 2. **Normalización ReplayGain:**
    * Modo `Pista` o `Álbum` para evitar saltos molestos de volumen entre distintas grabaciones.
@@ -315,10 +315,28 @@ docker compose up -d --build
 ```
 
 ### Problemas comunes:
+* **No aparece el DAC USB o I2S HAT en la lista de salidas de Ajustes:**
+  1. **Si usas un DAC USB externo:**
+     * Comprueba que el DAC está encendido y bien conectado a un puerto USB de la Raspberry Pi (algunos DACs requieren alimentación propia o seleccionar entrada USB).
+     * Pulsa el botón **🔄 Redetectar DAC** en **Ajustes → Salida de Audio Conmutable** (AuraBox usa mapeo dinámico `/dev/snd` + cgroup `116:*` para detectar DACs enchufados o encendidos en caliente sin reiniciar Docker).
+  2. **Si usas una placa DAC I2S HAT sobre los pines GPIO (HiFiBerry, Allo Boss, IQaudio, InnoMaker, etc.):**
+     * Tras grabar una microSD nueva con Raspberry Pi OS, Linux **no activa el driver I2S automáticamente** hasta declararlo en el gestor de arranque.
+     * Edita el archivo de configuración de arranque en la Raspberry Pi:
+       ```bash
+       sudo nano /boot/firmware/config.txt
+       ```
+       Añade al final la línea `dtoverlay=` exacta de tu placa, por ejemplo:
+       * HiFiBerry DAC+ / Standard / InnoMaker DAC: `dtoverlay=hifiberry-dacplus`
+       * HiFiBerry DAC2 HD: `dtoverlay=hifiberry-dacplushd`
+       * IQaudio DAC+ / Pi-DAC PRO: `dtoverlay=iqaudio-dacplus`
+       * Allo Boss DAC: `dtoverlay=allo-boss-dac-pcm512x-audio`
+       * DAC I2S genérico PCM5102A: `dtoverlay=hifiberry-dac`
+     * Reinicia la Raspberry Pi (`sudo reboot`) y verifica por SSH con `aplay -l` que aparece la nueva tarjeta antes de seleccionarla en **Ajustes**.
+  3. Revisa debajo de las salidas el cuadro **«¿No aparece tu DAC?»**: AuraBox te mostrará exactamente las tarjetas ALSA (`card 0`, `card 1`…) que detecta el kernel dentro del contenedor.
 * **No suena la música por el amplificador en Raspberry Pi:**
   1. Ve a **Ajustes** en la web (`http://<IP>:4080`) y verifica qué salida está seleccionada.
-  2. Si usas DAC USB, asegúrate de que el contenedor tiene acceso a `/dev/snd` (está configurado por defecto en `docker-compose.yml`).
-  3. Ejecuta en la terminal de la Raspberry Pi: `aplay -l` para verificar que Linux reconoce tu DAC.
+  2. Ejecuta en la terminal de la Raspberry Pi: `aplay -l` para verificar qué tarjetas ALSA reconoce Linux.
+  3. Si usas Docker en la Pi y el DAC no aparecía al arrancar, pulsa **🔄 Redetectar DAC** o actualiza con `git pull && sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build`.
 * **Error `permission denied` al montar el volumen del NAS (`nas_music`):**
   1. Si la contraseña del NAS contiene símbolos especiales (como `#`, `$` o espacios), envuélvela en comillas simples en `.env`: `NAS_PASS='tu_contraseña'`.
   2. Recuerda que Docker guarda las credenciales dentro del volumen una vez creado. Después de corregir `.env`, ejecuta:
