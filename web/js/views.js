@@ -1892,8 +1892,11 @@ async function loadSecurityStatus() {
         btnOpenHTTPS.style.display = 'flex';
       }
     } else {
-      titleEl.textContent = 'HTTPS desactivado en el servidor';
+      titleEl.textContent = 'Modo solo HTTP activo (sin HTTPS)';
       badgeEl.textContent = 'HTTP';
+      if (cardEl) cardEl.style.borderLeft = '4px solid var(--text-muted)';
+      descEl.innerHTML = 'Estás entrando directamente por HTTP sin cifrado ni avisos de certificado. ' +
+        'Si quieres reactivar HTTPS cifrado e instalación PWA, ejecuta <code>./scripts/setup-https-pi.sh</code> en la Raspberry Pi.';
       if (btnOpenHTTPS) btnOpenHTTPS.style.display = 'none';
     }
 

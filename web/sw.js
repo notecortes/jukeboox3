@@ -1,16 +1,15 @@
 // =====================================================================
-// AuraBox Service Worker - PWA Caching & Offline Capabilities
+// AuraBox Service Worker - PWA Caching & Offline Recovery
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v14';
+const CACHE_NAME = 'aurabox-v15';
 const STATIC_ASSETS = [
   '/',
-  '/index.html',
   '/manifest.json',
-  '/css/app.css',
-  '/css/player.css',
-  '/css/views.css',
-  '/js/app.js',
+  '/css/app.css?v=12',
+  '/css/player.css?v=12',
+  '/css/views.css?v=12',
+  '/js/app.js?v=17',
   '/js/state.js',
   '/js/api.js',
   '/js/gestures.js',
@@ -44,7 +43,76 @@ function shouldBypassServiceWorker(request, url) {
   return false;
 }
 
-// handleNetworkFirst resuelve primero contra red y garantiza siempre un Response válido en respaldo offline.
+// buildOfflinePageResponse genera una página HTML autónoma de recuperación cuando no hay conexión con esta URL/puerto.
+function buildOfflinePageResponse(requestUrl) {
+  let host = self.location.hostname || '127.0.0.1';
+  try {
+    host = new URL(requestUrl).hostname || host;
+  } catch (e) {}
+
+  const httpDirect = `http://${host}:4080/`;
+  const httpBare = `http://${host}/`;
+  const httpsDirect = `https://${host}:4443/`;
+
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AuraBox — Sin conexión</title>
+  <style>
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#08090d;color:#f3f4f6;font-family:system-ui,-apple-system,sans-serif;padding:20px;box-sizing:border-box;}
+    .card{max-width:440px;width:100%;background:#121521;border:1px solid rgba(255,255,255,0.1);border-radius:18px;padding:24px;box-shadow:0 16px 40px rgba(0,0,0,0.45);}
+    h1{margin:0 0 8px;font-size:1.2rem;}
+    p{margin:0 0 14px;color:#9ca3af;font-size:0.9rem;line-height:1.45;}
+    code{background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:6px;font-size:0.82rem;color:#e5e7eb;}
+    .actions{display:flex;flex-direction:column;gap:10px;margin-top:16px;}
+    a,button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;border-radius:12px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#f9fafb;font-weight:600;font-size:0.92rem;text-decoration:none;cursor:pointer;padding:8px 14px;}
+    .primary{background:#6366f1;border-color:#6366f1;}
+    .danger{background:rgba(239,68,68,0.16);border-color:rgba(239,68,68,0.4);color:#fca5a5;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>No se puede conectar con AuraBox</h1>
+    <p>El servidor no responde en <code>${self.location.origin}</code>. Si acabas de desactivar HTTPS o cambiar los puertos en la Raspberry Pi, entra por la dirección activa:</p>
+    <div class="actions">
+      <a class="primary" href="${httpDirect}">Abrir por HTTP (${httpDirect})</a>
+      <a href="${httpBare}">Abrir por HTTP puerto 80 (${httpBare})</a>
+      <a href="${httpsDirect}">Abrir por HTTPS directo (${httpsDirect})</a>
+      <button type="button" onclick="location.reload()">Reintentar aquí</button>
+      <button type="button" class="danger" id="btnResetSW">Limpiar caché PWA de este navegador</button>
+    </div>
+  </div>
+  <script>
+    document.getElementById('btnResetSW').addEventListener('click', async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+      } catch (e) {}
+      location.href = '${httpDirect}';
+    });
+  </script>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: 503,
+    statusText: 'Service Unavailable',
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
+// handleNetworkFirst resuelve primero contra red y garantiza siempre una respuesta HTTP válida sin pasar Error Responses.
 async function handleNetworkFirst(request) {
   try {
     const networkResponse = await fetch(request);
@@ -56,17 +124,28 @@ async function handleNetworkFirst(request) {
     }
     return networkResponse;
   } catch (err) {
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
     if (request.mode === 'navigate') {
-      const indexFallback = await caches.match('/index.html');
-      if (indexFallback) {
-        return indexFallback;
-      }
+      return buildOfflinePageResponse(request.url);
     }
-    return Response.error();
+
+    const exactMatch = await caches.match(request);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const looseMatch = await caches.match(request, { ignoreSearch: true });
+    if (looseMatch) {
+      return looseMatch;
+    }
+
+    return new Response('', {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store'
+      }
+    });
   }
 }
 
@@ -100,4 +179,3 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(handleNetworkFirst(event.request));
 });
-

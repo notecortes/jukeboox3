@@ -341,10 +341,17 @@ chmod +x scripts/setup-https-pi.sh
 4. Si `ufw` está activo, abre `80/tcp` y `443/tcp`.
 5. Reconstruye y reinicia `aurabox` (`sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build aurabox`) y valida tanto la redirección `307` en el puerto `80` como la respuesta HTTPS en el puerto `443`.
 
-Para **deshacer** el enrutado de puertos `80`/`443` en cualquier momento y volver a `:4080`/`:4443`:
+Para cambiar a **solo HTTP directo poniendo únicamente la IP** (`http://<IP_RASPBERRY>` sin `:4080`, sin redirección a HTTPS y sin avisos de certificado):
+```bash
+./scripts/setup-https-pi.sh --http
+```
+
+Y para **deshacer** el enrutado de puertos `80`/`443` en cualquier momento y volver a los puertos originales (`http://<IP>:4080` y `https://<IP>:4443`):
 ```bash
 ./scripts/setup-https-pi.sh --disable
 ```
+
+> **Nota sobre caché PWA (Firefox/Chrome):** Si antes habías abierto `https://<IP_RASPBERRY>/` y después ejecutas `--http` o `--disable` (que cierran el puerto `443`), entra poniendo `http://` explícito o el puerto `:4080` / `:4443`. Si Firefox sigue intentando cargar una versión antigua en caché de `https://<IP_RASPBERRY>/`, abre `about:serviceworkers` en Firefox y pulsa **Cancelar el registro** en esa URL.
 
 #### Cómo instalar el certificado `aurabox-ca.crt` para eliminar el aviso del navegador
 

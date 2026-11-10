@@ -505,7 +505,7 @@ function initWebStreamPlayer() {
 // registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=14').then((reg) => {
+    navigator.serviceWorker.register('/sw.js?v=15').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);
