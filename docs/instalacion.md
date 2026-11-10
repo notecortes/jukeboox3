@@ -5,9 +5,9 @@
 Esta guía cubre:
 1. **Despliegue e Instalación en una Raspberry Pi (3B+, 4 o 5)** conectada al NAS y al amplificador.
 2. **Uso en Cualquier Otro Ordenador con Docker** (Linux, Windows o macOS).
-3. **Configuración de Salidas de Audio Hi-Fi (USB DAC, I2S HAT y Jack)**.
-4. **Activación de HTTPS, Redirección Automática por IP e Instalación de Certificado CA**.
-5. **Mantenimiento y Solución de Problemas**.
+3. **Configuración de Salidas de Audio Hi-Fi (USB DAC, I2S HAT y Jack) y Radios Web.**
+4. **Acceso Directo por IP (HTTPS con Certificado CA o Modo Solo HTTP).**
+5. **Mantenimiento y Solución de Problemas.**
 
 ---
 
@@ -78,7 +78,7 @@ Elige una de las siguientes tres opciones de audio según tu equipo:
 ```
 
 * **Opción A (Recomendada para Hi-Fi - DAC USB):** Conecta tu DAC USB (Topping, SMSL, Schiit, Cambridge Audio, etc.) a un puerto USB de la Raspberry Pi. Luego conecta cables RCA estéreo desde las salidas `LINE OUT` del DAC a una entrada de línea (`AUX`, `CD` o `TAPE`) de tu amplificador.
-* **Opción B (DAC HAT I2S):** Si utilizas una tarjeta HAT montada sobre los pines GPIO (HiFiBerry DAC+, DAC2 HD, Allo Boss, IQaudio), conecta los cables RCA directamente desde la tarjeta HAT al amplificador.
+* **Opción B (DAC HAT I2S):** Si utilizas una tarjeta HAT montada sobre los pines GPIO (Dual ES9023, HiFiBerry DAC+, DAC2 HD, Allo Boss, IQaudio), conecta los cables RCA directamente desde la tarjeta HAT al amplificador y recuerda activar su `dtoverlay=` en `/boot/firmware/config.txt` (ver sección de problemas comunes en la **Parte 5**).
 * **Opción C (Jack analógico 3.5mm integrado):** Conecta un cable con conector Jack 3.5mm en un extremo (a la salida de audio de la Raspberry Pi) y dos conectores RCA (blanco y rojo) al amplificador.
 
 ---
@@ -162,7 +162,8 @@ NAS_OPTIONS=vers=3.0,sec=ntlmssp,ro,iocharset=utf8
 
 #### Paso 4: Arrancar AuraBox
 ```bash
-docker compose up -d --build
+# En Raspberry Pi se recomienda limitar la compilación en paralelo para evitar picos de RAM:
+sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
 ```
 
 #### Paso 5: Comprobar que los contenedores están activos
@@ -274,9 +275,9 @@ AuraBox está optimizado con ergonomía **Thumb-First** para manejarse cómodame
 1. **Averigua la IP local del equipo donde corre AuraBox:**
    * En la Raspberry Pi o Linux: `hostname -I` (ejemplo: `192.168.1.113`).
 2. **Abre el navegador en tu smartphone:**
-   * **Acceso estándar HTTP:** `http://192.168.1.113:4080`
-   * **Acceso cifrado HTTPS:** `https://192.168.1.113:4443` (o directamente **`https://192.168.1.113`** / `192.168.1.113` sin puerto si activas la redirección automática explicada en la sección **HTTPS y Acceso Directo** más abajo).
-   > 💡 **Recomendado usar HTTPS en móviles y navegadores modernos:** Evita alertas como *«Campos de contraseña presentes en una página insegura»* al configurar el NAS en **Ajustes** y habilita la instalación completa como **PWA** y controles nativos en pantalla de bloqueo (`MediaSession`).
+   * **Acceso estándar por puerto:** `http://192.168.1.113:4080` (HTTP) o `https://192.168.1.113:4443` (HTTPS).
+   * **Acceso directo poniendo solo la IP:** `https://192.168.1.113` (con `./scripts/setup-https-pi.sh`) o `http://192.168.1.113` en modo solo HTTP sin certificados (`./scripts/setup-https-pi.sh --http`).
+   > 💡 **Recomendado usar HTTPS si quieres instalar la PWA en el móvil:** Evita alertas de *«Página no segura»* al rellenar credenciales del NAS en **Ajustes** y habilita la instalación completa como **PWA** y controles en pantalla de bloqueo (`MediaSession`).
 3. **Instalar como Aplicación Nativa (PWA):**
    * *(Si usas HTTPS con la CA local, instala primero `aurabox-ca.crt` como se detalla más abajo para que el navegador reconozca la conexión como de confianza total).*
    * **En Android (Chrome):** Toca los tres puntos de la esquina superior derecha y selecciona **«Añadir a pantalla de inicio»** o **«Instalar aplicación»**.
@@ -305,7 +306,16 @@ Accede a la pestaña **Ajustes** en la aplicación para configurar:
 4. **Salvaguarda de Volumen:**
    * Limita el volumen máximo (por ejemplo al 85%) para proteger tus altavoces y oídos de pulsaciones accidentales al 100%.
 
-### 🔒 HTTPS y Acceso Directo poniendo solo la IP (sin escribir `:4080` ni `:4443`)
+### 📻 Emisoras de Radio Web Hi-Fi (incluidas emisoras españolas)
+
+AuraBox integra de fábrica un catálogo de **283 emisoras de radio por internet** listas para sonar en tu amplificador o en el navegador/móvil:
+
+* **Filtro España (`🇪🇸 España`):** Incluye **50 emisoras españolas** nacionales y temáticas listas en 1 toque (RNE Radio Nacional, RNE Radio 3, RNE Radio Clásica, RNE Radio 5 Todo Noticias, Cadena SER, COPE Nacional, Onda Cero, LOS40, Rock FM España, Kiss FM España, Europa FM, Catalunya Ràdio, RAC1, Canal Sur Radio, EITB Radio Euskadi, entre otras).
+* **Acceso rápido:** En **Biblioteca → Radios** o **Ajustes → Emisoras de Radio Web Hi-Fi**, donde puedes filtrar por país/género, buscar por nombre o abrir el catálogo completo.
+* **Emisoras personalizadas (`.m3u` / `.pls` / `.m3u8` / stream directo):** Puedes añadir tus propias emisoras indicando nombre, género y URL (resuelve automáticamente listas `.m3u` / `.pls`) o eliminar emisoras personalizadas desde la interfaz o `POST / DELETE /api/radios`.
+* **Estabilidad en directo:** Muestra en tiempo real el programa o canción emitida (`StreamTitle` vía ICY), reconecta automáticamente si la emisora sufre microcortes de red (hasta 3 reintentos) y usa `/api/stream` cuando navegas por HTTPS para escucharla también desde el móvil sin bloqueos de contenido mixto.
+
+### 🔒 Acceso Directo poniendo solo la IP (HTTPS o Solo HTTP, sin escribir `:4080` ni `:4443`)
 
 AuraBox incorpora un servidor **HTTPS nativo (TLS 1.2+) en el puerto `4443`**, manteniendo `docker-compose.yml` estrictamente dentro del rango `4000`:
 
@@ -313,13 +323,13 @@ AuraBox incorpora un servidor **HTTPS nativo (TLS 1.2+) en el puerto `4443`**, m
 * Cada acceso por una nueva IP de tu LAN o nombre mDNS (`aurabox.local`) añade dinámicamente esa dirección a los **SAN** (*Subject Alternative Names*) del certificado sin reiniciar el servidor.
 * Cuando navegas por **HTTPS**, el botón **📻 Móvil / Web** reproduce automáticamente el audio a través de `/api/stream` (mismo origen cifrado), evitando bloqueos por *Mixed Content* de `http://...:4082`.
 
-#### Opción A: Acceso rápido por HTTPS en el puerto `:4443` (sin cambios en el sistema)
+#### Opción A: Acceso estándar en puertos `:4080` / `:4443` (sin tocar puertos del sistema)
 
-1. Abre directamente en tu navegador: `https://<IP_RASPBERRY>:4443` (o dentro de AuraBox entra en **Ajustes → Conexión Segura HTTPS y Acceso por IP** y pulsa **🔒 Abrir en HTTPS**).
+1. Entra en `http://<IP_RASPBERRY>:4080` (HTTP) o `https://<IP_RASPBERRY>:4443` (HTTPS, o desde **Ajustes → Conexión Segura HTTPS → 🔒 Abrir en HTTPS**).
 
-#### Opción B: Entrar poniendo únicamente la IP (`192.168.x.x` → `https://192.168.x.x`)
+#### Opción B: Entrar poniendo únicamente la IP con HTTPS (`192.168.x.x` → `https://192.168.x.x`)
 
-Si quieres teclear solo la IP en el navegador (o en el móvil) y que redirija automáticamente al puerto correcto con HTTPS limpio en el puerto `443`, ejecuta el asistente incluido en tu Raspberry Pi:
+Si quieres teclear solo la IP en el navegador (o en el móvil) y que redirija automáticamente a HTTPS limpio en el puerto `443`:
 
 ```bash
 cd ~/aurabox
@@ -341,12 +351,16 @@ chmod +x scripts/setup-https-pi.sh
 4. Si `ufw` está activo, abre `80/tcp` y `443/tcp`.
 5. Reconstruye y reinicia `aurabox` (`sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build aurabox`) y valida tanto la redirección `307` en el puerto `80` como la respuesta HTTPS en el puerto `443`.
 
-Para cambiar a **solo HTTP directo poniendo únicamente la IP** (`http://<IP_RASPBERRY>` sin `:4080`, sin redirección a HTTPS y sin avisos de certificado):
+#### Opción C: Entrar poniendo únicamente la IP en solo HTTP (`192.168.x.x` → `http://192.168.x.x`, sin HTTPS ni certificados)
+
+Si prefieres no instalar ningún certificado CA y acceder simplemente escribiendo `http://<IP_RASPBERRY>` sin `:4080` ni redirecciones HTTPS:
 ```bash
 ./scripts/setup-https-pi.sh --http
 ```
+*(Desactiva el puerto `443`, fija `HTTPS_PORT=off` y `FORCE_HTTPS=false` en `.env`, y activa únicamente `aurabox-port80.socket` hacia `127.0.0.1:4080`).*
 
-Y para **deshacer** el enrutado de puertos `80`/`443` en cualquier momento y volver a los puertos originales (`http://<IP>:4080` y `https://<IP>:4443`):
+#### Deshacer la redirección de puertos `80`/`443`
+Para eliminar los sockets de los puertos `80` y `443` y volver a los puertos originales (`http://<IP>:4080` y `https://<IP>:4443`):
 ```bash
 ./scripts/setup-https-pi.sh --disable
 ```
@@ -408,16 +422,19 @@ Instálalo como **Entidad emisora raíz de confianza** en los dispositivos que u
 > ```
 > O en **Caddy** (con `HTTPS_PORT=off` en `.env`): `reverse_proxy 127.0.0.1:4080`.
 
-#### Comprobación y diagnóstico de HTTPS
+#### Comprobación y diagnóstico de puertos directos y TLS
 
 ```bash
 # 1. Ver estado de los sockets de redirección 80/443 en la Raspberry Pi
+#    (En modo --http solo estará activo aurabox-port80.socket)
 sudo systemctl status aurabox-port80.socket aurabox-port443.socket
 
-# 2. Comprobar que entrar sin puerto devuelve redirección 307 hacia https://
+# 2. Comprobar puerto 80:
+#    - Modo HTTPS: debe devolver redirección 307 hacia https://
+#    - Modo --http: debe devolver HTTP/1.1 200 OK
 curl -I http://<IP_RASPBERRY>/
 
-# 3. Consultar estado TLS, URL segura y SAN activos
+# 3. En modo HTTPS: consultar estado TLS, URL segura y SAN activos
 curl -sk https://<IP_RASPBERRY>/api/security/status
 ```
 
@@ -471,9 +488,16 @@ sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
   2. Si `setup-https-pi.sh` avisa de conflicto en puerto `80` o `443`, tienes otro servicio web en la Pi (por ejemplo Apache, Nginx o Pi-hole): libera esos puertos o añade un proxy inverso apuntando a `127.0.0.1:4080` / `127.0.0.1:4443`.
   3. Si usas iPhone/iPad, recuerda activar además **Ajustes → General → Información → Ajustes de confianza de certificados** tras instalar el perfil `AuraBox Local Root CA`.
 * **No suena la música por el amplificador en Raspberry Pi:**
-  1. Ve a **Ajustes** en la web (`https://<IP>` o `http://<IP>:4080`) y verifica qué salida está seleccionada.
+  1. Ve a **Ajustes** en la web (`https://<IP>`, `http://<IP>` con `--http`, o `http://<IP>:4080`) y verifica qué salida está seleccionada.
   2. Ejecuta en la terminal de la Raspberry Pi: `aplay -l` para verificar qué tarjetas ALSA reconoce Linux.
   3. Si usas Docker en la Pi y el DAC no aparecía al arrancar, pulsa **🔄 Redetectar DAC** o actualiza con `git pull && sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build`.
+* **Error en Firefox (`Un ServiceWorker ha pasado un Error Response a FetchEvent.respondWith()`) tras desactivar HTTPS o cambiar puertos:**
+  1. Al ejecutar `./scripts/setup-https-pi.sh --disable` (o `--http`), el puerto `443` deja de responder, mientras que una pestaña abierta en `https://<IP>/` podía conservar el Service Worker anterior en caché.
+  2. Abre la dirección activa (`http://<IP>:4080` con `--disable`, `http://<IP>` con `--http`, o `https://<IP>:4443`).
+  3. En Firefox, abre `about:serviceworkers` y pulsa **Cancelar el registro** sobre la URL antigua `https://<IP>/`. A partir de la caché `aurabox-v15`, AuraBox muestra además una tarjeta de recuperación con acceso en 1 toque a los puertos activos y limpieza automática del caché PWA.
+* **Microcortes o bloqueos tras muchas horas de uso / reproducción en radios web:**
+  1. AuraBox re-sincroniza automáticamente la cola si MPD se reinicia, reintenta hasta 3 veces las emisoras de radio en directo si cae el stream origen, y reconecta en segundo plano el canal SSE y `/api/stream` (sin cortar por timeout largo ni cachear flujos en `sw.js`).
+  2. Si quieres verificar el estado interno de los contenedores tras un corte eléctrico o pérdida de DAC, consulta `http://<IP>:4081/health` y revisa `docker compose logs --tail=50 aurabox mpd`.
 * **Error `permission denied` al montar el volumen del NAS (`nas_music`):**
   1. Si la contraseña del NAS contiene símbolos especiales (como `#`, `$` o espacios), envuélvela en comillas simples en `.env`: `NAS_PASS='tu_contraseña'`.
   2. Recuerda que Docker guarda las credenciales dentro del volumen una vez creado. Después de corregir `.env`, ejecuta:
