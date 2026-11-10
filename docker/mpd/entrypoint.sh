@@ -95,12 +95,12 @@ bind_to_address         "/run/mpd/socket"
 bind_to_address         "0.0.0.0"
 port                    "6600"
 log_level               "default"
-auto_update             "yes"
-auto_update_depth       "10"
+zeroconf_enabled        "no"
+auto_update             "no"
 
-audio_buffer_size       "4096"
-buffer_before_play      "20%"
-max_output_buffer_size  "16384"
+audio_buffer_size       "8192"
+buffer_before_play      "10%"
+max_output_buffer_size  "32768"
 connection_timeout      "300"
 max_connections         "30"
 
@@ -313,6 +313,12 @@ while [ "$STOP_REQUESTED" -eq 0 ]; do
     CUR_RAW=$(LC_ALL=C aplay -l 2>&1 || true)
     CUR_SIG=$(printf '%s\n' "$CUR_RAW" | grep '^card ' || true)
     if [ "$CUR_SIG" != "$LAST_CARDS_SIG" ]; then
+        if [ -z "$CUR_SIG" ] && [ -n "$LAST_CARDS_SIG" ]; then
+            sleep 1
+            CUR_RAW=$(LC_ALL=C aplay -l 2>&1 || true)
+            CUR_SIG=$(printf '%s\n' "$CUR_RAW" | grep '^card ' || true)
+            [ "$CUR_SIG" = "$LAST_CARDS_SIG" ] && continue
+        fi
         printf '%s\n' "$CUR_RAW" > "$ALSA_DIAG_FILE"
         chmod 644 "$ALSA_DIAG_FILE" 2>/dev/null || true
         if ! MPD_HOST=/run/mpd/socket mpc status 2>/dev/null | grep -q '\[playing\]'; then

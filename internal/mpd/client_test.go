@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -535,5 +536,451 @@ func TestRadioStatusErrorAndStreamTitle(t *testing.T) {
 	cmdMu.Unlock()
 	if !strings.Contains(joined, "clearerror") {
 		t.Fatalf("se esperaba envío de comando clearerror tras capturar error MPD; comandos:\n%s", joined)
+	}
+}
+
+type mockMPDBackend struct {
+	mu          sync.Mutex
+	playlist    []string
+	state       string
+	song        int
+	errMsg      string
+	addDelay    time.Duration
+	failAddPath string
+	cmds        []string
+}
+
+// startStatefulMockMPDServer levanta un servidor MPD en memoria con soporte completo de playlistlength, move, delete y errores.
+func startStatefulMockMPDServer(t *testing.T, sockPath string) *mockMPDBackend {
+	t.Helper()
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Listen unix falló: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	srv := &mockMPDBackend{
+		state: "stop",
+		song:  -1,
+	}
+
+	unquote := func(s string) string {
+		s = strings.TrimSpace(s)
+		if len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+			s = s[1 : len(s)-1]
+			s = strings.ReplaceAll(s, `\"`, `"`)
+			s = strings.ReplaceAll(s, `\\`, `\`)
+		}
+		return s
+	}
+
+	go func() {
+		for {
+			conn, aErr := ln.Accept()
+			if aErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = c.Write([]byte("OK MPD 0.24.18\n"))
+				r := bufio.NewReader(c)
+				for {
+					line, rErr := r.ReadString('\n')
+					if rErr != nil {
+						return
+					}
+					trimmed := strings.TrimSpace(line)
+					srv.mu.Lock()
+					srv.cmds = append(srv.cmds, trimmed)
+					addDelay := srv.addDelay
+					failPath := srv.failAddPath
+					srv.mu.Unlock()
+
+					switch {
+					case trimmed == "outputs":
+						_, _ = c.Write([]byte("outputid: 0\noutputname: DAC USB Test\nplugin: alsa\noutputenabled: 1\nOK\n"))
+					case trimmed == "status":
+						srv.mu.Lock()
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("volume: 65\nrepeat: 0\nstate: %s\nplaylistlength: %d\n", srv.state, len(srv.playlist)))
+						if srv.song >= 0 && srv.song < len(srv.playlist) {
+							sb.WriteString(fmt.Sprintf("song: %d\nelapsed: 5.0\nduration: 200.0\n", srv.song))
+						}
+						if srv.errMsg != "" {
+							sb.WriteString(fmt.Sprintf("error: %s\n", srv.errMsg))
+						}
+						sb.WriteString("OK\n")
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte(sb.String()))
+					case trimmed == "playlistinfo":
+						srv.mu.Lock()
+						var sb strings.Builder
+						for idx, p := range srv.playlist {
+							sb.WriteString(fmt.Sprintf("file: %s\nPos: %d\n", p, idx))
+						}
+						sb.WriteString("OK\n")
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte(sb.String()))
+					case trimmed == "clear":
+						srv.mu.Lock()
+						srv.playlist = nil
+						srv.state = "stop"
+						srv.song = -1
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "add "):
+						if addDelay > 0 {
+							time.Sleep(addDelay)
+						}
+						arg := unquote(strings.TrimPrefix(trimmed, "add "))
+						if failPath != "" && strings.Contains(arg, failPath) {
+							_, _ = c.Write([]byte("ACK [50@0] {add} No such directory\n"))
+							continue
+						}
+						srv.mu.Lock()
+						srv.playlist = append(srv.playlist, arg)
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "addid "):
+						rest := strings.TrimPrefix(trimmed, "addid ")
+						lastQuote := strings.LastIndex(rest, `"`)
+						arg := unquote(rest)
+						pos := -1
+						if lastQuote >= 0 && lastQuote+1 < len(rest) {
+							if parsedPos, pErr := strconv.Atoi(strings.TrimSpace(rest[lastQuote+1:])); pErr == nil {
+								pos = parsedPos
+							}
+							arg = unquote(rest[:lastQuote+1])
+						}
+						srv.mu.Lock()
+						if pos < 0 || pos > len(srv.playlist) {
+							srv.playlist = append(srv.playlist, arg)
+						} else {
+							srv.playlist = append(srv.playlist, "")
+							copy(srv.playlist[pos+1:], srv.playlist[pos:])
+							srv.playlist[pos] = arg
+						}
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("Id: 1\nOK\n"))
+					case strings.HasPrefix(trimmed, "delete "):
+						spec := strings.TrimSpace(strings.TrimPrefix(trimmed, "delete "))
+						srv.mu.Lock()
+						if strings.Contains(spec, ":") {
+							parts := strings.SplitN(spec, ":", 2)
+							start, _ := strconv.Atoi(parts[0])
+							end, _ := strconv.Atoi(parts[1])
+							if start >= 0 && start <= end && end <= len(srv.playlist) {
+								srv.playlist = append(srv.playlist[:start], srv.playlist[end:]...)
+							}
+						} else if idx, err := strconv.Atoi(spec); err == nil && idx >= 0 && idx < len(srv.playlist) {
+							srv.playlist = append(srv.playlist[:idx], srv.playlist[idx+1:]...)
+						}
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "move "):
+						fields := strings.Fields(strings.TrimPrefix(trimmed, "move "))
+						srv.mu.Lock()
+						if len(fields) == 2 {
+							from, _ := strconv.Atoi(fields[0])
+							to, _ := strconv.Atoi(fields[1])
+							if from >= 0 && from < len(srv.playlist) && to >= 0 && to < len(srv.playlist) {
+								item := srv.playlist[from]
+								srv.playlist = append(srv.playlist[:from], srv.playlist[from+1:]...)
+								newPL := make([]string, 0, len(srv.playlist)+1)
+								newPL = append(newPL, srv.playlist[:to]...)
+								newPL = append(newPL, item)
+								newPL = append(newPL, srv.playlist[to:]...)
+								srv.playlist = newPL
+							}
+						}
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "play"):
+						parts := strings.Fields(trimmed)
+						idx := 0
+						if len(parts) > 1 {
+							idx, _ = strconv.Atoi(parts[1])
+						}
+						srv.mu.Lock()
+						if idx < 0 || idx >= len(srv.playlist) {
+							srv.mu.Unlock()
+							_, _ = c.Write([]byte("ACK [2@0] {play} Bad song index\n"))
+							continue
+						}
+						srv.song = idx
+						srv.state = "play"
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case trimmed == "pause 0":
+						srv.mu.Lock()
+						if srv.state == "pause" {
+							srv.state = "play"
+						}
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case trimmed == "pause 1":
+						srv.mu.Lock()
+						srv.state = "pause"
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case trimmed == "stop":
+						srv.mu.Lock()
+						srv.state = "stop"
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case trimmed == "clearerror":
+						srv.mu.Lock()
+						srv.errMsg = ""
+						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					default:
+						_, _ = c.Write([]byte("OK\n"))
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	return srv
+}
+
+// TestQueueRestoreOnReconnectAndOfflineClear verifica restauración de cola tras reconexión y clear pendiente offline.
+func TestQueueRestoreOnReconnectAndOfflineClear(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "restore_mpd.sock")
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+
+	// Encolar mientras MPD aún no ha arrancado -> debe marcar pendingMPDSync
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/local/A.flac", Title: "A", Artist: "Artist 1", Duration: 180},
+		{ID: 2, Path: "/music/local/B.flac", Title: "B", Artist: "Artist 2", Duration: 200},
+	}
+	c.ReplaceQueue(tracks, true)
+	if !c.pendingMPDSync.Load() {
+		t.Fatalf("se esperaba pendingMPDSync=true tras encolar desconectado")
+	}
+
+	// Levantar MPD vacío (playlistlength: 0) y reconectar
+	srv := startStatefulMockMPDServer(t, sockPath)
+	c.tryConnect()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		plLen := len(srv.playlist)
+		st := srv.state
+		srv.mu.Unlock()
+		if plLen == 2 && st == "play" && c.mpdQueueSynced.Load() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	plLen := len(srv.playlist)
+	st := srv.state
+	srv.mu.Unlock()
+	if plLen != 2 || st != "play" {
+		t.Fatalf("tryConnect no restauró cola/reproducción pendiente en MPD (len=%d, state=%q)", plLen, st)
+	}
+
+	// Desconectar cliente, ejecutar ClearQueue offline y validar que reconectar vacía MPD en lugar de resucitar tracks
+	c.connected.Store(false)
+	c.ClearQueue()
+	if !c.pendingMPDSync.Load() {
+		t.Fatalf("ClearQueue offline debe dejar pendingMPDSync=true")
+	}
+	c.tryConnect()
+
+	srv.mu.Lock()
+	afterClearLen := len(srv.playlist)
+	srv.mu.Unlock()
+	if afterClearLen != 0 || !c.mpdQueueSynced.Load() {
+		t.Fatalf("tryConnect debía vaciar MPD tras ClearQueue offline (len=%d, synced=%v)", afterClearLen, c.mpdQueueSynced.Load())
+	}
+}
+
+// TestPreemptedPushAndDeltaReconciliation verifica que deltas concurrentes sobre un push parcial reconcilian sin perder colas.
+func TestPreemptedPushAndDeltaReconciliation(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "reconcile_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+	srv.mu.Lock()
+	srv.addDelay = 45 * time.Millisecond
+	srv.mu.Unlock()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	t0 := db.Track{ID: 1, Path: "/music/local/01.flac", Title: "T0", Artist: "A0"}
+	t1 := db.Track{ID: 2, Path: "/music/local/02.flac", Title: "T1", Artist: "A1"}
+	t2 := db.Track{ID: 3, Path: "/music/local/03.flac", Title: "T2", Artist: "A2"}
+	t3 := db.Track{ID: 4, Path: "/music/local/04.flac", Title: "T3", Artist: "A3"}
+
+	c.ReplaceQueue([]db.Track{t0, t1, t2}, true)
+	time.Sleep(55 * time.Millisecond) // Permitir que al menos t0 entre antes de interrumpir el resto
+	c.EnqueueTracks([]db.Track{t3}, "append")
+	c.MoveInQueue(2, 1)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.mpdQueueSynced.Load() && c.syncedVersion.Load() == c.queueVersion.Load() {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	if !c.mpdQueueSynced.Load() || c.syncedVersion.Load() != c.queueVersion.Load() {
+		t.Fatalf("no se completó la reconciliación (synced=%v, syncedVer=%d, queueVer=%d)",
+			c.mpdQueueSynced.Load(), c.syncedVersion.Load(), c.queueVersion.Load())
+	}
+
+	srv.mu.Lock()
+	gotPL := append([]string{}, srv.playlist...)
+	gotState := srv.state
+	srv.mu.Unlock()
+
+	wantOrder := []string{
+		"file:///rawmusic/local/01.flac",
+		"file:///rawmusic/local/03.flac",
+		"file:///rawmusic/local/02.flac",
+		"file:///rawmusic/local/04.flac",
+	}
+	if len(gotPL) != len(wantOrder) {
+		t.Fatalf("longitud de playlist MPD inesperada: got=%v want=%v", gotPL, wantOrder)
+	}
+	for i := range wantOrder {
+		if gotPL[i] != wantOrder[i] {
+			t.Fatalf("posición %d de MPD desalineada: got=%v want=%v", i, gotPL, wantOrder)
+		}
+	}
+	if gotState != "play" {
+		t.Fatalf("se esperaba MPD en play sin corte tras reconciliación, obtenido %q", gotState)
+	}
+}
+
+// TestBadSongIndexTriggersSyncRetry verifica que Next/PlayIndex recuperan y reproducen cuando MPD responde Bad song index.
+func TestBadSongIndexTriggersSyncRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "badsong_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/local/One.flac", Title: "One", Artist: "Art"},
+		{ID: 2, Path: "/music/local/Two.flac", Title: "Two", Artist: "Art"},
+	}
+	c.ReplaceQueue(tracks, true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !c.mpdQueueSynced.Load() && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	// Vaciar MPD en secreto dejando mpdQueueSynced aún optimista para provocar "Bad song index" en Next()
+	srv.mu.Lock()
+	srv.playlist = nil
+	srv.song = -1
+	srv.state = "stop"
+	srv.mu.Unlock()
+
+	c.Next()
+
+	deadline2 := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline2) {
+		srv.mu.Lock()
+		song := srv.song
+		st := srv.state
+		plLen := len(srv.playlist)
+		srv.mu.Unlock()
+		if plLen == 2 && song == 1 && st == "play" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	t.Fatalf("Next() tras Bad song index debía reconciliar y sonar índice 1 (song=%d, state=%q, pl=%v)", srv.song, srv.state, srv.playlist)
+}
+
+// TestHardwareOutputErrorVsDecodeAndRadioRecovery valida errores de DAC vs errores de pista y reconexión automática de radio.
+func TestHardwareOutputErrorVsDecodeAndRadioRecovery(t *testing.T) {
+	if !isAudioOutputHardwareError(`Failed to open "DAC USB" (alsa); device busy`) {
+		t.Fatalf("se esperaba clasificar error de dispositivo ALSA como hardware output error")
+	}
+	if isAudioOutputHardwareError("Failed to decode /music/nas/corrupt.flac") {
+		t.Fatalf("error de decodificación de archivo no debe tratarse como fallo hardware ALSA")
+	}
+
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "recovery_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	// 1. Con fallo de salida ALSA hardware, syncStatusFromMPD NO debe avanzar trackSkipCount
+	c.ReplaceQueue([]db.Track{
+		{ID: 1, Path: "/music/local/A.flac", Title: "A", Artist: "X"},
+		{ID: 2, Path: "/music/local/B.flac", Title: "B", Artist: "Y"},
+	}, true)
+	deadline := time.Now().Add(2 * time.Second)
+	for !c.mpdQueueSynced.Load() && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	srv.state = "stop"
+	srv.errMsg = `Failed to open "DAC USB" (alsa); No such device`
+	srv.mu.Unlock()
+	time.Sleep(5 * time.Millisecond)
+	c.syncStatusFromMPD()
+
+	c.mu.RLock()
+	skips := c.trackSkipCount
+	c.mu.RUnlock()
+	if skips != 0 {
+		t.Fatalf("un error de hardware ALSA no debe incrementar trackSkipCount (got=%d)", skips)
+	}
+
+	// 2. Corte inesperado en emisora de radio activa -> debe reintentar automáticamente tras 2s
+	c.ReplaceQueue([]db.Track{
+		{ID: -1, Path: "https://stream.example.org/live.mp3", Title: "Radio Test", Artist: "Spain", Source: "radio"},
+	}, true)
+	deadline2 := time.Now().Add(2 * time.Second)
+	for !c.mpdQueueSynced.Load() && time.Now().Before(deadline2) {
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	// Simular que la radio sonó brevemente y cayó de golpe (state: stop sin intervención)
+	srv.mu.Lock()
+	srv.state = "stop"
+	srv.mu.Unlock()
+	time.Sleep(5 * time.Millisecond)
+	c.syncStatusFromMPD()
+
+	// En ~2s scheduleRadioReconnect debería reactivar "play" en índice 0
+	deadline3 := time.Now().Add(3500 * time.Millisecond)
+	restarted := false
+	for time.Now().Before(deadline3) {
+		srv.mu.Lock()
+		st := srv.state
+		srv.mu.Unlock()
+		if st == "play" {
+			restarted = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !restarted {
+		t.Fatalf("la radio cortada inesperadamente debía reconectarse automáticamente")
 	}
 }

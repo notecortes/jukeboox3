@@ -58,44 +58,54 @@ type PlayerState struct {
 
 // Client gestiona la comunicación por socket Unix/TCP con MPD y mantiene el estado en memoria sin bloqueos.
 type Client struct {
-	socketPath      string
-	host            string
-	port            string
-	eventsHub       *events.Hub
-	database        *db.DB
-	state           PlayerState
-	queue           []db.Track
-	mu              sync.RWMutex // Exclusivo para memoria (nunca retener en llamadas de red o SQLite)
-	connMu          sync.Mutex   // Serializa el protocolo petición/respuesta en el socket de MPD
-	syncMu          sync.Mutex   // Serializa secuencias compuestas de actualización de cola en MPD
-	dialMu          sync.Mutex   // Evita intentos paralelos de conexión inicial hacia MPD
-	conn            net.Conn
-	reader          *bufio.Reader
-	lastDialFail    time.Time
-	connected       atomic.Bool
-	usingUnixSocket atomic.Bool
-	syncingQueue    atomic.Bool
-	queueVersion    atomic.Uint64
-	lastControlNano atomic.Int64
-	sleepEndsAt     time.Time
-	persistCh       chan func()
-	stopCh          chan struct{}
-	persistWg       sync.WaitGroup
-	closeOnce       sync.Once
-	closed          atomic.Bool
+	socketPath        string
+	host              string
+	port              string
+	eventsHub         *events.Hub
+	database          *db.DB
+	state             PlayerState
+	queue             []db.Track
+	mu                sync.RWMutex // Exclusivo para memoria (nunca retener en llamadas de red o SQLite)
+	connMu            sync.Mutex   // Serializa el protocolo petición/respuesta en el socket de MPD
+	syncMu            sync.Mutex   // Serializa secuencias compuestas de actualización de cola en MPD
+	dialMu            sync.Mutex   // Evita intentos paralelos de conexión inicial hacia MPD
+	conn              net.Conn
+	reader            *bufio.Reader
+	lastDialFail      time.Time
+	connected         atomic.Bool
+	usingUnixSocket   atomic.Bool
+	syncingQueue      atomic.Bool
+	mpdQueueSynced    atomic.Bool
+	pendingMPDSync    atomic.Bool
+	queueVersion      atomic.Uint64
+	syncedVersion     atomic.Uint64
+	lastControlNano   atomic.Int64
+	radioRetryCount   int
+	lastRadioRetryAt  time.Time
+	trackSkipCount    int
+	lastTrackSkipAt   time.Time
+	lastEmptyResyncAt time.Time
+	sleepEndsAt       time.Time
+	reconnectCh       chan struct{}
+	persistCh         chan func()
+	stopCh            chan struct{}
+	persistWg         sync.WaitGroup
+	closeOnce         sync.Once
+	closed            atomic.Bool
 }
 
 // NewClient crea un nuevo controlador de audio con soporte Unix socket / TCP, salvaguardas de volumen y recuperación de ajustes.
 func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) *Client {
 	c := &Client{
-		socketPath: socketPath,
-		host:       host,
-		port:       port,
-		eventsHub:  hub,
-		database:   database,
-		queue:      make([]db.Track, 0),
-		persistCh:  make(chan func(), 256),
-		stopCh:     make(chan struct{}),
+		socketPath:  socketPath,
+		host:        host,
+		port:        port,
+		eventsHub:   hub,
+		database:    database,
+		queue:       make([]db.Track, 0),
+		reconnectCh: make(chan struct{}, 1),
+		persistCh:   make(chan func(), 256),
+		stopCh:      make(chan struct{}),
 		state: PlayerState{
 			Status:         "stop",
 			CurrentIndex:   -1,
@@ -202,6 +212,17 @@ func (c *Client) markControlUpdate() {
 	c.lastControlNano.Store(time.Now().UnixNano())
 }
 
+// triggerReconnect despierta al supervisor de conexión MPD sin bloquear el hilo llamante.
+func (c *Client) triggerReconnect() {
+	if c.closed.Load() || c.reconnectCh == nil {
+		return
+	}
+	select {
+	case c.reconnectCh <- struct{}{}:
+	default:
+	}
+}
+
 // connectionSupervisor reintenta periódicamente el enlace con MPD si el servidor se reinicia o aún está arrancando.
 func (c *Client) connectionSupervisor() {
 	for {
@@ -216,6 +237,8 @@ func (c *Client) connectionSupervisor() {
 		case <-c.stopCh:
 			timer.Stop()
 			return
+		case <-c.reconnectCh:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
@@ -281,7 +304,29 @@ func (c *Client) connectLocked() error {
 	return nil
 }
 
-// tryConnect establece sesión con MPD y aplica opciones iniciales (ReplayGain, Crossfade, volumen seguro y salidas).
+// parseMPDPlaylistLength extrae la longitud actual de la lista de MPD desde las líneas de status.
+func parseMPDPlaylistLength(lines []string) int {
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "playlistlength: ") {
+			val, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ln, "playlistlength: ")))
+			if err == nil {
+				return val
+			}
+		}
+	}
+	return -1
+}
+
+// snapshotQueueState obtiene una copia consistente en memoria de la cola, índice activo, estado de reproducción y versión.
+func (c *Client) snapshotQueueState() ([]db.Track, int, bool, uint64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	copied := make([]db.Track, len(c.queue))
+	copy(copied, c.queue)
+	return copied, c.state.CurrentIndex, c.state.Status == "play", c.queueVersion.Load()
+}
+
+// tryConnect establece sesión con MPD, aplica opciones Hi-Fi y sincroniza la cola tras reconexiones o reinicios.
 func (c *Client) tryConnect() {
 	c.dialMu.Lock()
 	defer c.dialMu.Unlock()
@@ -302,7 +347,6 @@ func (c *Client) tryConnect() {
 	cf := c.state.Crossfade
 	vol := c.state.Volume
 	maxVol := c.state.MaxVolumeLimit
-	qLen := len(c.queue)
 	c.mu.RUnlock()
 
 	if vol > maxVol {
@@ -329,15 +373,54 @@ func (c *Client) tryConnect() {
 		}
 	}
 
-	if qLen == 0 {
-		c.syncQueueFromMPD()
+	statusLines, statusErr := c.sendRawCommand("status\n")
+	mpdPlaylistLen := -1
+	if statusErr == nil {
+		mpdPlaylistLen = parseMPDPlaylistLength(statusLines)
 	}
+
+	qCopy, currIdx, wasPlaying, ver := c.snapshotQueueState()
+	pendingSync := c.pendingMPDSync.Load()
+
+	if len(qCopy) == 0 {
+		if pendingSync {
+			_, _ = c.sendRawCommand("clear\n")
+			c.syncedVersion.Store(ver)
+			c.pendingMPDSync.Store(false)
+			c.mpdQueueSynced.Store(true)
+		} else {
+			c.syncQueueFromMPD()
+		}
+	} else if pendingSync || mpdPlaylistLen == 0 || (mpdPlaylistLen > 0 && mpdPlaylistLen != len(qCopy)) {
+		c.mpdQueueSynced.Store(false)
+		go c.pushQueueToMPD(ver, qCopy, currIdx, wasPlaying)
+	} else if mpdPlaylistLen > 0 {
+		c.syncedVersion.Store(ver)
+		c.mpdQueueSynced.Store(true)
+	}
+
 	c.syncStatusFromMPD()
 }
 
 // isConnected retorna si existe conexión activa actual con el demonio MPD.
 func (c *Client) isConnected() bool {
 	return c.connected.Load()
+}
+
+// mpdCommandDeadline asigna margen temporal amplio a comandos que abren rutas NAS o flujos HTTP en MPD.
+func mpdCommandDeadline(cmd string) time.Duration {
+	lower := strings.ToLower(strings.TrimSpace(cmd))
+	switch {
+	case strings.HasPrefix(lower, "add "),
+		strings.HasPrefix(lower, "addid "),
+		strings.HasPrefix(lower, "play"),
+		strings.HasPrefix(lower, "seek"),
+		strings.HasPrefix(lower, "playlist"),
+		strings.HasPrefix(lower, "delete "):
+		return 10 * time.Second
+	default:
+		return 4 * time.Second
+	}
 }
 
 // sendRawCommand envía una directiva de texto a MPD con reconexión transparente ante cortes por inactividad.
@@ -351,8 +434,9 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 		}
 	}
 
+	deadlineDur := mpdCommandDeadline(cmd)
 	execCmd := func() ([]string, error) {
-		_ = c.conn.SetDeadline(time.Now().Add(4 * time.Second))
+		_ = c.conn.SetDeadline(time.Now().Add(deadlineDur))
 		if _, err := c.conn.Write([]byte(cmd)); err != nil {
 			c.connected.Store(false)
 			return nil, err
@@ -360,7 +444,7 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 
 		var lines []string
 		for {
-			_ = c.conn.SetDeadline(time.Now().Add(4 * time.Second))
+			_ = c.conn.SetDeadline(time.Now().Add(deadlineDur))
 			line, err := c.reader.ReadString('\n')
 			if err != nil {
 				c.connected.Store(false)
@@ -400,7 +484,26 @@ func mpdQuote(s string) string {
 	return `"` + s + `"`
 }
 
-// addTrackToMPD adds a track using catalog relative path and falls back to file:///rawmusic/... over Unix socket.
+// localMPDURIs construye la ruta relativa en music_directory y la URI file:// directa para socket Unix.
+func localMPDURIs(trackPath string) (string, string) {
+	relPath := strings.TrimPrefix(trackPath, "/music/")
+	relPath = strings.TrimPrefix(relPath, "/")
+	if relPath == "" {
+		return "", ""
+	}
+	rawURI := "file:///rawmusic/" + relPath
+	if !strings.HasPrefix(trackPath, "/music/") && strings.HasPrefix(trackPath, "/") {
+		rawURI = "file://" + trackPath
+	}
+	return relPath, rawURI
+}
+
+// isMPDAckError identifica errores lógicos reportados explícitamente por MPD (archivo faltante, formato, índice).
+func isMPDAckError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "mpd ack error:")
+}
+
+// addTrackToMPD añade una pista priorizando file:///rawmusic/... en socket Unix para evitar latencia de base MPD.
 func (c *Client) addTrackToMPD(t db.Track) error {
 	if strings.HasPrefix(t.Path, "http://") || strings.HasPrefix(t.Path, "https://") {
 		resolvedURLs, err := ResolveStreamURLs(t.Path)
@@ -418,24 +521,23 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 		return lastErr
 	}
 
-	relPath := strings.TrimPrefix(t.Path, "/music/")
-	relPath = strings.TrimPrefix(relPath, "/")
-	if relPath != "" {
-		_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
-		if err == nil {
+	relPath, rawURI := localMPDURIs(t.Path)
+	if relPath == "" {
+		return fmt.Errorf("ruta de pista vacía")
+	}
+
+	if c.usingUnixSocket.Load() && rawURI != "" {
+		_, rawErr := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
+		if rawErr == nil {
 			return nil
 		}
-		if c.usingUnixSocket.Load() {
-			rawURI := "file:///rawmusic/" + relPath
-			if !strings.HasPrefix(t.Path, "/music/") && strings.HasPrefix(t.Path, "/") {
-				rawURI = "file://" + t.Path
-			}
-			_, rawErr := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
+		if !isMPDAckError(rawErr) {
 			return rawErr
 		}
-		return err
 	}
-	return fmt.Errorf("ruta de pista vacía")
+
+	_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
+	return err
 }
 
 // addTrackToMPDAt inserta una pista en una posición concreta usando addid para saltos instantáneos en play_now.
@@ -461,25 +563,22 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 		return lastErr
 	}
 
-	relPath := strings.TrimPrefix(t.Path, "/music/")
-	relPath = strings.TrimPrefix(relPath, "/")
+	relPath, rawURI := localMPDURIs(t.Path)
 	if relPath == "" {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
-	_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
-	if err == nil {
-		return nil
+	if c.usingUnixSocket.Load() && rawURI != "" {
+		_, rawErr := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
+		if rawErr == nil {
+			return nil
+		}
+		if !isMPDAckError(rawErr) {
+			return rawErr
+		}
 	}
 
-	if c.usingUnixSocket.Load() {
-		rawURI := "file:///rawmusic/" + relPath
-		if !strings.HasPrefix(t.Path, "/music/") && strings.HasPrefix(t.Path, "/") {
-			rawURI = "file://" + t.Path
-		}
-		_, rawErr := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
-		return rawErr
-	}
+	_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
 	return err
 }
 
@@ -563,7 +662,13 @@ func (c *Client) syncOutputsFromMPD() {
 // syncQueueFromMPD recupera la cola activa desde MPD y reconstruye sus metadatos desde SQLite.
 func (c *Client) syncQueueFromMPD() {
 	lines, err := c.sendRawCommand("playlistinfo\n")
-	if err != nil || len(lines) == 0 {
+	if err != nil {
+		return
+	}
+	if len(lines) == 0 {
+		c.syncedVersion.Store(c.queueVersion.Load())
+		c.mpdQueueSynced.Store(true)
+		c.pendingMPDSync.Store(false)
 		return
 	}
 
@@ -716,7 +821,11 @@ func (c *Client) syncQueueFromMPD() {
 		c.mu.Lock()
 		c.queue = tracks
 		c.state.QueueLength = len(tracks)
+		ver := c.queueVersion.Load()
 		c.mu.Unlock()
+		c.syncedVersion.Store(ver)
+		c.mpdQueueSynced.Store(true)
+		c.pendingMPDSync.Store(false)
 		c.broadcastQueue()
 	}
 }
@@ -778,7 +887,84 @@ func (c *Client) fetchCurrentStreamTitle(stationTitle string) (string, bool) {
 	return cleanStreamTitle(icyTitle, icyArtist, refName), true
 }
 
-// syncStatusFromMPD sondea el estado real de MPD para sincronizar tiempo, pista actual, errores, metadata ICY y volumen.
+// isAudioOutputHardwareError detecta errores locales de dispositivo ALSA o hardware para no saltar toda la cola en vano.
+func isAudioOutputHardwareError(errMsg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(errMsg))
+	if lower == "" {
+		return false
+	}
+	for _, kw := range []string{"audio output", "alsa", "device or resource busy", "no such device", "failed to open"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// scheduleRadioReconnect espera el backoff indicado y relanza la emisora si no medió intervención del usuario.
+func (c *Client) scheduleRadioReconnect(ver uint64, ctrlNano int64, targetIdx int, stationTitle string, attempt int, delay time.Duration) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-c.stopCh:
+		return
+	case <-timer.C:
+	}
+
+	if c.closed.Load() || !c.isConnected() || c.queueVersion.Load() != ver || c.lastControlNano.Load() != ctrlNano {
+		return
+	}
+
+	c.mu.Lock()
+	if c.queueVersion.Load() != ver || targetIdx < 0 || targetIdx >= len(c.queue) || c.state.Status == "pause" {
+		c.mu.Unlock()
+		return
+	}
+	trackCopy := c.queue[targetIdx]
+	if !isHTTPStreamTrack(&trackCopy) {
+		c.mu.Unlock()
+		return
+	}
+	c.state.CurrentIndex = targetIdx
+	c.state.CurrentTrack = &trackCopy
+	c.state.Status = "play"
+	c.state.LastError = ""
+	c.mu.Unlock()
+
+	log.Printf("[MPD] Corte detectado en radio en directo (%s); reintento automático %d/3...", stationTitle, attempt)
+	_, _ = c.sendRawCommand("clearerror\n")
+	c.playIndexOrRetry(ver, targetIdx, false)
+	c.broadcastState()
+}
+
+// scheduleTrackErrorSkip salta a la siguiente pista de la cola tras un fallo puntual de archivo o códec en MPD.
+func (c *Client) scheduleTrackErrorSkip(ver uint64, ctrlNano int64, nextIdx int, mpdErr string) {
+	timer := time.NewTimer(1500 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-c.stopCh:
+		return
+	case <-timer.C:
+	}
+
+	if c.closed.Load() || !c.isConnected() || c.queueVersion.Load() != ver || c.lastControlNano.Load() != ctrlNano {
+		return
+	}
+
+	c.mu.RLock()
+	valid := (c.queueVersion.Load() == ver && nextIdx >= 0 && nextIdx < len(c.queue) && c.state.Status != "pause")
+	c.mu.RUnlock()
+	if !valid {
+		return
+	}
+
+	log.Printf("[MPD] Saltando pista tras error puntual de lectura/decodificación (%s) -> índice %d", mpdErr, nextIdx)
+	c.PlayIndex(nextIdx)
+}
+
+// syncStatusFromMPD sondea el estado real de MPD para sincronizar tiempo, pista actual, errores, metadata ICY y recuperación automática.
 func (c *Client) syncStatusFromMPD() bool {
 	if !c.isConnected() || c.syncingQueue.Load() {
 		return false
@@ -796,6 +982,7 @@ func (c *Client) syncStatusFromMPD() bool {
 
 	var mpdState string
 	var songIdx = -1
+	var mpdPlaylistLen = -1
 	var elapsed float64 = -1
 	var duration float64
 	var volume = -1
@@ -817,6 +1004,10 @@ func (c *Client) syncStatusFromMPD() bool {
 		case "song":
 			if s, err := strconv.Atoi(val); err == nil {
 				songIdx = s
+			}
+		case "playlistlength":
+			if pl, err := strconv.Atoi(strings.TrimSpace(val)); err == nil {
+				mpdPlaylistLen = pl
 			}
 		case "elapsed":
 			if el, err := strconv.ParseFloat(val, 64); err == nil {
@@ -879,6 +1070,25 @@ func (c *Client) syncStatusFromMPD() bool {
 	var durUpdateVal float64
 	clampVolTarget := -1
 
+	needEmptyResync := false
+	var resyncQueue []db.Track
+	var resyncIdx int
+	var resyncPlay bool
+	var resyncVer uint64
+
+	needRadioReconnect := false
+	var radioAttempt int
+	var radioDelay time.Duration
+	var radioVer uint64
+	var radioCtrlNano int64
+	var radioTargetIdx int
+
+	needTrackSkip := false
+	var skipVer uint64
+	var skipCtrlNano int64
+	var skipNextIdx int
+	var prevLastErr string
+
 	c.mu.Lock()
 	if c.lastControlNano.Load() > startedAt {
 		c.mu.Unlock()
@@ -886,6 +1096,11 @@ func (c *Client) syncStatusFromMPD() bool {
 	}
 	stateChanged := false
 	trackChanged := false
+
+	prevStatus := c.state.Status
+	prevLastErr = c.state.LastError
+	currQLen := len(c.queue)
+	wasLiveStream := isLiveStream || (c.state.CurrentTrack != nil && isHTTPStreamTrack(c.state.CurrentTrack))
 
 	if mpdState != "" && mpdState != c.state.Status {
 		c.state.Status = mpdState
@@ -981,7 +1196,67 @@ func (c *Client) syncStatusFromMPD() bool {
 			stateChanged = true
 		}
 	}
+
+	if mpdState == "play" && elapsed > 12.0 {
+		c.radioRetryCount = 0
+		c.trackSkipCount = 0
+	}
+
+	lastCtrlTime := time.Unix(0, c.lastControlNano.Load())
+	if mpdPlaylistLen == 0 && currQLen > 0 && !c.syncingQueue.Load() &&
+		prevLastErr == "" && (prevStatus == "play" || prevStatus == "pause" || c.pendingMPDSync.Load()) &&
+		time.Since(lastCtrlTime) > 2*time.Second && time.Since(c.lastEmptyResyncAt) > 5*time.Second {
+		c.lastEmptyResyncAt = time.Now()
+		c.mpdQueueSynced.Store(false)
+		needEmptyResync = true
+		resyncQueue = make([]db.Track, currQLen)
+		copy(resyncQueue, c.queue)
+		resyncIdx = c.state.CurrentIndex
+		resyncPlay = (prevStatus == "play")
+		resyncVer = c.queueVersion.Load()
+	}
+
+	if !needEmptyResync && prevStatus == "play" && mpdState == "stop" && wasLiveStream && !isAudioOutputHardwareError(mpdErr) {
+		if c.radioRetryCount < 3 && time.Since(c.lastRadioRetryAt) > 2*time.Second {
+			idx := c.state.CurrentIndex
+			if idx >= 0 && idx < currQLen {
+				c.radioRetryCount++
+				c.lastRadioRetryAt = time.Now()
+				radioAttempt = c.radioRetryCount
+				delays := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+				radioDelay = delays[radioAttempt-1]
+				radioVer = c.queueVersion.Load()
+				radioCtrlNano = c.lastControlNano.Load()
+				radioTargetIdx = idx
+				needRadioReconnect = true
+			}
+		}
+	}
+
+	if !needEmptyResync && !needRadioReconnect && mpdErr != "" && mpdState == "stop" &&
+		!wasLiveStream && !isAudioOutputHardwareError(mpdErr) && currQLen > 1 &&
+		c.trackSkipCount < 2 && time.Since(c.lastTrackSkipAt) > 2*time.Second {
+		idx := c.state.CurrentIndex
+		nextIdx := -1
+		if idx >= 0 && idx+1 < currQLen {
+			nextIdx = idx + 1
+		} else if idx >= 0 && c.state.Repeat {
+			nextIdx = 0
+		}
+		if nextIdx >= 0 {
+			c.trackSkipCount++
+			c.lastTrackSkipAt = time.Now()
+			skipVer = c.queueVersion.Load()
+			skipCtrlNano = c.lastControlNano.Load()
+			skipNextIdx = nextIdx
+			needTrackSkip = true
+		}
+	}
 	c.mu.Unlock()
+
+	if mpdErr != "" && mpdErr != prevLastErr {
+		log.Printf("[MPD] Error reportado por MPD: %s", mpdErr)
+	}
 
 	if c.database != nil && (recordTrackID > 0 || (durUpdateTrackID > 0 && durUpdateVal > 0)) {
 		recID := recordTrackID
@@ -1008,6 +1283,16 @@ func (c *Client) syncStatusFromMPD() bool {
 	if trackChanged || stateChanged {
 		c.broadcastState()
 	}
+
+	if needEmptyResync {
+		log.Printf("[MPD] Cola vacía inesperadamente en MPD (%d pistas en memoria), restaurando...", len(resyncQueue))
+		go c.pushQueueToMPD(resyncVer, resyncQueue, resyncIdx, resyncPlay)
+	} else if needRadioReconnect {
+		go c.scheduleRadioReconnect(radioVer, radioCtrlNano, radioTargetIdx, stationTitle, radioAttempt, radioDelay)
+	} else if needTrackSkip {
+		go c.scheduleTrackErrorSkip(skipVer, skipCtrlNano, skipNextIdx, mpdErr)
+	}
+
 	return true
 }
 
@@ -1118,22 +1403,18 @@ func (c *Client) Play() {
 	c.state.Duration = trackCopy.Duration
 	c.state.Status = "play"
 	c.state.LastError = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	if prevStatus != "pause" && !isHTTPStreamTrack(&trackCopy) {
 		c.state.StreamTitle = ""
 	}
 	idx := c.state.CurrentIndex
 	trackID := trackCopy.ID
+	ver := c.queueVersion.Load()
 	c.markControlUpdate()
 	c.mu.Unlock()
 
-	if c.isConnected() {
-		if prevStatus == "pause" {
-			_, _ = c.sendRawCommand("pause 0\n")
-		} else {
-			_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", idx))
-		}
-		c.markControlUpdate()
-	}
+	c.playIndexOrRetry(ver, idx, prevStatus == "pause")
 
 	if prevStatus == "stop" && trackID > 0 {
 		id := trackID
@@ -1149,6 +1430,8 @@ func (c *Client) Pause() {
 	c.mu.Lock()
 	c.state.Status = "pause"
 	c.state.LastError = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	c.markControlUpdate()
 	c.mu.Unlock()
 
@@ -1188,17 +1471,13 @@ func (c *Client) PlayIndex(index int) {
 	c.state.Status = "play"
 	c.state.LastError = ""
 	c.state.StreamTitle = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
 
-	if c.isConnected() {
-		if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", index)); err != nil &&
-			strings.Contains(err.Error(), "Bad song index") && c.syncingQueue.Load() {
-			go c.retryPlayIndexAfterSync(ver, index)
-		}
-		c.markControlUpdate()
-	}
+	c.playIndexOrRetry(ver, index, false)
 
 	if trackID > 0 {
 		id := trackID
@@ -1209,21 +1488,88 @@ func (c *Client) PlayIndex(index int) {
 	c.broadcastState()
 }
 
-// retryPlayIndexAfterSync reintenta activar un índice en MPD tras completarse una población de cola en segundo plano.
+// playIndexOrRetry reanuda o reproduce el índice objetivo y reconcilia la cola con MPD si existe desincronización.
+func (c *Client) playIndexOrRetry(ver uint64, index int, resumePause bool) {
+	if !c.isConnected() {
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
+		return
+	}
+
+	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncingQueue.Load() || c.syncedVersion.Load() != ver {
+		go c.retryPlayIndexAfterSync(ver, index)
+		return
+	}
+
+	if resumePause {
+		if statusLines, stErr := c.sendRawCommand("status\n"); stErr == nil {
+			mpdState := ""
+			for _, ln := range statusLines {
+				if strings.HasPrefix(ln, "state: ") {
+					mpdState = strings.TrimSpace(strings.TrimPrefix(ln, "state: "))
+					break
+				}
+			}
+			if parseMPDPlaylistLength(statusLines) == 0 {
+				c.mpdQueueSynced.Store(false)
+				go c.retryPlayIndexAfterSync(ver, index)
+				return
+			}
+			if mpdState == "pause" || mpdState == "play" {
+				if _, err := c.sendRawCommand("pause 0\n"); err == nil {
+					c.markControlUpdate()
+					return
+				}
+			}
+		}
+	}
+
+	if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", index)); err != nil {
+		if !c.isConnected() {
+			c.pendingMPDSync.Store(true)
+			c.triggerReconnect()
+		} else if c.syncingQueue.Load() || !c.mpdQueueSynced.Load() || isMPDAckError(err) {
+			go c.retryPlayIndexAfterSync(ver, index)
+		}
+	}
+	c.markControlUpdate()
+}
+
+// retryPlayIndexAfterSync espera al bloqueo de cola y reconcilia o reproduce el índice objetivo tras completarse la sincronización.
 func (c *Client) retryPlayIndexAfterSync(ver uint64, index int) {
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
 
-	if c.closed.Load() || c.queueVersion.Load() != ver || !c.isConnected() {
+	c.syncingQueue.Store(true)
+	defer c.syncingQueue.Store(false)
+
+	if c.closed.Load() || c.queueVersion.Load() != ver {
 		return
 	}
+	if !c.isConnected() {
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
+		return
+	}
+
 	c.mu.RLock()
 	stillTarget := (c.state.CurrentIndex == index && c.state.Status == "play")
 	c.mu.RUnlock()
 	if !stillTarget {
 		return
 	}
-	_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", index))
+
+	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != ver {
+		if c.reconcileQueueWithMPDLocked(ver, true) {
+			return
+		}
+	}
+
+	if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", index)); err != nil && isMPDAckError(err) {
+		c.mpdQueueSynced.Store(false)
+		c.reconcileQueueWithMPDLocked(ver, true)
+	}
+	c.markControlUpdate()
 }
 
 // Next avanza a la siguiente canción en la cola respetando el modo de repetición.
@@ -1243,6 +1589,8 @@ func (c *Client) Next() {
 			c.state.ElapsedTime = 0
 			c.state.StreamTitle = ""
 			c.state.LastError = ""
+			c.radioRetryCount = 0
+			c.trackSkipCount = 0
 			c.markControlUpdate()
 			c.mu.Unlock()
 			if c.isConnected() {
@@ -1255,6 +1603,7 @@ func (c *Client) Next() {
 	}
 
 	trackCopy := c.queue[nextIdx]
+	ver := c.queueVersion.Load()
 	c.state.CurrentIndex = nextIdx
 	c.state.CurrentTrack = &trackCopy
 	c.state.ElapsedTime = 0
@@ -1262,14 +1611,13 @@ func (c *Client) Next() {
 	c.state.Status = "play"
 	c.state.LastError = ""
 	c.state.StreamTitle = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
 
-	if c.isConnected() {
-		_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", nextIdx))
-		c.markControlUpdate()
-	}
+	c.playIndexOrRetry(ver, nextIdx, false)
 
 	if trackID > 0 {
 		id := trackID
@@ -1289,12 +1637,19 @@ func (c *Client) Prev() {
 	}
 
 	if c.state.ElapsedTime > 3.0 {
+		ver := c.queueVersion.Load()
+		currIdx := c.state.CurrentIndex
 		c.state.ElapsedTime = 0
 		c.markControlUpdate()
 		c.mu.Unlock()
 		if c.isConnected() {
-			_, _ = c.sendRawCommand("seekcur 0\n")
+			if _, err := c.sendRawCommand("seekcur 0\n"); err != nil && (!c.mpdQueueSynced.Load() || isMPDAckError(err)) {
+				go c.retryPlayIndexAfterSync(ver, currIdx)
+			}
 			c.markControlUpdate()
+		} else {
+			c.pendingMPDSync.Store(true)
+			c.triggerReconnect()
 		}
 		c.broadcastState()
 		return
@@ -1306,6 +1661,7 @@ func (c *Client) Prev() {
 	}
 
 	trackCopy := c.queue[prevIdx]
+	ver := c.queueVersion.Load()
 	c.state.CurrentIndex = prevIdx
 	c.state.CurrentTrack = &trackCopy
 	c.state.ElapsedTime = 0
@@ -1313,14 +1669,13 @@ func (c *Client) Prev() {
 	c.state.Status = "play"
 	c.state.LastError = ""
 	c.state.StreamTitle = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
 
-	if c.isConnected() {
-		_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", prevIdx))
-		c.markControlUpdate()
-	}
+	c.playIndexOrRetry(ver, prevIdx, false)
 
 	if trackID > 0 {
 		id := trackID
@@ -1448,6 +1803,7 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 
 	c.mu.Lock()
 	ver := c.queueVersion.Add(1)
+	c.mpdQueueSynced.Store(false)
 	c.queue = make([]db.Track, len(tracks))
 	copy(c.queue, tracks)
 	c.state.QueueLength = len(c.queue)
@@ -1459,6 +1815,8 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 	c.state.ElapsedTime = 0
 	c.state.LastError = ""
 	c.state.StreamTitle = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
 	if autoPlay {
 		c.state.Status = "play"
 	} else {
@@ -1482,6 +1840,9 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 
 	if c.isConnected() {
 		go c.pushQueueToMPD(ver, tracksCopy, 0, autoPlay)
+	} else {
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 	}
 }
 
@@ -1553,6 +1914,11 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	if needPlay {
 		c.state.LastError = ""
 		c.state.StreamTitle = ""
+		c.radioRetryCount = 0
+		c.trackSkipCount = 0
+	}
+	if wasEmpty {
+		c.mpdQueueSynced.Store(false)
 	}
 	queueSnapshot := make([]db.Track, len(c.queue))
 	copy(queueSnapshot, c.queue)
@@ -1574,6 +1940,9 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	}
 
 	if !c.isConnected() {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 		return
 	}
 
@@ -1609,6 +1978,35 @@ func (c *Client) setPlaybackErrorIfVersion(ver uint64, t db.Track, err error) {
 	c.broadcastState()
 }
 
+// parseMPDPlaylistFiles extrae y normaliza las rutas de la cola devueltas por playlistinfo en MPD.
+func parseMPDPlaylistFiles(lines []string) []string {
+	var files []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "file: ") {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "file: "))
+			files = append(files, normalizeMPDFilePath(raw))
+		}
+	}
+	return files
+}
+
+// mpdPlaylistMatchesPrefix verifica si los primeros elementos en MPD coinciden con la cola esperada hasta uptoIdx.
+func mpdPlaylistMatchesPrefix(mpdFiles []string, queue []db.Track, uptoIdx int) bool {
+	if uptoIdx < 0 || uptoIdx >= len(queue) || len(mpdFiles) <= uptoIdx {
+		return false
+	}
+	for i := 0; i <= uptoIdx; i++ {
+		if mpdFiles[i] == queue[i].Path {
+			continue
+		}
+		if isHTTPStreamTrack(&queue[i]) && (strings.HasPrefix(mpdFiles[i], "http://") || strings.HasPrefix(mpdFiles[i], "https://")) && uptoIdx == 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // pushQueueToMPD reemplaza la cola de MPD y empieza reproduciendo startIdx antes de añadir el resto.
 func (c *Client) pushQueueToMPD(ver uint64, tracks []db.Track, startIdx int, autoPlay bool) {
 	if len(tracks) == 0 {
@@ -1621,54 +2019,230 @@ func (c *Client) pushQueueToMPD(ver uint64, tracks []db.Track, startIdx int, aut
 	c.syncingQueue.Store(true)
 	defer c.syncingQueue.Store(false)
 
-	if c.queueVersion.Load() != ver || !c.isConnected() {
+	if c.closed.Load() || c.queueVersion.Load() != ver || (c.mpdQueueSynced.Load() && c.syncedVersion.Load() == ver) {
+		return
+	}
+	if !c.isConnected() {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 		return
 	}
 
-	_, _ = c.sendRawCommand("clear\n")
+	c.pushQueueToMPDLocked(ver, tracks, startIdx, autoPlay)
+}
+
+// pushQueueToMPDLocked reemplaza la cola de MPD bajo syncMu, poda pistas inválidas y marca syncedVersion al completar.
+func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx int, autoPlay bool) bool {
+	if len(tracks) == 0 {
+		if _, err := c.sendRawCommand("clear\n"); err != nil {
+			c.mpdQueueSynced.Store(false)
+			c.pendingMPDSync.Store(true)
+			c.triggerReconnect()
+			return false
+		}
+		c.syncedVersion.Store(ver)
+		c.mpdQueueSynced.Store(true)
+		c.pendingMPDSync.Store(false)
+		return true
+	}
+
+	if c.queueVersion.Load() != ver || !c.isConnected() {
+		if !c.isConnected() {
+			c.mpdQueueSynced.Store(false)
+			c.pendingMPDSync.Store(true)
+			c.triggerReconnect()
+		}
+		return false
+	}
+
+	if _, err := c.sendRawCommand("clear\n"); err != nil {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
+		return false
+	}
 
 	if startIdx < 0 || startIdx >= len(tracks) {
 		startIdx = 0
 	}
 
-	// Añadir rápidamente hasta startIdx para comenzar a sonar en <50ms
+	validTracks := make([]db.Track, 0, len(tracks))
+	droppedAny := false
 	mpdPlayIdx := 0
+
+	// Añadir rápidamente hasta startIdx para comenzar a sonar en <50ms
 	for i := 0; i <= startIdx; i++ {
 		if c.queueVersion.Load() != ver {
-			return
+			return false
 		}
 		if err := c.addTrackToMPD(tracks[i]); err != nil {
 			log.Printf("[MPD] Advertencia al encolar pista inicial %s: %v", tracks[i].Path, err)
+			if !isMPDAckError(err) {
+				c.mpdQueueSynced.Store(false)
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+				return false
+			}
 			if i == startIdx {
 				if autoPlay {
 					c.setPlaybackErrorIfVersion(ver, tracks[i], err)
 				}
-				return
+				return false
 			}
-		} else if i < startIdx {
-			mpdPlayIdx++
+			droppedAny = true
+		} else {
+			validTracks = append(validTracks, tracks[i])
+			if i < startIdx {
+				mpdPlayIdx++
+			}
 		}
 	}
 
-	if autoPlay && c.queueVersion.Load() == ver {
+	c.mu.RLock()
+	stillPlay := (c.queueVersion.Load() == ver && c.state.Status == "play")
+	c.mu.RUnlock()
+
+	if autoPlay && stillPlay && c.queueVersion.Load() == ver {
 		if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", mpdPlayIdx)); err != nil {
+			if !isMPDAckError(err) {
+				c.mpdQueueSynced.Store(false)
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+				return false
+			}
 			c.setPlaybackErrorIfVersion(ver, tracks[startIdx], err)
-			return
+			return false
 		}
+		c.markControlUpdate()
 	}
 
 	// Encolar el resto de pistas en segundo plano cancelando si el usuario lanzó otra petición
 	for i := startIdx + 1; i < len(tracks); i++ {
 		if c.queueVersion.Load() != ver {
-			return
+			return false
 		}
 		if err := c.addTrackToMPD(tracks[i]); err != nil {
 			log.Printf("[MPD] Advertencia al añadir pista restante %s: %v", tracks[i].Path, err)
+			if !isMPDAckError(err) {
+				c.mpdQueueSynced.Store(false)
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+				return false
+			}
+			droppedAny = true
+		} else {
+			validTracks = append(validTracks, tracks[i])
 		}
 	}
+
+	if c.queueVersion.Load() != ver {
+		return false
+	}
+
+	if droppedAny && len(validTracks) > 0 {
+		c.mu.Lock()
+		if c.queueVersion.Load() == ver {
+			c.queue = validTracks
+			c.state.QueueLength = len(validTracks)
+			if mpdPlayIdx >= 0 && mpdPlayIdx < len(validTracks) {
+				c.state.CurrentIndex = mpdPlayIdx
+				trackCopy := validTracks[mpdPlayIdx]
+				c.state.CurrentTrack = &trackCopy
+			}
+		}
+		c.mu.Unlock()
+		c.broadcastQueue()
+		c.broadcastState()
+	}
+
+	c.syncedVersion.Store(ver)
+	c.mpdQueueSynced.Store(true)
+	c.pendingMPDSync.Store(false)
+	return true
 }
 
-// applyQueueDeltaToMPD inserta o anexa pistas en una cola activa de MPD sin interrumpir ni limpiar la cola.
+// reconcileQueueWithMPDLocked repara la cola en MPD cuando un delta previo se perdió o fue interrumpido.
+func (c *Client) reconcileQueueWithMPDLocked(ver uint64, forcePlay bool) bool {
+	qCopy, currIdx, wantPlay, snapVer := c.snapshotQueueState()
+	if c.closed.Load() || snapVer != ver {
+		return false
+	}
+	if !c.isConnected() {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
+		return false
+	}
+	if len(qCopy) == 0 {
+		return c.pushQueueToMPDLocked(ver, qCopy, 0, false)
+	}
+
+	if !forcePlay && currIdx >= 0 && currIdx < len(qCopy) {
+		statusLines, stErr := c.sendRawCommand("status\n")
+		plLines, plErr := c.sendRawCommand("playlistinfo\n")
+		if stErr == nil && plErr == nil {
+			mpdState := ""
+			mpdSong := -1
+			for _, ln := range statusLines {
+				if strings.HasPrefix(ln, "state: ") {
+					mpdState = strings.TrimSpace(strings.TrimPrefix(ln, "state: "))
+				} else if strings.HasPrefix(ln, "song: ") {
+					mpdSong, _ = strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ln, "song: ")))
+				}
+			}
+			mpdFiles := parseMPDPlaylistFiles(plLines)
+			if (mpdState == "play" || mpdState == "pause") && mpdSong == currIdx && mpdPlaylistMatchesPrefix(mpdFiles, qCopy, currIdx) {
+				if len(mpdFiles) > currIdx+1 {
+					if _, delErr := c.sendRawCommand(fmt.Sprintf("delete %d:%d\n", currIdx+1, len(mpdFiles))); delErr != nil {
+						return c.pushQueueToMPDLocked(ver, qCopy, currIdx, wantPlay)
+					}
+				}
+				validQueue := make([]db.Track, 0, len(qCopy))
+				validQueue = append(validQueue, qCopy[:currIdx+1]...)
+				droppedAny := false
+				for i := currIdx + 1; i < len(qCopy); i++ {
+					if c.queueVersion.Load() != ver {
+						return false
+					}
+					if err := c.addTrackToMPD(qCopy[i]); err != nil {
+						log.Printf("[MPD] Advertencia al reconciliar cola (%s): %v", qCopy[i].Path, err)
+						if !isMPDAckError(err) {
+							c.mpdQueueSynced.Store(false)
+							c.pendingMPDSync.Store(true)
+							c.triggerReconnect()
+							return false
+						}
+						droppedAny = true
+					} else {
+						validQueue = append(validQueue, qCopy[i])
+					}
+				}
+				if c.queueVersion.Load() != ver {
+					return false
+				}
+				if droppedAny && len(validQueue) > 0 {
+					c.mu.Lock()
+					if c.queueVersion.Load() == ver {
+						c.queue = validQueue
+						c.state.QueueLength = len(validQueue)
+					}
+					c.mu.Unlock()
+					c.broadcastQueue()
+					c.broadcastState()
+				}
+				c.syncedVersion.Store(ver)
+				c.mpdQueueSynced.Store(true)
+				c.pendingMPDSync.Store(false)
+				return true
+			}
+		}
+	}
+
+	return c.pushQueueToMPDLocked(ver, qCopy, currIdx, wantPlay)
+}
+
+// applyQueueDeltaToMPD inserta o anexa pistas en una cola activa de MPD, reconciliando si faltaban cambios previos.
 func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string, insertPos, playIdx int, autoPlay bool) {
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
@@ -1676,7 +2250,17 @@ func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string
 	c.syncingQueue.Store(true)
 	defer c.syncingQueue.Store(false)
 
-	if c.queueVersion.Load() != ver || !c.isConnected() {
+	if c.closed.Load() || c.queueVersion.Load() != ver {
+		return
+	}
+	if !c.isConnected() {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
+		return
+	}
+	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != ver-1 {
+		c.reconcileQueueWithMPDLocked(ver, mode == "play_now")
 		return
 	}
 
@@ -1688,16 +2272,36 @@ func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string
 			targetPos := insertPos + offset
 			if err := c.addTrackToMPDAt(t, targetPos); err != nil {
 				log.Printf("[MPD] Advertencia al insertar pista en posición %d (%s): %v", targetPos, t.Path, err)
+				if !isMPDAckError(err) {
+					c.mpdQueueSynced.Store(false)
+					c.pendingMPDSync.Store(true)
+					c.triggerReconnect()
+					return
+				}
 				if offset == 0 && autoPlay {
 					c.setPlaybackErrorIfVersion(ver, t, err)
 					return
 				}
+				c.reconcileQueueWithMPDLocked(ver, false)
+				return
 			} else if offset == 0 && autoPlay {
 				if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", playIdx)); err != nil {
-					c.setPlaybackErrorIfVersion(ver, t, err)
+					if !isMPDAckError(err) {
+						c.mpdQueueSynced.Store(false)
+						c.pendingMPDSync.Store(true)
+						c.triggerReconnect()
+						return
+					}
+					c.reconcileQueueWithMPDLocked(ver, true)
 					return
 				}
+				c.markControlUpdate()
 			}
+		}
+		if c.queueVersion.Load() == ver {
+			c.syncedVersion.Store(ver)
+			c.mpdQueueSynced.Store(true)
+			c.pendingMPDSync.Store(false)
 		}
 		return
 	}
@@ -1708,7 +2312,21 @@ func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string
 		}
 		if err := c.addTrackToMPD(t); err != nil {
 			log.Printf("[MPD] Advertencia al añadir pista a cola (%s): %v", t.Path, err)
+			if !isMPDAckError(err) {
+				c.mpdQueueSynced.Store(false)
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+				return
+			}
+			c.reconcileQueueWithMPDLocked(ver, false)
+			return
 		}
+	}
+
+	if c.queueVersion.Load() == ver {
+		c.syncedVersion.Store(ver)
+		c.mpdQueueSynced.Store(true)
+		c.pendingMPDSync.Store(false)
 	}
 }
 
@@ -1736,17 +2354,43 @@ func (c *Client) MoveInQueue(from, to int) {
 	} else if from > c.state.CurrentIndex && to <= c.state.CurrentIndex {
 		c.state.CurrentIndex++
 	}
+	c.markControlUpdate()
 	c.mu.Unlock()
 
 	if c.isConnected() {
 		go func(v uint64, f, t int) {
 			c.syncMu.Lock()
 			defer c.syncMu.Unlock()
-			if c.queueVersion.Load() != v {
+			c.syncingQueue.Store(true)
+			defer c.syncingQueue.Store(false)
+
+			if c.closed.Load() || c.queueVersion.Load() != v {
 				return
 			}
-			_, _ = c.sendRawCommand(fmt.Sprintf("move %d %d\n", f, t))
+			if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != v-1 {
+				c.reconcileQueueWithMPDLocked(v, false)
+				return
+			}
+			if _, err := c.sendRawCommand(fmt.Sprintf("move %d %d\n", f, t)); err != nil {
+				c.mpdQueueSynced.Store(false)
+				if !c.isConnected() || !isMPDAckError(err) {
+					c.pendingMPDSync.Store(true)
+					c.triggerReconnect()
+				} else {
+					c.reconcileQueueWithMPDLocked(v, false)
+				}
+				return
+			}
+			if c.queueVersion.Load() == v {
+				c.syncedVersion.Store(v)
+				c.mpdQueueSynced.Store(true)
+				c.pendingMPDSync.Store(false)
+			}
 		}(ver, from, to)
+	} else {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 	}
 
 	c.broadcastQueue()
@@ -1773,6 +2417,8 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.Duration = 0
 		c.state.StreamTitle = ""
 		c.state.LastError = ""
+		c.radioRetryCount = 0
+		c.trackSkipCount = 0
 	} else if index < c.state.CurrentIndex {
 		c.state.CurrentIndex--
 	} else if index == c.state.CurrentIndex {
@@ -1786,17 +2432,43 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.StreamTitle = ""
 		c.state.LastError = ""
 	}
+	c.markControlUpdate()
 	c.mu.Unlock()
 
 	if c.isConnected() {
 		go func(v uint64, idx int) {
 			c.syncMu.Lock()
 			defer c.syncMu.Unlock()
-			if c.queueVersion.Load() != v {
+			c.syncingQueue.Store(true)
+			defer c.syncingQueue.Store(false)
+
+			if c.closed.Load() || c.queueVersion.Load() != v {
 				return
 			}
-			_, _ = c.sendRawCommand(fmt.Sprintf("delete %d\n", idx))
+			if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != v-1 {
+				c.reconcileQueueWithMPDLocked(v, false)
+				return
+			}
+			if _, err := c.sendRawCommand(fmt.Sprintf("delete %d\n", idx)); err != nil {
+				c.mpdQueueSynced.Store(false)
+				if !c.isConnected() || !isMPDAckError(err) {
+					c.pendingMPDSync.Store(true)
+					c.triggerReconnect()
+				} else {
+					c.reconcileQueueWithMPDLocked(v, false)
+				}
+				return
+			}
+			if c.queueVersion.Load() == v {
+				c.syncedVersion.Store(v)
+				c.mpdQueueSynced.Store(true)
+				c.pendingMPDSync.Store(false)
+			}
 		}(ver, index)
+	} else {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 	}
 
 	c.broadcastQueue()
@@ -1806,7 +2478,7 @@ func (c *Client) RemoveFromQueue(index int) {
 // ClearQueue vacía completamente la lista de reproducción.
 func (c *Client) ClearQueue() {
 	c.mu.Lock()
-	_ = c.queueVersion.Add(1)
+	ver := c.queueVersion.Add(1)
 	c.queue = make([]db.Track, 0)
 	c.state.QueueLength = 0
 	c.state.CurrentIndex = -1
@@ -1816,14 +2488,29 @@ func (c *Client) ClearQueue() {
 	c.state.Duration = 0
 	c.state.StreamTitle = ""
 	c.state.LastError = ""
+	c.radioRetryCount = 0
+	c.trackSkipCount = 0
+	c.mpdQueueSynced.Store(false)
 	c.markControlUpdate()
 	c.mu.Unlock()
 
 	if c.isConnected() {
 		c.syncMu.Lock()
-		_, _ = c.sendRawCommand("clear\n")
+		if c.queueVersion.Load() == ver {
+			if _, err := c.sendRawCommand("clear\n"); err == nil {
+				c.syncedVersion.Store(ver)
+				c.mpdQueueSynced.Store(true)
+				c.pendingMPDSync.Store(false)
+			} else {
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+			}
+		}
 		c.syncMu.Unlock()
 		c.markControlUpdate()
+	} else {
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 	}
 
 	c.broadcastQueue()
@@ -1868,6 +2555,7 @@ func (c *Client) AntiRepetitionShuffle() {
 	c.state.QueueLength = len(c.queue)
 	queueSnapshot := make([]db.Track, len(c.queue))
 	copy(queueSnapshot, c.queue)
+	c.markControlUpdate()
 	c.mu.Unlock()
 
 	if c.isConnected() {
@@ -1880,22 +2568,53 @@ func (c *Client) AntiRepetitionShuffle() {
 				c.syncingQueue.Store(true)
 				defer c.syncingQueue.Store(false)
 
-				if c.queueVersion.Load() != ver {
+				if c.closed.Load() || c.queueVersion.Load() != ver {
+					return
+				}
+				if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != ver-1 {
+					c.reconcileQueueWithMPDLocked(ver, false)
 					return
 				}
 				if currIdx+1 < oldLen {
-					_, _ = c.sendRawCommand(fmt.Sprintf("delete %d:%d\n", currIdx+1, oldLen))
+					if _, err := c.sendRawCommand(fmt.Sprintf("delete %d:%d\n", currIdx+1, oldLen)); err != nil {
+						c.mpdQueueSynced.Store(false)
+						if !c.isConnected() || !isMPDAckError(err) {
+							c.pendingMPDSync.Store(true)
+							c.triggerReconnect()
+						} else {
+							c.reconcileQueueWithMPDLocked(ver, false)
+						}
+						return
+					}
 				}
 				for _, t := range reorderedCopy {
 					if c.queueVersion.Load() != ver {
 						return
 					}
-					_ = c.addTrackToMPD(t)
+					if err := c.addTrackToMPD(t); err != nil {
+						if !isMPDAckError(err) {
+							c.mpdQueueSynced.Store(false)
+							c.pendingMPDSync.Store(true)
+							c.triggerReconnect()
+							return
+						}
+						c.reconcileQueueWithMPDLocked(ver, false)
+						return
+					}
+				}
+				if c.queueVersion.Load() == ver {
+					c.syncedVersion.Store(ver)
+					c.mpdQueueSynced.Store(true)
+					c.pendingMPDSync.Store(false)
 				}
 			} else {
 				c.pushQueueToMPD(ver, queueSnapshot, 0, false)
 			}
 		}()
+	} else {
+		c.mpdQueueSynced.Store(false)
+		c.pendingMPDSync.Store(true)
+		c.triggerReconnect()
 	}
 
 	c.broadcastQueue()
@@ -2156,26 +2875,10 @@ func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
 
 	// Comprobar si MPD perdió la cola durante el reinicio rápido y restaurarla desde memoria
 	if lines, err := c.sendRawCommand("status\n"); err == nil {
-		mpdPlaylistLen := -1
-		for _, ln := range lines {
-			if strings.HasPrefix(ln, "playlistlength: ") {
-				mpdPlaylistLen, _ = strconv.Atoi(strings.TrimPrefix(ln, "playlistlength: "))
-				break
-			}
-		}
-		c.mu.RLock()
-		qLen := len(c.queue)
-		currIdx := c.state.CurrentIndex
-		wasPlaying := (c.state.Status == "play")
-		var qCopy []db.Track
-		if qLen > 0 && mpdPlaylistLen == 0 {
-			qCopy = make([]db.Track, qLen)
-			copy(qCopy, c.queue)
-		}
-		ver := c.queueVersion.Load()
-		c.mu.RUnlock()
-
-		if len(qCopy) > 0 {
+		mpdPlaylistLen := parseMPDPlaylistLength(lines)
+		qCopy, currIdx, wasPlaying, ver := c.snapshotQueueState()
+		if len(qCopy) > 0 && (mpdPlaylistLen == 0 || !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || (mpdPlaylistLen >= 0 && mpdPlaylistLen != len(qCopy))) {
+			c.mpdQueueSynced.Store(false)
 			go c.pushQueueToMPD(ver, qCopy, currIdx, wasPlaying)
 		}
 	}

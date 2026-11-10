@@ -88,6 +88,13 @@ func (h *Hub) startKeepAlive() {
 	}
 }
 
+// clearConnectionDeadlines desactiva timeouts de lectura/escritura por petición en flujos largos SSE.
+func clearConnectionDeadlines(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
+}
+
 // ServeHTTP atiende la conexión SSE entrante (`GET /api/events`).
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -96,9 +103,13 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clearConnectionDeadlines(w)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
+	if r.ProtoMajor < 2 {
+		w.Header().Set("Connection", "keep-alive")
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Accel-Buffering", "no")
 
@@ -106,7 +117,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.Unsubscribe(ch)
 
 	// Confirmar conexión inmediata al cliente
-	fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"ok\"}\n\n")
+	if _, err := fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"ok\"}\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	// Enviar estado inicial directo al cliente conectado sin retransmitir al resto
@@ -114,15 +127,25 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	onConnect := h.onConnect
 	h.mu.RUnlock()
 	if onConnect != nil {
+		writeFailed := false
 		onConnect(func(eventType string, data interface{}) {
+			if writeFailed {
+				return
+			}
 			dataBytes, err := json.Marshal(data)
 			if err != nil {
 				log.Printf("[SSE] Error al serializar estado inicial %s: %v", eventType, err)
 				return
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(dataBytes))
+			if _, wErr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(dataBytes)); wErr != nil {
+				writeFailed = true
+				return
+			}
 			flusher.Flush()
 		})
+		if writeFailed {
+			return
+		}
 	}
 
 	notify := r.Context().Done()
@@ -139,7 +162,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[SSE] Error al serializar evento %s: %v", msg.Type, err)
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.Type, string(dataBytes))
+			if _, wErr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.Type, string(dataBytes)); wErr != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}

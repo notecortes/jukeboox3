@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"aurabox/internal/db"
 	"aurabox/internal/events"
@@ -209,6 +211,67 @@ func TestRadiosEndpointsCRUDAndPlayValidation(t *testing.T) {
 	srv.handleRadioPlay(recBadPlay, reqBadPlay)
 	if recBadPlay.Code != http.StatusBadRequest {
 		t.Fatalf("POST /api/radios/play con file:// debía devolver 400, obtuvo %d", recBadPlay.Code)
+	}
+}
+
+// TestAudioStreamProxyHeadersAndChunks verifica que /api/stream no añade Connection: close y retransmite chunks sin buffering.
+func TestAudioStreamProxyHeadersAndChunks(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("ID3_FRAME_1"))
+		if fl != nil {
+			fl.Flush()
+		}
+		_, _ = w.Write([]byte("MP3_AUDIO_CHUNK_2"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	srv := &Server{
+		streamClient:      newAudioStreamClient(),
+		streamUpstreamURL: upstream.URL,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/stream", srv.handleAudioStream)
+	proxySrv := httptest.NewServer(compressionAndSecurityMiddleware(mux))
+	defer proxySrv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxySrv.URL+"/api/stream", nil)
+	if err != nil {
+		t.Fatalf("NewRequest falló: %v", err)
+	}
+	resp, err := proxySrv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/stream falló: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status esperado 200 en /api/stream, obtenido %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "audio/mpeg" {
+		t.Fatalf("Content-Type esperado audio/mpeg, obtenido %q", ct)
+	}
+	if xb := resp.Header.Get("X-Accel-Buffering"); xb != "no" {
+		t.Fatalf("X-Accel-Buffering esperado no, obtenido %q", xb)
+	}
+	if strings.EqualFold(resp.Header.Get("Connection"), "close") {
+		t.Fatalf("la respuesta de /api/stream no debe forzar Connection: close")
+	}
+
+	buf := make([]byte, 128)
+	n, _ := resp.Body.Read(buf)
+	bodyText := string(buf[:n])
+	if !strings.Contains(bodyText, "ID3_FRAME_1") {
+		t.Fatalf("no se recibió chunk de audio esperado en /api/stream, obtenido %q", bodyText)
 	}
 }
 

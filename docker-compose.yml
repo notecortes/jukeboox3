@@ -22,6 +22,7 @@ services:
       - "c 116:* rmw"
     environment:
       - PORT=4080
+      - GOMEMLIMIT=200MiB
       - HTTPS_PORT=${HTTPS_PORT:-4443}
       - HTTPS_PUBLIC_PORT=${HTTPS_PUBLIC_PORT:-4443}
       - FORCE_HTTPS=${FORCE_HTTPS:-false}

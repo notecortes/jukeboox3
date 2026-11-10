@@ -5,11 +5,22 @@
 
 import * as api from './api.js';
 import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js';
-import { initPlayer } from './player.js';
+import { initPlayer, showToast } from './player.js';
 import { initGestures } from './gestures.js';
 import { initQueue } from './queue.js';
 import { initLyrics } from './lyrics.js';
 import { initViews } from './views.js';
+
+let syncRetryTimer = null;
+let activeEventSource = null;
+let sseReconnectTimer = null;
+let sseRetryAttempt = 0;
+let pageUnloading = false;
+
+let streamDesired = false;
+let streamReconnectTimer = null;
+let streamStallWatchdog = null;
+let streamRetryAttempt = 0;
 
 // bootstrap inicializa todos los módulos, suscripción SSE y Service Worker.
 document.addEventListener('DOMContentLoaded', () => {
@@ -24,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initWebStreamPlayer();
   initKeyboardShortcuts();
   initHistoryHandling();
+  initLifecycleRecovery();
 
   // Establecer conexión bidireccional en tiempo real con Server-Sent Events
   connectSSE();
@@ -35,7 +47,73 @@ document.addEventListener('DOMContentLoaded', () => {
   syncPlayerAndQueue();
 });
 
-let syncRetryTimer = null;
+// closeSSEConnection cierra ordenadamente el canal SSE activo y limpia su temporizador.
+function closeSSEConnection() {
+  if (sseReconnectTimer) {
+    clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+  }
+  if (activeEventSource) {
+    activeEventSource.onopen = null;
+    activeEventSource.onerror = null;
+    activeEventSource.close();
+    activeEventSource = null;
+  }
+}
+
+// initLifecycleRecovery reconecta SSE y streaming web al despertar el dispositivo o recuperar red.
+function initLifecycleRecovery() {
+  const handleUnload = () => {
+    pageUnloading = true;
+    closeSSEConnection();
+    clearStreamTimers();
+  };
+
+  window.addEventListener('pagehide', handleUnload);
+  window.addEventListener('beforeunload', handleUnload);
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) {
+      pageUnloading = false;
+      sseRetryAttempt = 0;
+      connectSSE();
+      if (streamDesired) {
+        connectWebAudioStream(false);
+      }
+    }
+  });
+
+  window.addEventListener('online', () => {
+    if (pageUnloading) return;
+    if (!activeEventSource || activeEventSource.readyState === EventSource.CLOSED) {
+      sseRetryAttempt = 0;
+      connectSSE();
+    } else {
+      syncPlayerAndQueue();
+    }
+    if (streamDesired) {
+      const audio = document.getElementById('webAudioPlayer');
+      if (audio && (audio.error || audio.ended || audio.paused || audio.readyState < 2)) {
+        connectWebAudioStream(false);
+      }
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (pageUnloading || document.visibilityState !== 'visible') return;
+    if (!activeEventSource || activeEventSource.readyState === EventSource.CLOSED) {
+      sseRetryAttempt = 0;
+      connectSSE();
+    } else {
+      syncPlayerAndQueue();
+    }
+    if (streamDesired && state.player.status === 'play') {
+      const audio = document.getElementById('webAudioPlayer');
+      if (audio && (audio.error || audio.ended || audio.paused || audio.readyState < 2)) {
+        connectWebAudioStream(false);
+      }
+    }
+  });
+}
 
 // syncPlayerAndQueue sincroniza estado y cola desde REST como respaldo ante reconexiones.
 function syncPlayerAndQueue() {
@@ -70,11 +148,20 @@ function syncPlayerAndQueue() {
     });
 }
 
-// connectSSE mantiene el canal de eventos en tiempo real con reintento automático.
+// connectSSE mantiene el canal de eventos en tiempo real con instancia única y backoff exponencial.
 function connectSSE() {
+  if (pageUnloading) {
+    return;
+  }
+
+  closeSSEConnection();
+
   const evtSource = new EventSource('/api/events');
+  activeEventSource = evtSource;
 
   evtSource.addEventListener('connected', () => {
+    if (activeEventSource !== evtSource) return;
+    sseRetryAttempt = 0;
     console.log('[SSE] Conexión en tiempo real activa (<50ms latencia)');
     document.getElementById('headerStatusDot')?.style.setProperty('background-color', 'var(--color-success)');
     syncPlayerAndQueue();
@@ -113,10 +200,18 @@ function connectSSE() {
   });
 
   evtSource.onerror = () => {
+    if (activeEventSource !== evtSource) return;
     document.getElementById('headerStatusDot')?.style.setProperty('background-color', 'var(--color-warning)');
-    evtSource.close();
-    // Reintento en 3 segundos
-    setTimeout(connectSSE, 3000);
+    closeSSEConnection();
+    if (pageUnloading) return;
+
+    const delays = [1500, 3000, 5000, 8000, 10000];
+    const waitMs = delays[Math.min(sseRetryAttempt, delays.length - 1)];
+    sseRetryAttempt++;
+    sseReconnectTimer = setTimeout(() => {
+      sseReconnectTimer = null;
+      connectSSE();
+    }, waitMs);
   };
 }
 
@@ -198,59 +293,211 @@ function initKeyboardShortcuts() {
   });
 }
 
-// initWebStreamPlayer permite escuchar el audio del reproductor directamente en el móvil / navegador.
-function initWebStreamPlayer() {
+// clearStreamTimers cancela cualquier temporizador activo de reconexión o bloqueo del audio web.
+function clearStreamTimers() {
+  if (streamReconnectTimer) {
+    clearTimeout(streamReconnectTimer);
+    streamReconnectTimer = null;
+  }
+  if (streamStallWatchdog) {
+    clearTimeout(streamStallWatchdog);
+    streamStallWatchdog = null;
+  }
+}
+
+// updateWebStreamUI actualiza apariencia y texto del botón de escucha directa en el móvil.
+function updateWebStreamUI(mode, labelOverride = '') {
   const btn = document.getElementById('btnToggleWebStream');
-  const audio = document.getElementById('webAudioPlayer');
   const btnText = document.getElementById('streamButtonText');
   const icon = document.getElementById('streamIndicatorIcon');
-  if (!btn || !audio) return;
+  if (!btn) return;
 
-  btn.addEventListener('click', () => {
-    if (!audio.paused && audio.src) {
-      audio.pause();
-      audio.src = '';
-      audio.load();
+  switch (mode) {
+    case 'playing':
+      btn.style.background = 'var(--accent)';
+      if (btnText) btnText.textContent = labelOverride || 'En Vivo';
+      if (icon) icon.textContent = '🔊';
+      break;
+    case 'connecting':
+      btn.style.background = 'rgba(99, 102, 241, 0.4)';
+      if (btnText) btnText.textContent = labelOverride || 'Conectando...';
+      if (icon) icon.textContent = '⏳';
+      break;
+    case 'reconnecting':
+      btn.style.background = 'rgba(245, 158, 11, 0.35)';
+      if (btnText) btnText.textContent = labelOverride || 'Reconectando...';
+      if (icon) icon.textContent = '🔄';
+      break;
+    default:
       btn.style.background = 'rgba(255, 255, 255, 0.08)';
       if (btnText) btnText.textContent = 'Móvil';
       if (icon) icon.textContent = '📻';
-    } else {
-      btn.style.background = 'rgba(99, 102, 241, 0.4)';
-      if (btnText) btnText.textContent = 'Conectando...';
+      break;
+  }
+}
 
-      const streamSrc = `/api/stream?_t=${Date.now()}`;
-      audio.src = streamSrc;
+// stopWebAudioStream detiene el reproductor HTML5 y retira el atributo src sin provocar peticiones a '/'.
+function stopWebAudioStream() {
+  const audio = document.getElementById('webAudioPlayer');
+  streamDesired = false;
+  streamRetryAttempt = 0;
+  clearStreamTimers();
+
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+  }
+  updateWebStreamUI('idle');
+}
+
+// scheduleWebStreamReconnect programa un reintento escalonado tras un corte temporal del stream web.
+function scheduleWebStreamReconnect() {
+  if (!streamDesired || pageUnloading || streamReconnectTimer) {
+    return;
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    updateWebStreamUI('reconnecting');
+    return;
+  }
+
+  const delays = [1500, 3000, 5000, 8000];
+  const waitMs = delays[Math.min(streamRetryAttempt, delays.length - 1)];
+  streamRetryAttempt++;
+  updateWebStreamUI('reconnecting');
+
+  streamReconnectTimer = setTimeout(() => {
+    streamReconnectTimer = null;
+    if (streamDesired && !pageUnloading) {
+      connectWebAudioStream(false);
+    }
+  }, waitMs);
+}
+
+// startStreamStallWatchdog vigila si el flujo MP3 queda congelado y recicla la conexión si no avanza.
+function startStreamStallWatchdog() {
+  const audio = document.getElementById('webAudioPlayer');
+  if (!audio || !streamDesired || streamStallWatchdog) {
+    return;
+  }
+
+  const snapshotTime = audio.currentTime || 0;
+  streamStallWatchdog = setTimeout(() => {
+    streamStallWatchdog = null;
+    if (!streamDesired || pageUnloading) {
+      return;
+    }
+    const stillStuck = audio.paused || (audio.currentTime <= snapshotTime + 0.05 && audio.readyState < 3);
+    if (stillStuck && state.player.status === 'play') {
+      console.warn('[Stream] Flujo bloqueado detectado por watchdog, reciclando conexión...');
+      connectWebAudioStream(false);
+    }
+  }, 12000);
+}
+
+// connectWebAudioStream abre el flujo /api/stream (o :4082 en HTTP) con respaldo automático.
+function connectWebAudioStream(allowDirectFallback = true) {
+  const audio = document.getElementById('webAudioPlayer');
+  if (!audio) return;
+
+  clearStreamTimers();
+  streamDesired = true;
+  updateWebStreamUI('connecting');
+
+  audio.src = `/api/stream?_t=${Date.now()}`;
+  audio.load();
+
+  const playPromise = audio.play();
+  if (playPromise === undefined) {
+    return;
+  }
+
+  playPromise.then(() => {
+    streamRetryAttempt = 0;
+    updateWebStreamUI('playing');
+  }).catch((err) => {
+    if (!streamDesired || pageUnloading) {
+      return;
+    }
+    if (err && err.name === 'AbortError') {
+      return;
+    }
+    if (err && err.name === 'NotAllowedError') {
+      console.warn('[Stream] Reproducción bloqueada por política del navegador:', err);
+      stopWebAudioStream();
+      showToast('Pulsa de nuevo en Móvil para activar el audio');
+      return;
+    }
+
+    if (allowDirectFallback && window.location.protocol !== 'https:') {
+      console.warn('[Stream] Intentando conexión directa a 4082:', err);
+      audio.src = `http://${window.location.hostname}:4082/?_t=${Date.now()}`;
       audio.load();
+      audio.play().then(() => {
+        streamRetryAttempt = 0;
+        updateWebStreamUI('playing', 'En Vivo (4082)');
+      }).catch((err2) => {
+        console.error('[Stream] No se pudo reproducir stream directo:', err2);
+        scheduleWebStreamReconnect();
+      });
+      return;
+    }
 
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          btn.style.background = 'var(--accent)';
-          if (btnText) btnText.textContent = 'En Vivo';
-          if (icon) icon.textContent = '🔊';
-        }).catch((err) => {
-          if (window.location.protocol === 'https:') {
-            console.error('[Stream] No se pudo reproducir stream sobre HTTPS:', err);
-            btn.style.background = 'rgba(255, 255, 255, 0.08)';
-            if (btnText) btnText.textContent = 'Móvil';
-            if (icon) icon.textContent = '📻';
-            return;
-          }
-          console.warn('[Stream] Intentando conexión directa a 4082:', err);
-          audio.src = `http://${window.location.hostname}:4082/?_t=${Date.now()}`;
-          audio.load();
-          audio.play().then(() => {
-            btn.style.background = 'var(--accent)';
-            if (btnText) btnText.textContent = 'En Vivo (4082)';
-            if (icon) icon.textContent = '🔊';
-          }).catch((err2) => {
-            console.error('[Stream] No se pudo reproducir stream:', err2);
-            btn.style.background = 'rgba(255, 255, 255, 0.08)';
-            if (btnText) btnText.textContent = 'Móvil';
-            if (icon) icon.textContent = '📻';
-          });
-        });
-      }
+    console.warn('[Stream] Corte o error de conexión en audio web, reintentando:', err);
+    scheduleWebStreamReconnect();
+  });
+}
+
+// initWebStreamPlayer permite escuchar el audio del reproductor directamente en el móvil con autorecuperación.
+function initWebStreamPlayer() {
+  const btn = document.getElementById('btnToggleWebStream');
+  const audio = document.getElementById('webAudioPlayer');
+  if (!btn || !audio) return;
+
+  audio.addEventListener('playing', () => {
+    if (!streamDesired) return;
+    streamRetryAttempt = 0;
+    clearStreamTimers();
+    const isDirect = (audio.currentSrc || '').includes(':4082');
+    updateWebStreamUI('playing', isDirect ? 'En Vivo (4082)' : 'En Vivo');
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    if (streamStallWatchdog) {
+      clearTimeout(streamStallWatchdog);
+      streamStallWatchdog = null;
+    }
+  });
+
+  audio.addEventListener('waiting', () => {
+    if (streamDesired && !pageUnloading) {
+      startStreamStallWatchdog();
+    }
+  });
+
+  audio.addEventListener('stalled', () => {
+    if (streamDesired && !pageUnloading) {
+      startStreamStallWatchdog();
+    }
+  });
+
+  audio.addEventListener('ended', () => {
+    if (!streamDesired || pageUnloading || !audio.hasAttribute('src')) return;
+    console.warn('[Stream] Flujo finalizado inesperadamente, reconectando...');
+    scheduleWebStreamReconnect();
+  });
+
+  audio.addEventListener('error', () => {
+    if (!streamDesired || pageUnloading || !audio.hasAttribute('src')) return;
+    console.warn('[Stream] Error en flujo de audio web, programando reconexión...');
+    scheduleWebStreamReconnect();
+  });
+
+  btn.addEventListener('click', () => {
+    if (streamDesired) {
+      stopWebAudioStream();
+    } else {
+      connectWebAudioStream(true);
     }
   });
 }
@@ -258,7 +505,7 @@ function initWebStreamPlayer() {
 // registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=11').then((reg) => {
+    navigator.serviceWorker.register('/sw.js?v=14').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);

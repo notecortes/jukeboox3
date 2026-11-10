@@ -2,7 +2,7 @@
 // AuraBox Service Worker - PWA Caching & Offline Capabilities
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v13';
+const CACHE_NAME = 'aurabox-v14';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -20,6 +20,55 @@ const STATIC_ASSETS = [
   '/js/views.js',
   '/assets/default-cover.svg'
 ];
+
+// shouldBypassServiceWorker determina si una solicitud debe ir directa a red sin caché ni intercepción.
+function shouldBypassServiceWorker(request, url) {
+  if (request.method !== 'GET') {
+    return true;
+  }
+  if (url.origin !== self.location.origin) {
+    return true;
+  }
+  if (url.pathname.startsWith('/api/')) {
+    return true;
+  }
+  if (request.headers.has('range')) {
+    return true;
+  }
+  if (request.destination === 'audio' || request.destination === 'video') {
+    return true;
+  }
+  if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') {
+    return true;
+  }
+  return false;
+}
+
+// handleNetworkFirst resuelve primero contra red y garantiza siempre un Response válido en respaldo offline.
+async function handleNetworkFirst(request) {
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+      const clone = networkResponse.clone();
+      caches.open(CACHE_NAME)
+        .then((cache) => cache.put(request, clone))
+        .catch(() => {});
+    }
+    return networkResponse;
+  } catch (err) {
+    const cachedResponse = await caches.match(request);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+    if (request.mode === 'navigate') {
+      const indexFallback = await caches.match('/index.html');
+      if (indexFallback) {
+        return indexFallback;
+      }
+    }
+    return Response.error();
+  }
+}
 
 // installListener almacena en caché los recursos estáticos esenciales.
 self.addEventListener('install', (event) => {
@@ -42,35 +91,13 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// fetchListener utiliza estrategia Network-First para asegurar que el navegador siempre reciba el código más reciente.
+// fetchListener utiliza estrategia Network-First evitando interceptar flujos multimedia ni APIs.
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') {
-    return;
-  }
-
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) {
+  if (shouldBypassServiceWorker(event.request, url)) {
     return;
   }
 
-  // No interceptar peticiones dinámicas de API ni flujo SSE
-  if (url.pathname.startsWith('/api/')) {
-    return;
-  }
-
-  // Network-First: intentar siempre red primero para obtener las últimas funciones
-  event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const clone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return networkResponse;
-      })
-      .catch(() => {
-        return caches.match(event.request);
-      })
-  );
+  event.respondWith(handleNetworkFirst(event.request));
 });
 

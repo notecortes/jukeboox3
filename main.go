@@ -37,7 +37,9 @@ type Server struct {
 	scanner         *scanner.LibraryScanner
 	smartmix        *smartmix.SmartMixService
 	lyrics          *lyrics.Service
-	certManager     *tlsutil.CertManager
+	certManager       *tlsutil.CertManager
+	streamClient      *http.Client
+	streamUpstreamURL string
 	localDir        string
 	nasDir          string
 	usbDir          string
@@ -46,6 +48,21 @@ type Server struct {
 	httpsPublicPort string
 	forceHTTPS      bool
 	startTime       time.Time
+}
+
+// newAudioStreamClient crea un cliente HTTP reutilizable para el proxy de stream MPD con timeouts seguros de conexión.
+func newAudioStreamClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   4 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ResponseHeaderTimeout: 6 * time.Second,
+			IdleConnTimeout:       60 * time.Second,
+		},
+		Timeout: 0,
+	}
 }
 
 // main punto de entrada principal del servicio AuraBox en Linux / Raspberry Pi.
@@ -137,6 +154,7 @@ func main() {
 		smartmix:        smService,
 		lyrics:          lyrService,
 		certManager:     certMgr,
+		streamClient:    newAudioStreamClient(),
 		localDir:        musicLocal,
 		nasDir:          musicNas,
 		usbDir:          musicUsb,
@@ -1335,8 +1353,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 // handleAudioStream retransmite el flujo de audio HTTP desde MPD hacia el navegador web.
 func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
-	mpdHost := getEnv("MPD_HOST", "localhost")
-	streamURL := fmt.Sprintf("http://%s:4082/", mpdHost)
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	streamURL := s.streamUpstreamURL
+	if streamURL == "" {
+		mpdHost := getEnv("MPD_HOST", "localhost")
+		streamURL = fmt.Sprintf("http://%s:4082/", mpdHost)
+	}
 
 	req, err := http.NewRequestWithContext(r.Context(), "GET", streamURL, nil)
 	if err != nil {
@@ -1344,7 +1369,10 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{Timeout: 0}
+	client := s.streamClient
+	if client == nil {
+		client = newAudioStreamClient()
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -1357,10 +1385,15 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Connection", "close")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
+	if canFlush {
+		flusher.Flush()
+	}
+
 	buf := make([]byte, 4096)
 	for {
 		n, readErr := resp.Body.Read(buf)
