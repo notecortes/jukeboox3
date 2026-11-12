@@ -1068,3 +1068,76 @@ func TestSelectAudioOutputRollbackAndValidation(t *testing.T) {
 		t.Fatalf("rollback de salidas inconsistente: active=%q outputs=%+v", st.ActiveOutput, st.AudioOutputs)
 	}
 }
+
+// TestMixSkipsBrokenTracksOnStartAndNext verifica que una pista rota/inexistente en un mix no detiene la reproducción ni muestra ACK error si quedan pistas válidas.
+func TestMixSkipsBrokenTracksOnStartAndNext(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "mix_skip_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	srv.mu.Lock()
+	srv.failAddPath = "broken_"
+	srv.mu.Unlock()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	mix := []db.Track{
+		{ID: 1, Path: "/music/nas/05.recopilatorios/broken_intro.mp3", Title: "Broken Intro", Artist: "Joy Division"},
+		{ID: 2, Path: "/music/nas/05.recopilatorios/chemical.mp3", Title: "Chemical", Artist: "New Order"},
+		{ID: 3, Path: "/music/nas/05.recopilatorios/broken_lost_control.mp3", Title: "She's Lost Control", Artist: "Joy Division"},
+		{ID: 4, Path: "/music/nas/05.recopilatorios/blue_monday.mp3", Title: "Blue Monday", Artist: "New Order"},
+	}
+
+	// 1. Si falla la primera pista del mix, debe saltar a Chemical y podar las pistas rotas de la cola
+	c.ReplaceQueue(mix, true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.mpdQueueSynced.Load() && c.syncedVersion.Load() == c.queueVersion.Load() {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	st := c.GetState()
+	q := c.GetQueue()
+	if st.Status != "play" || st.LastError != "" {
+		t.Fatalf("el mix debía seguir sonando sin error tras saltar pista rota: status=%q lastErr=%q", st.Status, st.LastError)
+	}
+	if st.CurrentTrack == nil || st.CurrentTrack.Title != "Chemical" {
+		t.Fatalf("pista activa esperada 'Chemical', obtenida %+v", st.CurrentTrack)
+	}
+	if len(q) != 2 || q[0].Title != "Chemical" || q[1].Title != "Blue Monday" {
+		t.Fatalf("cola esperada podada a [Chemical, Blue Monday], obtenida %+v", q)
+	}
+
+	// 2. Si el usuario pulsa Next mientras hay una pista rota pendiente en reconciliación, también debe saltarla y reproducir la siguiente válida
+	srv.mu.Lock()
+	srv.addDelay = 120 * time.Millisecond
+	srv.mu.Unlock()
+
+	mix2 := []db.Track{
+		{ID: 10, Path: "/music/nas/chemical.mp3", Title: "Chemical", Artist: "New Order"},
+		{ID: 11, Path: "/music/nas/broken_lost_control.mp3", Title: "She's Lost Control", Artist: "Joy Division"},
+		{ID: 12, Path: "/music/nas/blue_monday.mp3", Title: "Blue Monday", Artist: "New Order"},
+	}
+	c.ReplaceQueue(mix2, true)
+	time.Sleep(30 * time.Millisecond)
+	c.Next() // Salta al índice 1 (broken_lost_control) mientras pushQueueToMPD sigue en curso
+
+	deadline2 := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline2) {
+		cur := c.GetState()
+		if c.mpdQueueSynced.Load() && cur.Status == "play" && cur.CurrentTrack != nil && cur.CurrentTrack.Title == "Blue Monday" {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	cur := c.GetState()
+	t.Fatalf("Next() sobre pista rota durante sincronización debía avanzar a 'Blue Monday' sin error (status=%q err=%q track=%+v q=%+v)",
+		cur.Status, cur.LastError, cur.CurrentTrack, c.GetQueue())
+}
+

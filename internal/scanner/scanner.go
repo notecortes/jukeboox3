@@ -38,18 +38,19 @@ var (
 
 // LibraryScanner analiza las carpetas de música local, NAS y USB e indexa metadatos audiófilos.
 type LibraryScanner struct {
-	database    *db.DB
-	eventsHub   *events.Hub
-	localDir    string
-	nasDir      string
-	usbDir      string
-	coversDir   string
-	scanning    bool
-	repairing   atomic.Bool
-	coverCache  map[string]string
-	cacheMu     sync.RWMutex
-	coverCopyMu sync.Mutex
-	mu          sync.Mutex
+	database       *db.DB
+	eventsHub      *events.Hub
+	localDir       string
+	nasDir         string
+	usbDir         string
+	coversDir      string
+	scanning       bool
+	repairing      atomic.Bool
+	coverCache     map[string]string
+	cacheMu        sync.RWMutex
+	coverCopyMu    sync.Mutex
+	mu             sync.Mutex
+	onScanComplete func()
 }
 
 // NewLibraryScanner inicializa el escáner de biblioteca musical.
@@ -64,6 +65,13 @@ func NewLibraryScanner(database *db.DB, hub *events.Hub, localDir, nasDir, usbDi
 		coversDir:  coversDir,
 		coverCache: make(map[string]string),
 	}
+}
+
+// SetOnScanComplete registra un callback opcional que se ejecuta tras finalizar un escaneo de biblioteca.
+func (ls *LibraryScanner) SetOnScanComplete(fn func()) {
+	ls.mu.Lock()
+	ls.onScanComplete = fn
+	ls.mu.Unlock()
 }
 
 // WaitForIdle espera a que terminen los barridos o reparaciones de duración en curso antes de cerrar recursos.
@@ -130,6 +138,7 @@ func (ls *LibraryScanner) ScanLibrary(force bool) {
 
 		totalProcessed := 0
 		skippedExisting := 0
+		totalPruned := 0
 		for _, s := range sources {
 			if s.path == "" {
 				continue
@@ -137,8 +146,9 @@ func (ls *LibraryScanner) ScanLibrary(force bool) {
 			if _, err := os.Stat(s.path); os.IsNotExist(err) {
 				continue
 			}
-			processed, skipped := ls.scanDirectory(s.path, s.name, indexedDurations, &totalProcessed)
+			processed, skipped, seenPaths := ls.scanDirectory(s.path, s.name, indexedDurations, &totalProcessed)
 			skippedExisting += skipped
+			totalPruned += ls.pruneMissingSourceTracks(s.name, seenPaths)
 			_ = processed
 		}
 
@@ -147,8 +157,15 @@ func (ls *LibraryScanner) ScanLibrary(force bool) {
 		}
 
 		elapsed := time.Since(start)
-		log.Printf("[Scanner] Análisis finalizado: %d pistas nuevas/actualizadas (%d omitidas sin cambios) en %v",
-			totalProcessed, skippedExisting, elapsed)
+		log.Printf("[Scanner] Análisis finalizado: %d pistas nuevas/actualizadas (%d omitidas sin cambios, %d rutas obsoletas eliminadas) en %v",
+			totalProcessed, skippedExisting, totalPruned, elapsed)
+
+		ls.mu.Lock()
+		onComplete := ls.onScanComplete
+		ls.mu.Unlock()
+		if onComplete != nil {
+			onComplete()
+		}
 
 		// Tras escanear, reparar duraciones de pistas pendientes en segundo plano
 		ls.RepairDurationsInBackground()
@@ -157,6 +174,7 @@ func (ls *LibraryScanner) ScanLibrary(force bool) {
 			ls.eventsHub.Broadcast("library_updated", map[string]interface{}{
 				"tracks_count": totalProcessed,
 				"skipped":      skippedExisting,
+				"pruned":       totalPruned,
 				"elapsed_ms":   elapsed.Milliseconds(),
 				"scanning":     false,
 			})
@@ -255,8 +273,43 @@ func (ls *LibraryScanner) RepairDurationsInBackground() {
 	}()
 }
 
+// pruneMissingSourceTracks elimina de SQLite rutas ya inexistentes en disco verificando con os.Stat y evitando borrados si NAS/USB está desmontado.
+func (ls *LibraryScanner) pruneMissingSourceTracks(sourceName string, seenPaths map[string]struct{}) int {
+	if ls.database == nil {
+		return 0
+	}
+	// En orígenes montables (nas, usb), no podar si no se detectó ningún archivo (recurso desmontado o apagado).
+	if sourceName != "local" && len(seenPaths) == 0 {
+		return 0
+	}
+	refs, err := ls.database.GetTrackRefsBySource(sourceName)
+	if err != nil || len(refs) == 0 {
+		return 0
+	}
+
+	var staleIDs []int64
+	for _, ref := range refs {
+		if _, ok := seenPaths[ref.Path]; ok {
+			continue
+		}
+		if _, statErr := os.Stat(ref.Path); os.IsNotExist(statErr) {
+			staleIDs = append(staleIDs, ref.ID)
+		}
+	}
+	if len(staleIDs) == 0 {
+		return 0
+	}
+
+	deleted, err := ls.database.DeleteTracksByIDs(staleIDs)
+	if err != nil {
+		log.Printf("[Scanner] Advertencia al podar rutas obsoletas (%s): %v", sourceName, err)
+		return 0
+	}
+	return int(deleted)
+}
+
 // scanDirectory recorre un árbol de directorios en paralelo (4 workers) y persiste en lotes con progreso SSE.
-func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map[string]float64, totalCounter *int) (int, int) {
+func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map[string]float64, totalCounter *int) (int, int, map[string]struct{}) {
 	validExts := map[string]bool{
 		".mp3":  true,
 		".flac": true,
@@ -276,6 +329,7 @@ func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map
 
 	jobs := make(chan scanJob, 64)
 	results := make(chan *db.Track, 128)
+	seenPaths := make(map[string]struct{}, 128)
 
 	var workersWg sync.WaitGroup
 	const numWorkers = 4
@@ -301,6 +355,7 @@ func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map
 			if !validExts[ext] {
 				return nil
 			}
+			seenPaths[path] = struct{}{}
 			// Omitir archivos ya indexados con duración válida para arranques casi instantáneos
 			if indexed != nil {
 				if dur, ok := indexed[path]; ok && dur > 0 && dur != 240.0 {
@@ -370,7 +425,7 @@ func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map
 	}
 	flushBatch()
 
-	return count, skipped
+	return count, skipped, seenPaths
 }
 
 // parseTrackMetadata extrae título, artista, álbum, formato y carátula usando tags embebidos y fallback heurístico inteligente.

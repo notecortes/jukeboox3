@@ -1161,6 +1161,69 @@ func (d *DB) GetTracksNeedingDuration() ([]TrackPathID, error) {
 	return list, nil
 }
 
+// GetTrackRefsBySource devuelve los IDs y rutas indexadas para un origen concreto (local, nas o usb).
+func (d *DB) GetTrackRefsBySource(source string) ([]TrackPathID, error) {
+	rows, err := d.reader().Query(`SELECT id, path FROM tracks WHERE source = ?`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]TrackPathID, 0)
+	for rows.Next() {
+		var item TrackPathID
+		if err := rows.Scan(&item.ID, &item.Path); err == nil {
+			list = append(list, item)
+		}
+	}
+	return list, nil
+}
+
+// DeleteTracksByIDs elimina pistas obsoletas en lotes dentro de una transacción para mantener el índice sin rutas rotas.
+func (d *DB) DeleteTracksByIDs(ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	const chunkSize = 500
+	var totalDeleted int64
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		inClause := strings.Join(placeholders, ",")
+		_, _ = tx.Exec(`DELETE FROM playback_history WHERE track_id IN (`+inClause+`)`, args...)
+		res, err := tx.Exec(`DELETE FROM tracks WHERE id IN (`+inClause+`)`, args...)
+		if err != nil {
+			return totalDeleted, err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			totalDeleted += n
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return totalDeleted, err
+	}
+	return totalDeleted, nil
+}
+
 // GetSetting lee un valor de configuración persistente con valor por defecto.
 func (d *DB) GetSetting(key, defaultValue string) string {
 	var val string

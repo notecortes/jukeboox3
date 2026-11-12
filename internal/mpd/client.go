@@ -553,8 +553,9 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
+	var rawErr error
 	if c.usingUnixSocket.Load() && rawURI != "" {
-		_, rawErr := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
+		_, rawErr = c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
 		if rawErr == nil {
 			return nil
 		}
@@ -564,6 +565,9 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 	}
 
 	_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
+	if err != nil && rawErr != nil && strings.Contains(err.Error(), "No such directory") {
+		return rawErr
+	}
 	return err
 }
 
@@ -595,8 +599,9 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
+	var rawErr error
 	if c.usingUnixSocket.Load() && rawURI != "" {
-		_, rawErr := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
+		_, rawErr = c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
 		if rawErr == nil {
 			return nil
 		}
@@ -606,7 +611,23 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 	}
 
 	_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
+	if err != nil && rawErr != nil && strings.Contains(err.Error(), "No such directory") {
+		return rawErr
+	}
 	return err
+}
+
+// TriggerLibraryUpdate solicita de forma asíncrona a MPD reindexar su base de datos interna como respaldo para sesiones TCP.
+func (c *Client) TriggerLibraryUpdate() {
+	if c.closed.Load() || !c.isConnected() {
+		return
+	}
+	go func() {
+		if c.closed.Load() || !c.isConnected() {
+			return
+		}
+		_, _ = c.sendRawCommand("update\n")
+	}()
 }
 
 // normalizeMPDFilePath normaliza rutas devueltas por MPD (incluidas file:///rawmusic/...) a rutas /music/... de SQLite.
@@ -1580,10 +1601,14 @@ func (c *Client) retryPlayIndexAfterSync(ver uint64, index int) {
 	}
 
 	c.mu.RLock()
-	stillTarget := (c.state.CurrentIndex == index && c.state.Status == "play")
+	stillTarget := (c.queueVersion.Load() == ver && c.state.Status == "play" && c.state.CurrentIndex >= 0 && c.state.CurrentIndex < len(c.queue))
+	targetIdx := c.state.CurrentIndex
 	c.mu.RUnlock()
 	if !stillTarget {
 		return
+	}
+	if targetIdx < 0 {
+		targetIdx = index
 	}
 
 	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncedVersion.Load() != ver {
@@ -1592,7 +1617,7 @@ func (c *Client) retryPlayIndexAfterSync(ver uint64, index int) {
 		}
 	}
 
-	if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", index)); err != nil && isMPDAckError(err) {
+	if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", targetIdx)); err != nil && isMPDAckError(err) {
 		c.mpdQueueSynced.Store(false)
 		c.reconcileQueueWithMPDLocked(ver, true)
 	}
@@ -2094,12 +2119,21 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 		startIdx = 0
 	}
 
+	origToValidIdx := make([]int, len(tracks))
+	for i := range origToValidIdx {
+		origToValidIdx[i] = -1
+	}
+
 	validTracks := make([]db.Track, 0, len(tracks))
 	droppedAny := false
-	mpdPlayIdx := 0
+	mpdPlayIdx := -1
+	actualStartOrigIdx := -1
+	var firstStartErr error
+	var firstFailedTrack db.Track
 
-	// Añadir rápidamente hasta startIdx para comenzar a sonar en <50ms
-	for i := 0; i <= startIdx; i++ {
+	// Fase 1: Añadir rápidamente hasta startIdx (saltando pistas rotas para no detener mixes/álbumes).
+	phase1End := startIdx
+	for i := 0; i < len(tracks) && i <= phase1End; i++ {
 		if c.queueVersion.Load() != ver {
 			return false
 		}
@@ -2111,24 +2145,63 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 				c.triggerReconnect()
 				return false
 			}
-			if i == startIdx {
-				if autoPlay {
-					c.setPlaybackErrorIfVersion(ver, tracks[i], err)
-				}
-				return false
-			}
 			droppedAny = true
+			if i >= startIdx {
+				if firstStartErr == nil {
+					firstStartErr = err
+					firstFailedTrack = tracks[i]
+				}
+				if phase1End+1 < len(tracks) {
+					phase1End++
+				}
+			}
 		} else {
+			newIdx := len(validTracks)
 			validTracks = append(validTracks, tracks[i])
-			if i < startIdx {
-				mpdPlayIdx++
+			origToValidIdx[i] = newIdx
+			if i >= startIdx && mpdPlayIdx < 0 {
+				mpdPlayIdx = newIdx
+				actualStartOrigIdx = i
 			}
 		}
 	}
 
-	c.mu.RLock()
+	if mpdPlayIdx < 0 {
+		if autoPlay && firstStartErr != nil {
+			c.setPlaybackErrorIfVersion(ver, firstFailedTrack, firstStartErr)
+		}
+		if droppedAny && len(validTracks) > 0 {
+			c.mu.Lock()
+			if c.queueVersion.Load() == ver {
+				c.queue = validTracks
+				c.state.QueueLength = len(validTracks)
+				if c.state.CurrentIndex >= len(validTracks) {
+					c.state.CurrentIndex = len(validTracks) - 1
+				}
+				if c.state.CurrentIndex >= 0 && c.state.CurrentIndex < len(validTracks) {
+					tc := validTracks[c.state.CurrentIndex]
+					c.state.CurrentTrack = &tc
+					c.state.Duration = tc.Duration
+				}
+			}
+			c.mu.Unlock()
+			c.broadcastQueue()
+			c.broadcastState()
+		}
+		return false
+	}
+
+	c.mu.Lock()
 	stillPlay := (c.queueVersion.Load() == ver && c.state.Status == "play")
-	c.mu.RUnlock()
+	if c.queueVersion.Load() == ver && actualStartOrigIdx >= 0 && actualStartOrigIdx != startIdx && c.state.CurrentIndex == startIdx {
+		tc := tracks[actualStartOrigIdx]
+		c.state.CurrentIndex = actualStartOrigIdx
+		c.state.CurrentTrack = &tc
+		c.state.Duration = tc.Duration
+		c.state.ElapsedTime = 0
+		c.state.LastError = ""
+	}
+	c.mu.Unlock()
 
 	if autoPlay && stillPlay && c.queueVersion.Load() == ver {
 		if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", mpdPlayIdx)); err != nil {
@@ -2138,14 +2211,14 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 				c.triggerReconnect()
 				return false
 			}
-			c.setPlaybackErrorIfVersion(ver, tracks[startIdx], err)
+			c.setPlaybackErrorIfVersion(ver, tracks[actualStartOrigIdx], err)
 			return false
 		}
 		c.markControlUpdate()
 	}
 
 	// Encolar el resto de pistas en segundo plano cancelando si el usuario lanzó otra petición
-	for i := startIdx + 1; i < len(tracks); i++ {
+	for i := phase1End + 1; i < len(tracks); i++ {
 		if c.queueVersion.Load() != ver {
 			return false
 		}
@@ -2159,6 +2232,7 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 			}
 			droppedAny = true
 		} else {
+			origToValidIdx[i] = len(validTracks)
 			validTracks = append(validTracks, tracks[i])
 		}
 	}
@@ -2168,18 +2242,54 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 	}
 
 	if droppedAny && len(validTracks) > 0 {
+		playOverrideIdx := -1
 		c.mu.Lock()
 		if c.queueVersion.Load() == ver {
+			targetOrig := c.state.CurrentIndex
+			if targetOrig < 0 || targetOrig >= len(origToValidIdx) {
+				targetOrig = actualStartOrigIdx
+			}
+			newCurrIdx := -1
+			if targetOrig >= 0 && targetOrig < len(origToValidIdx) {
+				newCurrIdx = origToValidIdx[targetOrig]
+			}
+			if newCurrIdx < 0 {
+				for j := targetOrig + 1; j < len(origToValidIdx); j++ {
+					if origToValidIdx[j] >= 0 {
+						newCurrIdx = origToValidIdx[j]
+						break
+					}
+				}
+			}
+			if newCurrIdx < 0 {
+				for j := targetOrig - 1; j >= 0; j-- {
+					if origToValidIdx[j] >= 0 {
+						newCurrIdx = origToValidIdx[j]
+						break
+					}
+				}
+			}
+			if newCurrIdx < 0 {
+				newCurrIdx = mpdPlayIdx
+			}
 			c.queue = validTracks
 			c.state.QueueLength = len(validTracks)
-			if mpdPlayIdx >= 0 && mpdPlayIdx < len(validTracks) {
-				c.state.CurrentIndex = mpdPlayIdx
-				trackCopy := validTracks[mpdPlayIdx]
-				c.state.CurrentTrack = &trackCopy
+			c.state.CurrentIndex = newCurrIdx
+			trackCopy := validTracks[newCurrIdx]
+			c.state.CurrentTrack = &trackCopy
+			c.state.Duration = trackCopy.Duration
+			if newCurrIdx != mpdPlayIdx && c.state.Status == "play" {
+				playOverrideIdx = newCurrIdx
 			}
 		}
 		c.mu.Unlock()
+		if playOverrideIdx >= 0 {
+			_, _ = c.sendRawCommand(fmt.Sprintf("play %d\n", playOverrideIdx))
+			c.markControlUpdate()
+		}
 		c.broadcastQueue()
+		c.broadcastState()
+	} else if actualStartOrigIdx != startIdx {
 		c.broadcastState()
 	}
 
@@ -2305,11 +2415,11 @@ func (c *Client) applyQueueDeltaToMPD(ver uint64, tracks []db.Track, mode string
 					c.triggerReconnect()
 					return
 				}
-				if offset == 0 && autoPlay {
+				if offset == 0 && autoPlay && len(tracks) == 1 {
 					c.setPlaybackErrorIfVersion(ver, t, err)
 					return
 				}
-				c.reconcileQueueWithMPDLocked(ver, false)
+				c.reconcileQueueWithMPDLocked(ver, offset == 0 && autoPlay)
 				return
 			} else if offset == 0 && autoPlay {
 				if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", playIdx)); err != nil {

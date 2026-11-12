@@ -139,8 +139,9 @@ func main() {
 		})
 	})
 
-	// Inicializar escáner de biblioteca musical
+	// Inicializar escáner de biblioteca musical y mantener el índice MPD sincronizado tras cada barrido
 	libScanner := scanner.NewLibraryScanner(database, hub, musicLocal, musicNas, musicUsb, coversDir)
+	libScanner.SetOnScanComplete(player.TriggerLibraryUpdate)
 
 	// Inicializar motor Smart Mix
 	smService := smartmix.NewSmartMixService(database)
