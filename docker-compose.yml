@@ -15,7 +15,18 @@ services:
     ports:
       - "4080:4080"  # Interfaz Web HTTP y redirección automática
       - "4443:4443"  # Interfaz Web HTTPS nativo (TLS rango 4000)
-      - "4081:4081"  # Métricas del Sistema y Panel de Administración
+      - "127.0.0.1:4081:4081"  # Métricas y Admin restringidos a loopback local
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     group_add:
       - "audio"
     device_cgroup_rules:
@@ -70,9 +81,24 @@ services:
       resources:
         limits:
           memory: 256M
-    ports:
-      - "4600:6600"  # Puerto de control MPD en rango 4000 (evita colisión con 6600)
-      - "4082:4082"  # Transmisión Web HTTP Hi-Fi para smartphones o navegadores
+    expose:
+      - "6600"  # Puerto de control MPD interno (expuesto solo en aurabox-net)
+      - "4082"  # Stream HTTP Hi-Fi interno (proxeado en /api/stream por AuraBox)
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - CHOWN
+      - FOWNER
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     group_add:
       - "audio"
     device_cgroup_rules:

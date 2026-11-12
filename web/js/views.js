@@ -5,6 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
+import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
 import { formatTime, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
@@ -270,7 +271,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
     for (let i = currentIndex; i < end; i++) {
       const album = albums[i];
       const isSelected = selectedAlbumIds.has(album.id);
-      const cover = album.cover_url || '/assets/default-cover.svg';
+      const cover = sanitizeCoverURL(album.cover_url);
       const displayTitle = cleanDisplayAlbumTitle(album.title);
 
       if (!isList) {
@@ -282,7 +283,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
 
         card.innerHTML = `
           <div class="album-card-checkbox">${isSelected ? '✓' : ''}</div>
-          <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+          <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
           <div class="album-card-title" title="${escapeHtml(album.title)}">${escapeHtml(displayTitle)}</div>
           <div class="album-card-artist" title="${escapeHtml(album.artist)}">${escapeHtml(album.artist || 'Artista')}</div>
         `;
@@ -308,7 +309,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
         const row = document.createElement('div');
         row.className = `album-list-row ${isSelected ? 'selected' : ''}`;
         row.innerHTML = `
-          <img class="album-list-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+          <img class="album-list-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
           <div class="album-list-info">
             <div class="album-list-title">${escapeHtml(displayTitle)}</div>
             <div class="album-list-artist">${escapeHtml(album.artist || 'Artista')} ${album.year > 0 ? '• ' + album.year : ''}</div>
@@ -427,14 +428,14 @@ async function openAlbumDetail(albumId) {
     const album = data.album;
     const tracks = data.tracks || [];
 
-    const cover = album.cover_url || '/assets/default-cover.svg';
+    const cover = sanitizeCoverURL(album.cover_url);
     container.innerHTML = `
       <div style="margin-bottom:16px;">
         <button id="btnBackToAlbums" class="btn-secondary" style="margin-bottom:12px;">
           ← Volver a Álbumes
         </button>
         <div style="display:flex; gap:16px; align-items:center;">
-          <img src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
+          <img src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
           <div>
             <h2 style="font-size:1.25rem; font-weight:700;">${escapeHtml(album.title)}</h2>
             <div style="color:var(--text-secondary); font-size:0.9rem;">${escapeHtml(album.artist || 'Artista')}${album.year ? ' • ' + escapeHtml(album.year) : ''}</div>
@@ -642,19 +643,20 @@ async function renderFolderBrowser(container, path = '') {
     const items = data.items || [];
     const isRoot = !path || data.is_root;
 
-    // Calcular migas de pan (breadcrumbs)
+    // Calcular migas de pan (breadcrumbs) evitando apuntar al directorio padre /music restringido
     let breadcrumbHtml = `<span class="folder-crumb" data-path="" style="color:var(--accent-light); font-weight:700; cursor:pointer;">🏠 Raíz</span>`;
-    if (path) {
-      const parts = path.split('/').filter(Boolean);
+    const parts = path ? path.split('/').filter(Boolean) : [];
+    if (parts.length > 0) {
       let accumulated = '';
       parts.forEach((p, idx) => {
         accumulated += '/' + p;
         const isLast = (idx === parts.length - 1);
+        const crumbTarget = (accumulated === '/music') ? '' : accumulated;
         breadcrumbHtml += ` <span style="color:var(--text-muted); margin:0 4px;">/</span> `;
         if (isLast) {
           breadcrumbHtml += `<span style="color:var(--text-primary); font-weight:700;">${escapeHtml(p)}</span>`;
         } else {
-          breadcrumbHtml += `<span class="folder-crumb" data-path="${escapeHtml(accumulated)}" style="color:var(--accent-light); cursor:pointer;">${escapeHtml(p)}</span>`;
+          breadcrumbHtml += `<span class="folder-crumb" data-path="${escapeHtml(crumbTarget)}" style="color:var(--accent-light); cursor:pointer;">${escapeHtml(p)}</span>`;
         }
       });
     }
@@ -697,7 +699,8 @@ async function renderFolderBrowser(container, path = '') {
     if (path) {
       document.getElementById('btnBackFolder')?.addEventListener('click', () => {
         const parent = path.substring(0, path.lastIndexOf('/'));
-        renderFolderBrowser(container, parent);
+        const nextPath = (parts.length <= 2 || parent === '/music' || parent === '') ? '' : parent;
+        renderFolderBrowser(container, nextPath);
       });
 
       // Conectar botones de acción de carpeta completa
@@ -781,7 +784,7 @@ async function renderFolderBrowser(container, path = '') {
             <div class="track-artist" style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(item.name)}</div>
           </div>
           <div class="track-right" style="gap:6px;">
-            <span class="badge-format" style="font-size:0.7rem; padding:2px 6px;">${ext}</span>
+            <span class="badge-format" style="font-size:0.7rem; padding:2px 6px;">${escapeHtml(ext)}</span>
             <button class="btn-icon btn-file-play" style="width:34px; height:34px; min-width:34px; border-radius:var(--radius-full); background:rgba(99,102,241,0.15); border:1px solid var(--accent); color:var(--accent-light);" title="Reproducir ahora">
               ▶
             </button>
@@ -972,9 +975,9 @@ function renderSearchResults(container, data) {
     data.albums.forEach((album) => {
       const card = document.createElement('div');
       card.className = 'album-card';
-      const cover = album.cover_url || '/assets/default-cover.svg';
+      const cover = sanitizeCoverURL(album.cover_url);
       card.innerHTML = `
-        <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='/assets/default-cover.svg';"/>
+        <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
         <div class="album-card-title">${escapeHtml(album.title)}</div>
         <div class="album-card-artist">${escapeHtml(album.artist)}</div>
       `;
@@ -1153,7 +1156,7 @@ async function triggerSmartMix(artist) {
             ${res.tracks.map((t, idx) => `
               <div class="track-row" style="padding:6px 10px;">
                 <span class="track-number" style="font-size:0.75rem;">${idx + 1}</span>
-                <img src="${t.cover_url || '/assets/default-cover.svg'}" alt="" loading="lazy" decoding="async" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
+                <img src="${escapeHtml(sanitizeCoverURL(t.cover_url))}" alt="" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
                 <div class="track-info">
                   <div class="track-title" style="font-size:0.85rem;">${escapeHtml(t.title)}</div>
                   <div class="track-artist" style="font-size:0.72rem;">${escapeHtml(t.artist)} • ${escapeHtml(t.album)}</div>
@@ -1512,17 +1515,6 @@ function renderRadiosChunked(container, radios, viewContainer) {
   appendBatch();
 }
 
-// escapeHtml previene inyecciones XSS al renderizar texto dinámico en el DOM.
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
 // describeAudioOutput asigna una etiqueta legible y descripción técnica a cada interfaz detectada por MPD.
 function describeAudioOutput(output) {
   const plugin = (output.plugin || '').toLowerCase();
@@ -1532,7 +1524,7 @@ function describeAudioOutput(output) {
     return {
       badge: 'STREAM',
       isDAC: false,
-      description: 'Stream Hi-Fi 320kbps en puerto 4082'
+      description: 'Stream Hi-Fi 320kbps vía /api/stream'
     };
   }
   if (plugin === 'pulse') {
@@ -1882,14 +1874,17 @@ async function loadSecurityStatus() {
         'Para eliminar el aviso inicial del navegador y permitir instalación PWA completa, instala el certificado raíz <code>aurabox-ca.crt</code> como CA de confianza en este dispositivo.';
       if (btnOpenHTTPS) btnOpenHTTPS.style.display = 'none';
     } else if (sec.https_enabled && sec.https_url) {
+      const safeHTTPS = sanitizeHTTPSRedirectURL(sec.https_url);
       titleEl.textContent = 'Conectado por HTTP sin cifrar';
       badgeEl.textContent = 'HTTP';
       if (cardEl) cardEl.style.borderLeft = '4px solid var(--accent)';
-      descEl.innerHTML = `AuraBox ya escucha por HTTPS en <code>${escapeHtml(sec.https_url)}</code>. ` +
+      descEl.innerHTML = `AuraBox ya escucha por HTTPS en <code>${escapeHtml(safeHTTPS || sec.https_url)}</code>. ` +
         'Para entrar poniendo solo la IP de la Raspberry Pi (<code>80/443 → 4080/4443</code>), ejecuta <code>./scripts/setup-https-pi.sh</code> en la Pi.';
-      if (btnOpenHTTPS) {
-        btnOpenHTTPS.href = sec.https_url;
+      if (btnOpenHTTPS && safeHTTPS) {
+        btnOpenHTTPS.href = safeHTTPS;
         btnOpenHTTPS.style.display = 'flex';
+      } else if (btnOpenHTTPS) {
+        btnOpenHTTPS.style.display = 'none';
       }
     } else {
       titleEl.textContent = 'Modo solo HTTP activo (sin HTTPS)';

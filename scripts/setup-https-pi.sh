@@ -16,17 +16,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
 
-# upsert_env actualiza o añade una clave en .env preservando el resto de credenciales.
+# upsert_env actualiza o añade una clave en .env preservando el resto de credenciales y permisos 0600.
 upsert_env() {
     local file="$1"
     local key="$2"
     local val="$3"
+    local tmp_file
     if grep -qE "^${key}=" "$file" 2>/dev/null; then
-        awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k {$0=k"="v} {print}' "$file" > "${file}.tmp"
-        mv "${file}.tmp" "$file"
+        tmp_file=$(mktemp "${file}.XXXXXX")
+        chmod 600 "$tmp_file"
+        awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k {$0=k"="v} {print}' "$file" > "$tmp_file"
+        mv "$tmp_file" "$file"
     else
         printf '%s=%s\n' "$key" "$val" >> "$file"
     fi
+    chmod 600 "$file"
 }
 
 # show_usage muestra las opciones soportadas por el asistente de puertos y TLS.
@@ -215,6 +219,7 @@ case "$MODE" in
 
         if [ ! -f ".env" ]; then
             cp .env.example .env
+            chmod 600 .env
         fi
 
         upsert_env ".env" "HTTPS_PORT" "off"
@@ -277,6 +282,7 @@ check_port_conflicts 'sport = :80 or sport = :443'
 # Preparar .env con la IP LAN y dominio .local reales de la Raspberry Pi
 if [ ! -f ".env" ]; then
     cp .env.example .env
+    chmod 600 .env
 fi
 
 EXTRA_HOSTS="$HOST_LOCAL,aurabox.local"

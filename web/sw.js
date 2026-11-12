@@ -2,14 +2,15 @@
 // AuraBox Service Worker - PWA Caching & Offline Recovery
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v15';
+const CACHE_NAME = 'aurabox-v16';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/css/app.css?v=12',
   '/css/player.css?v=12',
   '/css/views.css?v=12',
-  '/js/app.js?v=17',
+  '/js/app.js?v=18',
+  '/js/sanitize.js',
   '/js/state.js',
   '/js/api.js',
   '/js/gestures.js',
@@ -43,12 +44,23 @@ function shouldBypassServiceWorker(request, url) {
   return false;
 }
 
+// escapeSWText escapa caracteres especiales HTML en la vista offline generada por el Service Worker.
+function escapeSWText(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // buildOfflinePageResponse genera una página HTML autónoma de recuperación cuando no hay conexión con esta URL/puerto.
 function buildOfflinePageResponse(requestUrl) {
   let host = self.location.hostname || '127.0.0.1';
   try {
     host = new URL(requestUrl).hostname || host;
   } catch (e) {}
+  host = host.replace(/[^a-zA-Z0-9.\-:\[\]]/g, '') || '127.0.0.1';
 
   const httpDirect = `http://${host}:4080/`;
   const httpBare = `http://${host}/`;
@@ -75,16 +87,19 @@ function buildOfflinePageResponse(requestUrl) {
 <body>
   <div class="card">
     <h1>No se puede conectar con AuraBox</h1>
-    <p>El servidor no responde en <code>${self.location.origin}</code>. Si acabas de desactivar HTTPS o cambiar los puertos en la Raspberry Pi, entra por la dirección activa:</p>
+    <p>El servidor no responde en <code>${escapeSWText(self.location.origin)}</code>. Si acabas de desactivar HTTPS o cambiar los puertos en la Raspberry Pi, entra por la dirección activa:</p>
     <div class="actions">
-      <a class="primary" href="${httpDirect}">Abrir por HTTP (${httpDirect})</a>
-      <a href="${httpBare}">Abrir por HTTP puerto 80 (${httpBare})</a>
-      <a href="${httpsDirect}">Abrir por HTTPS directo (${httpsDirect})</a>
-      <button type="button" onclick="location.reload()">Reintentar aquí</button>
+      <a class="primary" href="${escapeSWText(httpDirect)}">Abrir por HTTP (${escapeSWText(httpDirect)})</a>
+      <a href="${escapeSWText(httpBare)}">Abrir por HTTP puerto 80 (${escapeSWText(httpBare)})</a>
+      <a href="${escapeSWText(httpsDirect)}">Abrir por HTTPS directo (${escapeSWText(httpsDirect)})</a>
+      <button type="button" id="btnRetryConnection">Reintentar aquí</button>
       <button type="button" class="danger" id="btnResetSW">Limpiar caché PWA de este navegador</button>
     </div>
   </div>
   <script>
+    document.getElementById('btnRetryConnection').addEventListener('click', () => {
+      location.reload();
+    });
     document.getElementById('btnResetSW').addEventListener('click', async () => {
       try {
         if ('serviceWorker' in navigator) {
@@ -96,7 +111,7 @@ function buildOfflinePageResponse(requestUrl) {
           await Promise.all(keys.map((k) => caches.delete(k)));
         }
       } catch (e) {}
-      location.href = '${httpDirect}';
+      location.href = ${JSON.stringify(httpDirect)};
     });
   </script>
 </body>

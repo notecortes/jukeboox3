@@ -94,6 +94,28 @@ type Client struct {
 	closed            atomic.Bool
 }
 
+// NormalizeReplayGainMode valida y normaliza el modo ReplayGain contra los valores oficiales de MPD.
+func NormalizeReplayGainMode(raw string) (string, bool) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "off", "track", "album", "auto":
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
+// ClampCrossfade acota los segundos de crossfade dentro del rango seguro [0, 15].
+func ClampCrossfade(seconds int) int {
+	if seconds < 0 {
+		return 0
+	}
+	if seconds > 15 {
+		return 15
+	}
+	return seconds
+}
+
 // NewClient crea un nuevo controlador de audio con soporte Unix socket / TCP, salvaguardas de volumen y recuperación de ajustes.
 func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) *Client {
 	c := &Client{
@@ -135,11 +157,13 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 			}
 		}
 		if savedRG := database.GetSetting("replay_gain", ""); savedRG != "" {
-			c.state.ReplayGain = savedRG
+			if rg, ok := NormalizeReplayGainMode(savedRG); ok {
+				c.state.ReplayGain = rg
+			}
 		}
 		if savedCF := database.GetSetting("crossfade", ""); savedCF != "" {
-			if cf, err := strconv.Atoi(savedCF); err == nil && cf >= 0 {
-				c.state.Crossfade = cf
+			if cf, err := strconv.Atoi(savedCF); err == nil {
+				c.state.Crossfade = ClampCrossfade(cf)
 			}
 		}
 		c.persistWg.Add(1)
@@ -244,9 +268,9 @@ func (c *Client) connectionSupervisor() {
 	}
 }
 
-// connectLocked establece el socket Unix (preferido) o TCP con MPD bajo connMu.
-func (c *Client) connectLocked() error {
-	if !c.lastDialFail.IsZero() && time.Since(c.lastDialFail) < time.Second {
+// connectLocked establece el socket Unix (preferido) o TCP con MPD bajo connMu, respetando cooldown si se solicita.
+func (c *Client) connectLocked(respectCooldown bool) error {
+	if respectCooldown && !c.lastDialFail.IsZero() && time.Since(c.lastDialFail) < time.Second {
 		return fmt.Errorf("mpd reintento reciente fallido")
 	}
 
@@ -336,15 +360,18 @@ func (c *Client) tryConnect() {
 	}
 
 	c.connMu.Lock()
-	err := c.connectLocked()
+	err := c.connectLocked(false)
 	c.connMu.Unlock()
 	if err != nil {
 		return
 	}
 
 	c.mu.RLock()
-	rg := c.state.ReplayGain
-	cf := c.state.Crossfade
+	rg, ok := NormalizeReplayGainMode(c.state.ReplayGain)
+	if !ok {
+		rg = "auto"
+	}
+	cf := ClampCrossfade(c.state.Crossfade)
 	vol := c.state.Volume
 	maxVol := c.state.MaxVolumeLimit
 	c.mu.RUnlock()
@@ -429,7 +456,7 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 	defer c.connMu.Unlock()
 
 	if !c.connected.Load() || c.conn == nil {
-		if err := c.connectLocked(); err != nil {
+		if err := c.connectLocked(true); err != nil {
 			return nil, fmt.Errorf("mpd desconectado: %w", err)
 		}
 	}
@@ -468,7 +495,7 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 	if err != nil && !strings.HasPrefix(err.Error(), "mpd ack error:") {
 		// Reconectar de inmediato si hubo error de red/socket
 		c.lastDialFail = time.Time{}
-		if reconnErr := c.connectLocked(); reconnErr == nil {
+		if reconnErr := c.connectLocked(false); reconnErr == nil {
 			return execCmd()
 		}
 	}
@@ -2720,13 +2747,14 @@ func antiRepetitionSort(tracks []db.Track, currentTrack *db.Track) []db.Track {
 	return result
 }
 
-// SelectAudioOutput activa la salida seleccionada en MPD, manteniendo activo el stream HTTP.
+// SelectAudioOutput activa la salida seleccionada en MPD sin apagar la previa si falla, manteniendo activo el stream HTTP.
 func (c *Client) SelectAudioOutput(outputID int) error {
 	c.mu.Lock()
 	var selectedName string
 	var selectedPlugin string
 	outsCopy := make([]OutputInfo, len(c.state.AudioOutputs))
 	copy(outsCopy, c.state.AudioOutputs)
+	prevActive := c.state.ActiveOutput
 
 	for i := range c.state.AudioOutputs {
 		if c.state.AudioOutputs[i].ID == outputID {
@@ -2753,19 +2781,24 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 	c.mu.Unlock()
 
 	if c.isConnected() {
-		var enableErr error
-		for _, o := range outsCopy {
-			if o.ID == outputID {
-				_, enableErr = c.sendRawCommand(fmt.Sprintf("enableoutput %d\n", o.ID))
-			} else if selectedPlugin != "httpd" && o.Plugin != "httpd" {
-				_, _ = c.sendRawCommand(fmt.Sprintf("disableoutput %d\n", o.ID))
-			}
-		}
-		c.syncOutputsFromMPD()
-		if enableErr != nil {
+		if _, enableErr := c.sendRawCommand(fmt.Sprintf("enableoutput %d\n", outputID)); enableErr != nil {
+			// Revertir estado optimista si la activación en MPD falló para conservar la salida funcional anterior.
+			c.mu.Lock()
+			c.state.AudioOutputs = outsCopy
+			c.state.ActiveOutput = prevActive
+			c.mu.Unlock()
+			c.syncOutputsFromMPD()
 			c.broadcastState()
 			return fmt.Errorf("no se pudo activar %s en MPD: %w", selectedName, enableErr)
 		}
+		if selectedPlugin != "httpd" {
+			for _, o := range outsCopy {
+				if o.ID != outputID && o.Plugin != "httpd" {
+					_, _ = c.sendRawCommand(fmt.Sprintf("disableoutput %d\n", o.ID))
+				}
+			}
+		}
+		c.syncOutputsFromMPD()
 	}
 
 	outIDStr := strconv.Itoa(outputID)
@@ -2859,8 +2892,11 @@ func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
 	}
 
 	c.mu.RLock()
-	rg := c.state.ReplayGain
-	cf := c.state.Crossfade
+	rg, ok := NormalizeReplayGainMode(c.state.ReplayGain)
+	if !ok {
+		rg = "auto"
+	}
+	cf := ClampCrossfade(c.state.Crossfade)
 	vol := c.state.Volume
 	maxVol := c.state.MaxVolumeLimit
 	c.mu.RUnlock()
@@ -2887,20 +2923,28 @@ func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
 	return c.GetAudioDiagnostics(), nil
 }
 
-// SetAudioConfig configura opciones audiófilas de ReplayGain y Crossfade en MPD y SQLite.
+// SetAudioConfig configura opciones audiófilas de ReplayGain y Crossfade en MPD y SQLite validando lista blanca y rango.
 func (c *Client) SetAudioConfig(replayGain string, crossfade int) {
+	rg, ok := NormalizeReplayGainMode(replayGain)
+	cf := ClampCrossfade(crossfade)
+
 	c.mu.Lock()
-	c.state.ReplayGain = replayGain
-	c.state.Crossfade = crossfade
+	if !ok {
+		rg, ok = NormalizeReplayGainMode(c.state.ReplayGain)
+		if !ok {
+			rg = "auto"
+		}
+	}
+	c.state.ReplayGain = rg
+	c.state.Crossfade = cf
 	c.mu.Unlock()
 
 	if c.isConnected() {
-		_, _ = c.sendRawCommand(fmt.Sprintf("replay_gain_mode %s\n", replayGain))
-		_, _ = c.sendRawCommand(fmt.Sprintf("crossfade %d\n", crossfade))
+		_, _ = c.sendRawCommand(fmt.Sprintf("replay_gain_mode %s\n", rg))
+		_, _ = c.sendRawCommand(fmt.Sprintf("crossfade %d\n", cf))
 	}
 
-	rg := replayGain
-	cfStr := strconv.Itoa(crossfade)
+	cfStr := strconv.Itoa(cf)
 	c.enqueuePersist(func() {
 		_ = c.database.SetSetting("replay_gain", rg)
 		_ = c.database.SetSetting("crossfade", cfStr)

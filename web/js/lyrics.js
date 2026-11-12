@@ -82,7 +82,11 @@ async function checkAndFetchLyrics() {
       state.lyrics.synced = res.synced || [];
       renderLyricsLines();
     } else {
-      container.innerHTML = `<div style="color:var(--text-muted); padding:40px 0; font-size:0.9rem;">${res?.plain || 'Letra no disponible para esta canción'}</div>`;
+      container.innerHTML = '';
+      const msg = document.createElement('div');
+      msg.style.cssText = 'color:var(--text-muted); padding:40px 0; font-size:0.9rem;';
+      msg.textContent = res?.plain || 'Letra no disponible para esta canción';
+      container.appendChild(msg);
     }
   } catch (err) {
     container.innerHTML = '<div style="color:var(--text-muted); padding:40px 0; font-size:0.9rem;">No se pudieron cargar letras en este momento</div>';

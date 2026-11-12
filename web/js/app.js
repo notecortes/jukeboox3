@@ -5,6 +5,7 @@
 
 import * as api from './api.js';
 import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js';
+import { installImageFallbackListener } from './sanitize.js';
 import { initPlayer, showToast } from './player.js';
 import { initGestures } from './gestures.js';
 import { initQueue } from './queue.js';
@@ -26,6 +27,7 @@ let streamRetryAttempt = 0;
 document.addEventListener('DOMContentLoaded', () => {
   console.log('[AuraBox] Iniciando sistema de audio audiófilo...');
 
+  installImageFallbackListener();
   initDockNavigation();
   initPlayer();
   initGestures();
@@ -77,7 +79,7 @@ function initLifecycleRecovery() {
       sseRetryAttempt = 0;
       connectSSE();
       if (streamDesired) {
-        connectWebAudioStream(false);
+        connectWebAudioStream();
       }
     }
   });
@@ -93,7 +95,7 @@ function initLifecycleRecovery() {
     if (streamDesired) {
       const audio = document.getElementById('webAudioPlayer');
       if (audio && (audio.error || audio.ended || audio.paused || audio.readyState < 2)) {
-        connectWebAudioStream(false);
+        connectWebAudioStream();
       }
     }
   });
@@ -109,7 +111,7 @@ function initLifecycleRecovery() {
     if (streamDesired && state.player.status === 'play') {
       const audio = document.getElementById('webAudioPlayer');
       if (audio && (audio.error || audio.ended || audio.paused || audio.readyState < 2)) {
-        connectWebAudioStream(false);
+        connectWebAudioStream();
       }
     }
   });
@@ -369,7 +371,7 @@ function scheduleWebStreamReconnect() {
   streamReconnectTimer = setTimeout(() => {
     streamReconnectTimer = null;
     if (streamDesired && !pageUnloading) {
-      connectWebAudioStream(false);
+      connectWebAudioStream();
     }
   }, waitMs);
 }
@@ -390,13 +392,13 @@ function startStreamStallWatchdog() {
     const stillStuck = audio.paused || (audio.currentTime <= snapshotTime + 0.05 && audio.readyState < 3);
     if (stillStuck && state.player.status === 'play') {
       console.warn('[Stream] Flujo bloqueado detectado por watchdog, reciclando conexión...');
-      connectWebAudioStream(false);
+      connectWebAudioStream();
     }
   }, 12000);
 }
 
-// connectWebAudioStream abre el flujo /api/stream (o :4082 en HTTP) con respaldo automático.
-function connectWebAudioStream(allowDirectFallback = true) {
+// connectWebAudioStream abre el flujo seguro /api/stream mediante proxy interno con respaldo automático.
+function connectWebAudioStream() {
   const audio = document.getElementById('webAudioPlayer');
   if (!audio) return;
 
@@ -429,20 +431,6 @@ function connectWebAudioStream(allowDirectFallback = true) {
       return;
     }
 
-    if (allowDirectFallback && window.location.protocol !== 'https:') {
-      console.warn('[Stream] Intentando conexión directa a 4082:', err);
-      audio.src = `http://${window.location.hostname}:4082/?_t=${Date.now()}`;
-      audio.load();
-      audio.play().then(() => {
-        streamRetryAttempt = 0;
-        updateWebStreamUI('playing', 'En Vivo (4082)');
-      }).catch((err2) => {
-        console.error('[Stream] No se pudo reproducir stream directo:', err2);
-        scheduleWebStreamReconnect();
-      });
-      return;
-    }
-
     console.warn('[Stream] Corte o error de conexión en audio web, reintentando:', err);
     scheduleWebStreamReconnect();
   });
@@ -458,8 +446,7 @@ function initWebStreamPlayer() {
     if (!streamDesired) return;
     streamRetryAttempt = 0;
     clearStreamTimers();
-    const isDirect = (audio.currentSrc || '').includes(':4082');
-    updateWebStreamUI('playing', isDirect ? 'En Vivo (4082)' : 'En Vivo');
+    updateWebStreamUI('playing', 'En Vivo');
   });
 
   audio.addEventListener('timeupdate', () => {
@@ -497,7 +484,7 @@ function initWebStreamPlayer() {
     if (streamDesired) {
       stopWebAudioStream();
     } else {
-      connectWebAudioStream(true);
+      connectWebAudioStream();
     }
   });
 }
@@ -505,7 +492,7 @@ function initWebStreamPlayer() {
 // registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=15').then((reg) => {
+    navigator.serviceWorker.register('/sw.js?v=16').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);

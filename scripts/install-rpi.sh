@@ -26,9 +26,11 @@ sudo apt-get install -y cifs-utils curl git alsa-utils
 echo "[2/6] Verificando instalación de Docker..."
 if ! command -v docker &> /dev/null; then
     echo "      Instalando Docker Engine..."
-    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-    sudo sh /tmp/get-docker.sh
-    rm -f /tmp/get-docker.sh
+    TMP_DOCKER_SCRIPT=$(mktemp /tmp/aurabox-get-docker.XXXXXX.sh)
+    trap 'rm -f "$TMP_DOCKER_SCRIPT"' EXIT
+    curl -fsSL https://get.docker.com -o "$TMP_DOCKER_SCRIPT"
+    sudo sh "$TMP_DOCKER_SCRIPT"
+    rm -f "$TMP_DOCKER_SCRIPT"
 else
     echo "      Docker ya se encuentra instalado."
 fi
@@ -62,6 +64,7 @@ EOF
 else
     echo "      Archivo .env existente preservado."
 fi
+chmod 600 "$ENV_FILE"
 
 # 5. Configurar regla udev para pendrives USB
 echo "[5/6] Configurando regla udev para pendrives USB..."

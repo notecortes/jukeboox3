@@ -3,23 +3,139 @@ package mpd
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
 const maxPlaylistBodyBytes = 64 * 1024
 
-var radioPlaylistHTTPClient = &http.Client{
-	Timeout: 4 * time.Second,
+var (
+	radioClientMu           sync.RWMutex
+	radioPlaylistHTTPClient *http.Client
+	allowLocalStreamsTest   bool
+)
+
+// isForbiddenExternalIP comprueba si una IP pertenece a loopback, red privada, enlace local o rango no enrutable en Internet.
+func isForbiddenExternalIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+		// Bloquear también rango CGNAT (100.64.0.0/10) y redes reservadas 0.0.0.0/8.
+		if ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127 {
+			return true
+		}
+		if ip[0] == 0 {
+			return true
+		}
+	}
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
 }
 
-// ValidateHTTPStreamURL valida que una URL de radio use http:// o https:// y tenga un host válido.
+// isLocalOrInternalHostname detecta nombres de host locales como localhost o *.internal no aptos para streams externos.
+func isLocalOrInternalHostname(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return lower == "localhost" ||
+		strings.HasSuffix(lower, ".localhost") ||
+		strings.HasSuffix(lower, ".internal")
+}
+
+// newSafeExternalHTTPClient crea un cliente HTTP con verificación de IP tras DNS (anti-SSRF/rebinding) y límite de redirecciones.
+func newSafeExternalHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 15 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("dirección destino inválida: %w", err)
+			}
+			ip := net.ParseIP(host)
+			if isForbiddenExternalIP(ip) {
+				return fmt.Errorf("conexión SSRF bloqueada hacia IP local o privada (%s)", host)
+			}
+			return nil
+		},
+	}
+
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   4 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("demasiadas redirecciones en lista de radio")
+			}
+			if _, err := ValidateHTTPStreamURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirección de radio bloqueada: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+// SetRadioHTTPClientForTest sustituye temporalmente el cliente HTTP de listas de radio en tests y devuelve función restauradora.
+func SetRadioHTTPClientForTest(client *http.Client) func() {
+	radioClientMu.Lock()
+	prevClient := radioPlaylistHTTPClient
+	prevAllow := allowLocalStreamsTest
+	if client != nil {
+		radioPlaylistHTTPClient = client
+	}
+	allowLocalStreamsTest = true
+	radioClientMu.Unlock()
+
+	return func() {
+		radioClientMu.Lock()
+		radioPlaylistHTTPClient = prevClient
+		allowLocalStreamsTest = prevAllow
+		radioClientMu.Unlock()
+	}
+}
+
+// getRadioHTTPClient devuelve de forma segura el cliente HTTP actual configurado para resolver listas de radio.
+func getRadioHTTPClient() (*http.Client, bool) {
+	radioClientMu.RLock()
+	client := radioPlaylistHTTPClient
+	allowTest := allowLocalStreamsTest
+	radioClientMu.RUnlock()
+	if client != nil {
+		return client, allowTest
+	}
+
+	radioClientMu.Lock()
+	defer radioClientMu.Unlock()
+	if radioPlaylistHTTPClient == nil {
+		radioPlaylistHTTPClient = newSafeExternalHTTPClient(4 * time.Second)
+	}
+	return radioPlaylistHTTPClient, allowLocalStreamsTest
+}
+
+// ValidateHTTPStreamURL valida que una URL de radio use http:// o https://, sin credenciales embebidas ni hosts locales SSRF.
 func ValidateHTTPStreamURL(rawURL string) (string, error) {
 	clean := strings.TrimSpace(rawURL)
-	if clean == "" || strings.ContainsAny(clean, "\r\n") {
+	if clean == "" || strings.ContainsAny(clean, "\r\n\x00") {
 		return "", fmt.Errorf("URL de radio inválida")
 	}
 	parsed, err := url.ParseRequestURI(clean)
@@ -30,8 +146,49 @@ func ValidateHTTPStreamURL(rawURL string) (string, error) {
 	if scheme != "http" && scheme != "https" {
 		return "", fmt.Errorf("la URL de radio debe usar protocolo http:// o https://")
 	}
-	if parsed.Host == "" {
+	if parsed.User != nil {
+		return "", fmt.Errorf("la URL de radio no debe incluir credenciales")
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
 		return "", fmt.Errorf("la URL de radio debe incluir un servidor válido")
+	}
+
+	_, allowTest := getRadioHTTPClient()
+	if !allowTest {
+		if isLocalOrInternalHostname(host) {
+			return "", fmt.Errorf("la URL de radio no puede apuntar a direcciones locales internas")
+		}
+		if ip := net.ParseIP(host); ip != nil && isForbiddenExternalIP(ip) {
+			return "", fmt.Errorf("la URL de radio no puede apuntar a direcciones IP privadas o loopback")
+		}
+	}
+
+	return clean, nil
+}
+
+// ValidateLogoURL valida una ruta o URL de logotipo evitando esquemas peligrosos como javascript: o data:.
+func ValidateLogoURL(rawURL string) (string, error) {
+	clean := strings.TrimSpace(rawURL)
+	if clean == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(clean, "\r\n\x00\"'<>`") {
+		return "", fmt.Errorf("URL de logotipo inválida")
+	}
+	if strings.HasPrefix(clean, "/assets/") || strings.HasPrefix(clean, "/api/covers/") {
+		if strings.Contains(clean, "..") || strings.Contains(clean, `\`) {
+			return "", fmt.Errorf("ruta relativa de logotipo inválida")
+		}
+		return clean, nil
+	}
+	parsed, err := url.ParseRequestURI(clean)
+	if err != nil {
+		return "", fmt.Errorf("URL de logotipo malformada: %w", err)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if (scheme != "http" && scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
+		return "", fmt.Errorf("el logotipo debe usar protocolo http://, https:// o ruta local permitida")
 	}
 	return clean, nil
 }
@@ -58,7 +215,8 @@ func ResolveStreamURLs(rawURL string) ([]string, error) {
 	req.Header.Set("User-Agent", "AuraBoxJukebox/1.0")
 	req.Header.Set("Accept", "audio/x-scpls, audio/x-mpegurl, application/x-mpegURL, text/plain, */*")
 
-	resp, err := radioPlaylistHTTPClient.Do(req)
+	httpClient, _ := getRadioHTTPClient()
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo descargar la lista de radio: %w", err)
 	}
@@ -85,9 +243,15 @@ func ResolveStreamURLs(rawURL string) ([]string, error) {
 	}
 
 	extHint := strings.ToLower(path.Ext(parsed.Path))
-	resolved := parsePlaylistBody(body, parsed, extHint)
+	candidates := parsePlaylistBody(body, parsed, extHint)
+	resolved := make([]string, 0, len(candidates))
+	for _, cURL := range candidates {
+		if safeURL, valErr := ValidateHTTPStreamURL(cURL); valErr == nil {
+			resolved = append(resolved, safeURL)
+		}
+	}
 	if len(resolved) == 0 {
-		return nil, fmt.Errorf("la lista %s no contiene URLs de streaming válidas", extHint)
+		return nil, fmt.Errorf("la lista %s no contiene URLs de streaming públicas válidas", extHint)
 	}
 	return resolved, nil
 }

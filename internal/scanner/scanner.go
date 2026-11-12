@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -21,7 +22,11 @@ import (
 	"aurabox/internal/events"
 )
 
-const scannerSchemaVersion = "2"
+const (
+	scannerSchemaVersion = "2"
+	maxCoverFileBytes    = 10 << 20
+	maxCoverCacheEntries = 5000
+)
 
 var (
 	catDirRegex        = regexp.MustCompile(`^(\d{2}\.)?([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)$`)
@@ -58,6 +63,20 @@ func NewLibraryScanner(database *db.DB, hub *events.Hub, localDir, nasDir, usbDi
 		usbDir:     usbDir,
 		coversDir:  coversDir,
 		coverCache: make(map[string]string),
+	}
+}
+
+// WaitForIdle espera a que terminen los barridos o reparaciones de duración en curso antes de cerrar recursos.
+func (ls *LibraryScanner) WaitForIdle() {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ls.mu.Lock()
+		busy := ls.scanning
+		ls.mu.Unlock()
+		if !busy && !ls.repairing.Load() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -275,7 +294,7 @@ func (ls *LibraryScanner) scanDirectory(rootPath, sourceName string, indexed map
 	skipped := 0
 	go func() {
 		_ = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info == nil || info.IsDir() {
+			if err != nil || info == nil || info.IsDir() || !info.Mode().IsRegular() {
 				return nil
 			}
 			ext := strings.ToLower(filepath.Ext(path))
@@ -744,6 +763,10 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 		for _, pref := range preferredNames {
 			if actualName, ok := filesByLower[pref]; ok {
 				candPath := filepath.Join(dir, actualName)
+				candInfo, statErr := os.Lstat(candPath)
+				if statErr != nil || !candInfo.Mode().IsRegular() || candInfo.Size() <= 0 || candInfo.Size() > maxCoverFileBytes {
+					continue
+				}
 				hash := md5.Sum([]byte(dir))
 				hashStr := hex.EncodeToString(hash[:])
 				ext := strings.ToLower(filepath.Ext(actualName))
@@ -751,7 +774,9 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 				destPath := filepath.Join(ls.coversDir, destName)
 
 				if _, err := os.Stat(destPath); os.IsNotExist(err) {
-					_ = copyFile(candPath, destPath)
+					if copyErr := copyFile(candPath, destPath); copyErr != nil {
+						continue
+					}
 				}
 				result = fmt.Sprintf("/api/covers/%s", destName)
 				break
@@ -760,28 +785,80 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 	}
 
 	ls.cacheMu.Lock()
+	if len(ls.coverCache) >= maxCoverCacheEntries {
+		clear(ls.coverCache)
+	}
 	ls.coverCache[dir] = result
 	ls.cacheMu.Unlock()
 
 	return result
 }
 
-// copyFile copia un archivo físico de imagen hacia la caché estática de AuraBox.
+// isSupportedImageMagic valida las firmas mágicas estándar de imágenes JPEG, PNG, GIF, WebP o BMP.
+func isSupportedImageMagic(header []byte) bool {
+	if len(header) >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
+		return true // JPEG
+	}
+	if len(header) >= 8 && bytes.Equal(header[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return true // PNG
+	}
+	if len(header) >= 4 && (bytes.Equal(header[:4], []byte("GIF8")) || (len(header) >= 12 && bytes.Equal(header[:4], []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WEBP")))) {
+		return true // GIF / WebP
+	}
+	if len(header) >= 2 && header[0] == 'B' && header[1] == 'M' {
+		return true // BMP
+	}
+	return false
+}
+
+// copyFile copia de forma segura y acotada una carátula física validando su cabecera hacia la caché estática de AuraBox.
 func copyFile(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxCoverFileBytes {
+		return fmt.Errorf("carátula inválida o fuera de tamaño permitido")
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	var header [12]byte
+	n, err := io.ReadFull(in, header[:])
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return err
+	}
+	if !isSupportedImageMagic(header[:n]) {
+		return fmt.Errorf("formato binario de carátula no reconocido")
+	}
+
+	tmpDst := dst + ".tmp"
+	out, err := os.OpenFile(tmpDst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, in)
-	return err
+	if _, wErr := out.Write(header[:n]); wErr != nil {
+		_ = out.Close()
+		_ = os.Remove(tmpDst)
+		return wErr
+	}
+
+	remainingLimit := int64(maxCoverFileBytes - n)
+	if _, copyErr := io.Copy(out, io.LimitReader(in, remainingLimit)); copyErr != nil {
+		_ = out.Close()
+		_ = os.Remove(tmpDst)
+		return copyErr
+	}
+	if closeErr := out.Close(); closeErr != nil {
+		_ = os.Remove(tmpDst)
+		return closeErr
+	}
+	return os.Rename(tmpDst, dst)
 }
 
 // detectSourceAndRoot determina la fuente (local/nas/usb) y su directorio raíz para preservar jerarquías de carpetas.
@@ -800,8 +877,8 @@ func (ls *LibraryScanner) detectSourceAndRoot(targetPath string) (string, string
 
 // ParseAndSaveFile procesa un archivo de audio específico en disco y lo guarda en la base de datos.
 func (ls *LibraryScanner) ParseAndSaveFile(filePath string) *db.Track {
-	info, err := os.Stat(filePath)
-	if err != nil || info.IsDir() {
+	info, err := os.Lstat(filePath)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
 		return nil
 	}
 
@@ -827,7 +904,7 @@ func (ls *LibraryScanner) ScanFolderTracks(folderPath string) []db.Track {
 	}
 
 	_ = filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() || !info.Mode().IsRegular() {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))

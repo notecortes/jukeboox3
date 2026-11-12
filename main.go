@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -245,11 +247,28 @@ func main() {
 	<-stop
 
 	log.Println("[Sistema] Deteniendo AuraBox de manera ordenada...")
-	_ = httpServer.Close()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	_ = httpServer.Shutdown(shutdownCtx)
 	if httpsServer != nil {
-		_ = httpsServer.Close()
+		_ = httpsServer.Shutdown(shutdownCtx)
 	}
-	_ = adminServer.Close()
+	_ = adminServer.Shutdown(shutdownCtx)
+}
+
+// requireMethod restringe un endpoint a uno o más métodos HTTP permitidos respondiendo 405 Method Not Allowed si difiere.
+func requireMethod(next http.HandlerFunc, methods ...string) http.HandlerFunc {
+	allowHeader := strings.Join(methods, ", ")
+	return func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range methods {
+			if r.Method == m {
+				next(w, r)
+				return
+			}
+		}
+		w.Header().Set("Allow", allowHeader)
+		http.Error(w, "método no permitido", http.StatusMethodNotAllowed)
+	}
 }
 
 // registerRoutes configura las rutas REST, SSE y recursos estáticos.
@@ -262,63 +281,63 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/covers/", coversCacheMiddleware(http.StripPrefix("/api/covers/", http.FileServer(http.Dir(s.coversDir)))))
 
 	// 3. Flujo en tiempo real Server-Sent Events (SSE)
-	mux.HandleFunc("/api/events", s.eventsHub.ServeHTTP)
+	mux.HandleFunc("/api/events", requireMethod(s.eventsHub.ServeHTTP, http.MethodGet))
 
 	// 4. API del Reproductor
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/player/play", s.handlePlay)
-	mux.HandleFunc("/api/player/pause", s.handlePause)
-	mux.HandleFunc("/api/player/toggle", s.handleToggle)
-	mux.HandleFunc("/api/player/next", s.handleNext)
-	mux.HandleFunc("/api/player/prev", s.handlePrev)
-	mux.HandleFunc("/api/player/seek", s.handleSeek)
-	mux.HandleFunc("/api/player/repeat", s.handleRepeat)
-	mux.HandleFunc("/api/player/volume", s.handleVolume)
-	mux.HandleFunc("/api/player/volume/step", s.handleVolumeStep)
-	mux.HandleFunc("/api/player/volume/max", s.handleVolumeMax)
-	mux.HandleFunc("/api/player/output", s.handleSelectOutput)
-	mux.HandleFunc("/api/player/outputs/refresh", s.handleRefreshOutputs)
-	mux.HandleFunc("/api/player/outputs/diagnostics", s.handleAudioDiagnostics)
-	mux.HandleFunc("/api/player/config", s.handleAudioConfig)
-	mux.HandleFunc("/api/player/sleeptimer", s.handleSleepTimer)
+	mux.HandleFunc("/api/status", requireMethod(s.handleStatus, http.MethodGet))
+	mux.HandleFunc("/api/player/play", requireMethod(s.handlePlay, http.MethodPost))
+	mux.HandleFunc("/api/player/pause", requireMethod(s.handlePause, http.MethodPost))
+	mux.HandleFunc("/api/player/toggle", requireMethod(s.handleToggle, http.MethodPost))
+	mux.HandleFunc("/api/player/next", requireMethod(s.handleNext, http.MethodPost))
+	mux.HandleFunc("/api/player/prev", requireMethod(s.handlePrev, http.MethodPost))
+	mux.HandleFunc("/api/player/seek", requireMethod(s.handleSeek, http.MethodPost))
+	mux.HandleFunc("/api/player/repeat", requireMethod(s.handleRepeat, http.MethodPost))
+	mux.HandleFunc("/api/player/volume", requireMethod(s.handleVolume, http.MethodPost))
+	mux.HandleFunc("/api/player/volume/step", requireMethod(s.handleVolumeStep, http.MethodPost))
+	mux.HandleFunc("/api/player/volume/max", requireMethod(s.handleVolumeMax, http.MethodPost))
+	mux.HandleFunc("/api/player/output", requireMethod(s.handleSelectOutput, http.MethodPost))
+	mux.HandleFunc("/api/player/outputs/refresh", requireMethod(s.handleRefreshOutputs, http.MethodPost))
+	mux.HandleFunc("/api/player/outputs/diagnostics", requireMethod(s.handleAudioDiagnostics, http.MethodGet))
+	mux.HandleFunc("/api/player/config", requireMethod(s.handleAudioConfig, http.MethodPost))
+	mux.HandleFunc("/api/player/sleeptimer", requireMethod(s.handleSleepTimer, http.MethodPost))
 
 	// 5. API de Cola (Jukebox Queue)
-	mux.HandleFunc("/api/queue", s.handleQueue)
-	mux.HandleFunc("/api/queue/add", s.handleQueueAdd)
-	mux.HandleFunc("/api/queue/play", s.handleQueuePlay)
-	mux.HandleFunc("/api/queue/move", s.handleQueueMove)
-	mux.HandleFunc("/api/queue/remove", s.handleQueueRemove)
-	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
-	mux.HandleFunc("/api/queue/shuffle", s.handleQueueShuffle)
+	mux.HandleFunc("/api/queue", requireMethod(s.handleQueue, http.MethodGet))
+	mux.HandleFunc("/api/queue/add", requireMethod(s.handleQueueAdd, http.MethodPost))
+	mux.HandleFunc("/api/queue/play", requireMethod(s.handleQueuePlay, http.MethodPost))
+	mux.HandleFunc("/api/queue/move", requireMethod(s.handleQueueMove, http.MethodPost))
+	mux.HandleFunc("/api/queue/remove", requireMethod(s.handleQueueRemove, http.MethodPost))
+	mux.HandleFunc("/api/queue/clear", requireMethod(s.handleQueueClear, http.MethodPost))
+	mux.HandleFunc("/api/queue/shuffle", requireMethod(s.handleQueueShuffle, http.MethodPost))
 
 	// 6. API de Biblioteca
-	mux.HandleFunc("/api/library/tracks", s.handleLibraryTracks)
-	mux.HandleFunc("/api/library/recent", s.handleLibraryRecent)
-	mux.HandleFunc("/api/library/albums", s.handleLibraryAlbums)
-	mux.HandleFunc("/api/library/album", s.handleLibraryAlbumDetail)
-	mux.HandleFunc("/api/library/artists", s.handleLibraryArtists)
-	mux.HandleFunc("/api/library/artist/tracks", s.handleLibraryArtistTracks)
-	mux.HandleFunc("/api/library/folders", s.handleLibraryFolders)
-	mux.HandleFunc("/api/library/scan", s.handleLibraryScan)
-	mux.HandleFunc("/api/library/favorite", s.handleFavoriteToggle)
-	mux.HandleFunc("/api/library/favorites", s.handleGetFavorites)
-	mux.HandleFunc("/api/library/favorites/play", s.handlePlayFavorites)
-	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/library/tracks", requireMethod(s.handleLibraryTracks, http.MethodGet))
+	mux.HandleFunc("/api/library/recent", requireMethod(s.handleLibraryRecent, http.MethodGet))
+	mux.HandleFunc("/api/library/albums", requireMethod(s.handleLibraryAlbums, http.MethodGet))
+	mux.HandleFunc("/api/library/album", requireMethod(s.handleLibraryAlbumDetail, http.MethodGet))
+	mux.HandleFunc("/api/library/artists", requireMethod(s.handleLibraryArtists, http.MethodGet))
+	mux.HandleFunc("/api/library/artist/tracks", requireMethod(s.handleLibraryArtistTracks, http.MethodGet))
+	mux.HandleFunc("/api/library/folders", requireMethod(s.handleLibraryFolders, http.MethodGet))
+	mux.HandleFunc("/api/library/scan", requireMethod(s.handleLibraryScan, http.MethodPost))
+	mux.HandleFunc("/api/library/favorite", requireMethod(s.handleFavoriteToggle, http.MethodPost))
+	mux.HandleFunc("/api/library/favorites", requireMethod(s.handleGetFavorites, http.MethodGet))
+	mux.HandleFunc("/api/library/favorites/play", requireMethod(s.handlePlayFavorites, http.MethodPost))
+	mux.HandleFunc("/api/search", requireMethod(s.handleSearch, http.MethodGet))
 
 	// 7. API de Smart Mix
-	mux.HandleFunc("/api/smartmix", s.handleSmartMix)
+	mux.HandleFunc("/api/smartmix", requireMethod(s.handleSmartMix, http.MethodPost))
 
 	// 8. API de Letras LRCLIB
-	mux.HandleFunc("/api/lyrics", s.handleLyrics)
+	mux.HandleFunc("/api/lyrics", requireMethod(s.handleLyrics, http.MethodGet))
 
 	// 9. Emisoras de Radio, Stream, Seguridad TLS y Ajustes
-	mux.HandleFunc("/api/stream", s.handleAudioStream)
-	mux.HandleFunc("/api/radios", s.handleRadios)
-	mux.HandleFunc("/api/radios/play", s.handleRadioPlay)
-	mux.HandleFunc("/api/settings", s.handleSettings)
-	mux.HandleFunc("/api/settings/nas", s.handleNASConfig)
-	mux.HandleFunc("/api/security/status", s.handleSecurityStatus)
-	mux.HandleFunc("/api/security/ca.crt", s.handleDownloadCACert)
+	mux.HandleFunc("/api/stream", requireMethod(s.handleAudioStream, http.MethodGet, http.MethodHead))
+	mux.HandleFunc("/api/radios", requireMethod(s.handleRadios, http.MethodGet, http.MethodPost, http.MethodDelete))
+	mux.HandleFunc("/api/radios/play", requireMethod(s.handleRadioPlay, http.MethodPost))
+	mux.HandleFunc("/api/settings", requireMethod(s.handleSettings, http.MethodGet, http.MethodPost))
+	mux.HandleFunc("/api/settings/nas", requireMethod(s.handleNASConfig, http.MethodGet, http.MethodPost))
+	mux.HandleFunc("/api/security/status", requireMethod(s.handleSecurityStatus, http.MethodGet))
+	mux.HandleFunc("/api/security/ca.crt", requireMethod(s.handleDownloadCACert, http.MethodGet, http.MethodHead))
 }
 
 // noCacheMiddleware previene que el navegador almacene en caché HTML, JS o CSS desactualizados.
@@ -331,14 +350,39 @@ func noCacheMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// corsMiddleware permite solicitudes seguras desde navegadores en red local.
+// isSameOrigin valida que la cabecera Origin corresponda exactamente al mismo esquema HTTP/HTTPS y host de la petición.
+func isSameOrigin(origin, reqHost string) bool {
+	if origin == "" || reqHost == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	return u.Host != "" && strings.EqualFold(u.Host, reqHost)
+}
+
+// corsMiddleware restringe CORS estrictamente al mismo origen en red local sin exponer comodines globales.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		sameOrigin := isSameOrigin(origin, r.Host)
+		if sameOrigin {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		}
+		if r.Method == http.MethodOptions {
+			if origin != "" && !sameOrigin {
+				http.Error(w, "origen cruzado no permitido", http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -354,49 +398,114 @@ var gzipPool = sync.Pool{
 
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	writer *gzip.Writer
+	writer      *gzip.Writer
+	decided     bool
+	gzipEnabled bool
 }
 
+// Unwrap expone el ResponseWriter subyacente para compatibilidad con http.ResponseController.
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return g.ResponseWriter
+}
+
+// isAlreadyCompressedContentType detecta MIME binarios ya comprimidos o multimedia donde gzip empeora CPU/latencia.
+func isAlreadyCompressedContentType(ct string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	if base == "" {
+		return false
+	}
+	if strings.HasPrefix(base, "image/") && base != "image/svg+xml" {
+		return true
+	}
+	return strings.HasPrefix(base, "audio/") ||
+		strings.HasPrefix(base, "video/") ||
+		base == "application/octet-stream" ||
+		base == "application/x-x509-ca-cert" ||
+		base == "application/gzip" ||
+		base == "application/zip"
+}
+
+// WriteHeader decide de forma diferida si activar gzip según código HTTP y Content-Type real de la respuesta.
+func (g *gzipResponseWriter) WriteHeader(statusCode int) {
+	if g.decided {
+		return
+	}
+	g.decided = true
+
+	shouldSkip := statusCode < 200 ||
+		statusCode == http.StatusNoContent ||
+		statusCode == http.StatusNotModified ||
+		g.Header().Get("Content-Encoding") != "" ||
+		isAlreadyCompressedContentType(g.Header().Get("Content-Type"))
+
+	if !shouldSkip {
+		gz := gzipPool.Get().(*gzip.Writer)
+		gz.Reset(g.ResponseWriter)
+		g.writer = gz
+		g.gzipEnabled = true
+		g.Header().Set("Content-Encoding", "gzip")
+		g.Header().Del("Content-Length")
+		g.Header().Add("Vary", "Accept-Encoding")
+	}
+
+	g.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Write envía los bytes comprimidos o directos tras asegurar la decisión de cabecera.
 func (g *gzipResponseWriter) Write(b []byte) (int, error) {
-	return g.writer.Write(b)
+	if !g.decided {
+		if g.Header().Get("Content-Type") == "" && len(b) > 0 {
+			g.Header().Set("Content-Type", http.DetectContentType(b))
+		}
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.gzipEnabled && g.writer != nil {
+		return g.writer.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
 }
 
+// Flush vacía el flujo gzip (si está activo) y el ResponseWriter subyacente.
 func (g *gzipResponseWriter) Flush() {
-	_ = g.writer.Flush()
+	if g.gzipEnabled && g.writer != nil {
+		_ = g.writer.Flush()
+	}
 	if f, ok := g.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-// compressionAndSecurityMiddleware comprime respuestas y añade cabeceras HTTP de seguridad.
+// finish cierra el compresor gzip si se activó y devuelve la instancia al pool.
+func (g *gzipResponseWriter) finish() {
+	if g.gzipEnabled && g.writer != nil {
+		_ = g.writer.Close()
+		gzipPool.Put(g.writer)
+		g.writer = nil
+	}
+}
+
+// compressionAndSecurityMiddleware comprime respuestas textuales de forma segura y añade cabeceras CSP y de endurecimiento HTTP.
 func compressionAndSecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Endurecimiento con cabeceras de seguridad
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'")
 
-		// No comprimir SSE ni transmisión de audio en tiempo real
-		if r.URL.Path == "/api/events" || r.URL.Path == "/api/stream" {
+		// Omitir compresión en SSE, streaming binario, peticiones HEAD, Range o respuestas binarias prefijadas.
+		if r.Method == http.MethodHead ||
+			r.Header.Get("Range") != "" ||
+			r.URL.Path == "/api/events" ||
+			r.URL.Path == "/api/stream" ||
+			strings.HasPrefix(r.URL.Path, "/api/covers/") ||
+			r.URL.Path == "/api/security/ca.crt" ||
+			!strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		gz := gzipPool.Get().(*gzip.Writer)
-		defer gzipPool.Put(gz)
-		gz.Reset(w)
-		defer gz.Close()
-
-		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Del("Content-Length")
-
-		gzw := &gzipResponseWriter{ResponseWriter: w, writer: gz}
+		gzw := &gzipResponseWriter{ResponseWriter: w}
+		defer gzw.finish()
 		next.ServeHTTP(gzw, r)
 	})
 }
@@ -409,18 +518,78 @@ func coversCacheMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isSafeMusicPath asegura que una ruta de archivo pertenezca a los directorios de música autorizados.
+// resolvePathThroughSymlinks resuelve rutas absolutas siguiendo symlinks incluso cuando el último nodo aún no existe en disco.
+func resolvePathThroughSymlinks(target string) (string, error) {
+	absPath, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return "", err
+	}
+	if realPath, err := filepath.EvalSymlinks(absPath); err == nil {
+		return realPath, nil
+	}
+
+	cur := absPath
+	var tail []string
+	for {
+		parent := filepath.Dir(cur)
+		base := filepath.Base(cur)
+		tail = append(tail, base)
+		if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+			res := realParent
+			for i := len(tail) - 1; i >= 0; i-- {
+				res = filepath.Join(res, tail[i])
+			}
+			return filepath.Clean(res), nil
+		}
+		if parent == cur {
+			return absPath, nil
+		}
+		cur = parent
+	}
+}
+
+// isSafeMusicPath asegura que una ruta de archivo o carpeta pertenezca físicamente a los directorios de música autorizados.
 func (s *Server) isSafeMusicPath(p string) bool {
-	if p == "" {
+	if p == "" || strings.ContainsRune(p, '\x00') {
 		return false
 	}
-	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-		return true
+	lower := strings.ToLower(strings.TrimSpace(p))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return false
 	}
-	clean := filepath.Clean(p)
-	return strings.HasPrefix(clean, s.localDir) ||
-		strings.HasPrefix(clean, s.nasDir) ||
-		strings.HasPrefix(clean, s.usbDir)
+
+	evalTarget, err := resolvePathThroughSymlinks(p)
+	if err != nil {
+		return false
+	}
+
+	roots := []string{s.localDir, s.nasDir, s.usbDir}
+	for _, root := range roots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		evalRoot, err := resolvePathThroughSymlinks(root)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(evalRoot, evalTarget)
+		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+			return true
+		}
+	}
+	return false
+}
+
+const maxJSONBodyBytes int64 = 1 << 20
+
+// decodeJSONBody decodifica un cuerpo JSON limitando su tamaño máximo a 1 MiB para evitar consumo excesivo de RAM.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	if r.Body == nil {
+		return fmt.Errorf("cuerpo vacío")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	return dec.Decode(dst)
 }
 
 // jsonResponse serializa la estructura Go a JSON con el código HTTP correspondiente.
@@ -544,7 +713,8 @@ func (s *Server) handleSelectOutput(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRefreshOutputs(w http.ResponseWriter, r *http.Request) {
 	diag, err := s.player.RefreshAudioOutputs()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[Audio] Error refrescando salidas: %v", err)
+		http.Error(w, "no se pudieron actualizar las salidas de audio", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
@@ -558,14 +728,30 @@ func (s *Server) handleAudioDiagnostics(w http.ResponseWriter, r *http.Request) 
 	jsonResponse(w, http.StatusOK, s.player.GetAudioDiagnostics())
 }
 
-// handleAudioConfig ajusta ReplayGain y Crossfade en MPD.
+// handleAudioConfig ajusta ReplayGain y Crossfade en MPD tras validar lista blanca y rango permitido.
 func (s *Server) handleAudioConfig(w http.ResponseWriter, r *http.Request) {
-	replayGain := r.URL.Query().Get("replay_gain")
-	crossfadeStr := r.URL.Query().Get("crossfade")
-	cf, _ := strconv.Atoi(crossfadeStr)
-	if replayGain == "" {
-		replayGain = "auto"
+	rawRG := strings.TrimSpace(r.URL.Query().Get("replay_gain"))
+	replayGain := "auto"
+	if rawRG != "" {
+		normRG, ok := mpd.NormalizeReplayGainMode(rawRG)
+		if !ok {
+			http.Error(w, "parámetro replay_gain inválido (permitidos: off, track, album, auto)", http.StatusBadRequest)
+			return
+		}
+		replayGain = normRG
 	}
+
+	crossfadeStr := strings.TrimSpace(r.URL.Query().Get("crossfade"))
+	cf := 0
+	if crossfadeStr != "" {
+		parsedCF, err := strconv.Atoi(crossfadeStr)
+		if err != nil || parsedCF < 0 || parsedCF > 15 {
+			http.Error(w, "parámetro crossfade inválido (0..15 segundos)", http.StatusBadRequest)
+			return
+		}
+		cf = parsedCF
+	}
+
 	s.player.SetAudioConfig(replayGain, cf)
 	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
@@ -600,7 +786,7 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		ClearFirst bool     `json:"clear_first"`
 		Mode       string   `json:"mode"` // play_now, play_next, append, replace
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeJSONBody(w, r, &payload); err != nil {
 		http.Error(w, "cuerpo json inválido", http.StatusBadRequest)
 		return
 	}
@@ -630,37 +816,39 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 			tracksToEnqueue = artTracks
 		}
 	} else if payload.Folder != "" {
-		if !s.isSafeMusicPath(payload.Folder) {
+		cleanFolder := filepath.Clean(payload.Folder)
+		if !s.isSafeMusicPath(cleanFolder) {
 			http.Error(w, "acceso denegado: carpeta no permitida", http.StatusForbidden)
 			return
 		}
-		folderTracks, err := s.database.GetTracksByPathPrefix(payload.Folder)
+		folderTracks, err := s.database.GetTracksByPathPrefix(cleanFolder)
 		if err == nil && len(folderTracks) > 0 {
 			tracksToEnqueue = folderTracks
 		} else {
 			// Si no estaban aún en la base de datos, escanear la carpeta en disco
-			tracksToEnqueue = s.scanner.ScanFolderTracks(payload.Folder)
+			tracksToEnqueue = s.scanner.ScanFolderTracks(cleanFolder)
 		}
 	} else if payload.Path != "" {
-		if !s.isSafeMusicPath(payload.Path) {
+		cleanPath := filepath.Clean(payload.Path)
+		if !s.isSafeMusicPath(cleanPath) {
 			http.Error(w, "acceso denegado: ruta no permitida", http.StatusForbidden)
 			return
 		}
-		fi, err := os.Stat(payload.Path)
+		fi, err := os.Lstat(cleanPath)
 		if err == nil && fi.IsDir() {
-			folderTracks, err := s.database.GetTracksByPathPrefix(payload.Path)
+			folderTracks, err := s.database.GetTracksByPathPrefix(cleanPath)
 			if err == nil && len(folderTracks) > 0 {
 				tracksToEnqueue = folderTracks
 			} else {
-				tracksToEnqueue = s.scanner.ScanFolderTracks(payload.Path)
+				tracksToEnqueue = s.scanner.ScanFolderTracks(cleanPath)
 			}
-		} else {
-			// Es un archivo individual
-			track, err := s.database.GetTrackByPath(payload.Path)
+		} else if err == nil && fi.Mode().IsRegular() {
+			// Es un archivo regular individual
+			track, err := s.database.GetTrackByPath(cleanPath)
 			if err == nil && track != nil {
 				tracksToEnqueue = append(tracksToEnqueue, *track)
 			} else {
-				parsed := s.scanner.ParseAndSaveFile(payload.Path)
+				parsed := s.scanner.ParseAndSaveFile(cleanPath)
 				if parsed != nil {
 					tracksToEnqueue = append(tracksToEnqueue, *parsed)
 				}
@@ -668,14 +856,15 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if len(payload.FilePaths) > 0 {
 		for _, fp := range payload.FilePaths {
-			if !s.isSafeMusicPath(fp) {
+			cleanFP := filepath.Clean(fp)
+			if !s.isSafeMusicPath(cleanFP) {
 				continue
 			}
-			track, err := s.database.GetTrackByPath(fp)
+			track, err := s.database.GetTrackByPath(cleanFP)
 			if err == nil && track != nil {
 				tracksToEnqueue = append(tracksToEnqueue, *track)
 			} else {
-				parsed := s.scanner.ParseAndSaveFile(fp)
+				parsed := s.scanner.ParseAndSaveFile(cleanFP)
 				if parsed != nil {
 					tracksToEnqueue = append(tracksToEnqueue, *parsed)
 				}
@@ -763,7 +952,8 @@ func (s *Server) handleQueueShuffle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLibraryTracks(w http.ResponseWriter, r *http.Request) {
 	tracks, err := s.database.GetAllTracks()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error listando pistas: %v", err)
+		http.Error(w, "error al consultar la biblioteca", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, tracks)
@@ -775,10 +965,13 @@ func (s *Server) handleLibraryRecent(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(limitStr)
 	if limit <= 0 {
 		limit = 30
+	} else if limit > 200 {
+		limit = 200
 	}
 	tracks, err := s.database.GetRecentTracks(limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error listando recientes: %v", err)
+		http.Error(w, "error al consultar pistas recientes", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, tracks)
@@ -788,7 +981,8 @@ func (s *Server) handleLibraryRecent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLibraryAlbums(w http.ResponseWriter, r *http.Request) {
 	albums, err := s.database.GetAlbums()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error listando álbumes: %v", err)
+		http.Error(w, "error al consultar álbumes", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, albums)
@@ -817,7 +1011,8 @@ func (s *Server) handleLibraryAlbumDetail(w http.ResponseWriter, r *http.Request
 func (s *Server) handleLibraryArtists(w http.ResponseWriter, r *http.Request) {
 	artists, err := s.database.GetArtists()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error listando artistas: %v", err)
+		http.Error(w, "error al consultar artistas", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, artists)
@@ -832,7 +1027,8 @@ func (s *Server) handleLibraryArtistTracks(w http.ResponseWriter, r *http.Reques
 	}
 	tracks, err := s.database.GetTracksByArtist(artist)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error listando pistas de artista: %v", err)
+		http.Error(w, "error al consultar pistas del artista", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, tracks)
@@ -874,11 +1070,11 @@ func (s *Server) handleLibraryFolders(w http.ResponseWriter, r *http.Request) {
 
 	for _, e := range entries {
 		name := e.Name()
-		// Omitir archivos y carpetas ocultas del sistema (ej: .directory, .folder.png, .DS_Store)
-		if strings.HasPrefix(name, ".") {
+		// Omitir archivos ocultos del sistema y enlaces simbólicos por seguridad
+		if strings.HasPrefix(name, ".") || e.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		full := filepath.Join(subpath, name)
+		full := filepath.Join(cleanSubpath, name)
 		if e.IsDir() {
 			dirItems = append(dirItems, map[string]interface{}{
 				"name":   name,
@@ -907,7 +1103,7 @@ func (s *Server) handleLibraryFolders(w http.ResponseWriter, r *http.Request) {
 	items := append(dirItems, fileItems...)
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"is_root": false,
-		"path":    subpath,
+		"path":    cleanSubpath,
 		"items":   items,
 	})
 }
@@ -965,7 +1161,8 @@ func (s *Server) handleFavoriteToggle(w http.ResponseWriter, r *http.Request) {
 	}
 	isFav, err := s.database.ToggleFavorite(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error alternando favorito %d: %v", id, err)
+		http.Error(w, "no se pudo actualizar favorito", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
@@ -978,7 +1175,8 @@ func (s *Server) handleFavoriteToggle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetFavorites(w http.ResponseWriter, r *http.Request) {
 	tracks, err := s.database.GetFavorites()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error obteniendo favoritos: %v", err)
+		http.Error(w, "error al consultar favoritos", http.StatusInternalServerError)
 		return
 	}
 	if tracks == nil {
@@ -997,7 +1195,7 @@ func (s *Server) handlePlayFavorites(w http.ResponseWriter, r *http.Request) {
 		Shuffle bool   `json:"shuffle"` // true para barajar aleatoriamente
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&payload)
+		_ = decodeJSONBody(w, r, &payload)
 	}
 	if payload.Mode == "" {
 		payload.Mode = "play_now"
@@ -1005,7 +1203,8 @@ func (s *Server) handlePlayFavorites(w http.ResponseWriter, r *http.Request) {
 
 	tracks, err := s.database.GetFavorites()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error reproduciendo favoritos: %v", err)
+		http.Error(w, "error al cargar canciones favoritas", http.StatusInternalServerError)
 		return
 	}
 	if len(tracks) == 0 {
@@ -1047,7 +1246,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	tracks, albums, artists, err := s.database.Search(q)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[DB] Error en búsqueda: %v", err)
+		http.Error(w, "error al ejecutar búsqueda", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
@@ -1064,7 +1264,7 @@ func (s *Server) handleSmartMix(w http.ResponseWriter, r *http.Request) {
 		Count   int    `json:"count"`
 		PlayNow bool   `json:"play_now"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeJSONBody(w, r, &payload); err != nil {
 		http.Error(w, "json inválido", http.StatusBadRequest)
 		return
 	}
@@ -1075,11 +1275,14 @@ func (s *Server) handleSmartMix(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.Count <= 0 {
 		payload.Count = 20
+	} else if payload.Count > 100 {
+		payload.Count = 100
 	}
 
 	mixTracks, similarArtists, err := s.smartmix.GenerateMix(payload.Artist, payload.Count)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[SmartMix] Error generando mix para %q: %v", payload.Artist, err)
+		http.Error(w, "no se pudo generar el Smart Mix para este artista", http.StatusInternalServerError)
 		return
 	}
 
@@ -1114,7 +1317,8 @@ func (s *Server) handleLyrics(w http.ResponseWriter, r *http.Request) {
 
 	res, err := s.lyrics.GetLyrics(title, artist, album, dur, audioPath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[Lyrics] Error obteniendo letras: %v", err)
+		http.Error(w, "error al consultar letras", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, res)
@@ -1152,7 +1356,8 @@ func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		radios, err := s.database.GetRadios()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[DB] Error listando radios: %v", err)
+			http.Error(w, "error al consultar emisoras", http.StatusInternalServerError)
 			return
 		}
 		jsonResponse(w, http.StatusOK, radios)
@@ -1169,7 +1374,7 @@ func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
 			Bitrate     string `json:"bitrate"`
 			Format      string `json:"format"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := decodeJSONBody(w, r, &payload); err != nil {
 			http.Error(w, "json inválido", http.StatusBadRequest)
 			return
 		}
@@ -1184,16 +1389,22 @@ func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		cleanLogo, err := mpd.ValidateLogoURL(payload.LogoURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		name := strings.TrimSpace(payload.Name)
-		if name == "" {
-			http.Error(w, "el nombre de la emisora es obligatorio", http.StatusBadRequest)
+		if name == "" || len(name) > 120 {
+			http.Error(w, "el nombre de la emisora debe tener entre 1 y 120 caracteres", http.StatusBadRequest)
 			return
 		}
 
 		station := db.RadioStation{
 			Name:        name,
 			StreamURL:   cleanURL,
-			LogoURL:     strings.TrimSpace(payload.LogoURL),
+			LogoURL:     cleanLogo,
 			Genre:       strings.TrimSpace(payload.Genre),
 			Broadcaster: strings.TrimSpace(payload.Broadcaster),
 			Country:     strings.TrimSpace(payload.Country),
@@ -1246,7 +1457,7 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 		Bitrate     string `json:"bitrate"`
 		Format      string `json:"format"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeJSONBody(w, r, &payload); err != nil {
 		http.Error(w, "json inválido", http.StatusBadRequest)
 		return
 	}
@@ -1260,6 +1471,15 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	coverVal, err := mpd.ValidateLogoURL(payload.LogoURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if coverVal == "" {
+		coverVal = "/assets/default-cover.svg"
 	}
 
 	name := strings.TrimSpace(payload.Name)
@@ -1278,11 +1498,6 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	formatVal := inferRadioFormat(payload.Format, resolvedURLs[0])
-
-	coverVal := strings.TrimSpace(payload.LogoURL)
-	if coverVal == "" {
-		coverVal = "/assets/default-cover.svg"
-	}
 
 	radioTrack := db.Track{
 		ID:       -1,
@@ -1307,16 +1522,57 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSettings lee o actualiza configuraciones del sistema.
+// handleSettings lee o actualiza configuraciones permitidas del sistema bajo lista blanca estricta.
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	if r.Method == http.MethodPost {
 		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := decodeJSONBody(w, r, &payload); err != nil {
 			http.Error(w, "json inválido", http.StatusBadRequest)
 			return
 		}
+		if len(payload) == 0 {
+			http.Error(w, "se requiere al menos un ajuste", http.StatusBadRequest)
+			return
+		}
+
+		curState := s.player.GetState()
+		newRG := curState.ReplayGain
+		newCF := curState.Crossfade
+		audioChanged := false
+
 		for k, v := range payload {
-			_ = s.database.SetSetting(k, v)
+			switch k {
+			case "max_volume_limit":
+				limit, err := strconv.Atoi(strings.TrimSpace(v))
+				if err != nil || limit < 30 || limit > 100 {
+					http.Error(w, "max_volume_limit inválido (30..100)", http.StatusBadRequest)
+					return
+				}
+				s.player.SetMaxVolumeLimit(limit)
+			case "replay_gain":
+				rg, ok := mpd.NormalizeReplayGainMode(v)
+				if !ok {
+					http.Error(w, "replay_gain inválido (off, track, album, auto)", http.StatusBadRequest)
+					return
+				}
+				newRG = rg
+				audioChanged = true
+			case "crossfade":
+				cf, err := strconv.Atoi(strings.TrimSpace(v))
+				if err != nil || cf < 0 || cf > 15 {
+					http.Error(w, "crossfade inválido (0..15)", http.StatusBadRequest)
+					return
+				}
+				newCF = cf
+				audioChanged = true
+			default:
+				http.Error(w, "clave de ajuste no permitida", http.StatusBadRequest)
+				return
+			}
+		}
+
+		if audioChanged {
+			s.player.SetAudioConfig(newRG, newCF)
 		}
 		jsonResponse(w, http.StatusOK, map[string]string{"status": "updated"})
 		return
@@ -1386,7 +1642,6 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
@@ -1412,9 +1667,14 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleNASConfig gestiona la consulta y guardado de credenciales del recurso de red NAS.
+// hasControlChars verifica si una cadena de configuración contiene caracteres de control o saltos de línea peligrosos.
+func hasControlChars(s string) bool {
+	return strings.ContainsAny(s, "\r\n\x00")
+}
+
+// handleNASConfig gestiona la consulta y guardado seguro de parámetros NAS sin persistir contraseñas en claro en SQLite.
 func (s *Server) handleNASConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	if r.Method == http.MethodPost {
 		var payload struct {
 			Alias    string `json:"alias"`
 			Host     string `json:"host"`
@@ -1423,36 +1683,40 @@ func (s *Server) handleNASConfig(w http.ResponseWriter, r *http.Request) {
 			Password string `json:"password"`
 			Options  string `json:"options"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := decodeJSONBody(w, r, &payload); err != nil {
 			http.Error(w, "json inválido", http.StatusBadRequest)
 			return
 		}
 
-		if payload.Alias != "" {
-			_ = s.database.SetSetting("nas_alias", payload.Alias)
-		}
-		if payload.Host != "" {
-			_ = s.database.SetSetting("nas_host", payload.Host)
-		}
-		if payload.Share != "" {
-			_ = s.database.SetSetting("nas_share", payload.Share)
-		}
-		if payload.Username != "" {
-			_ = s.database.SetSetting("nas_user", payload.Username)
-		}
-		if payload.Password != "" {
-			_ = s.database.SetSetting("nas_pass", payload.Password)
-		}
-		if payload.Options != "" {
-			_ = s.database.SetSetting("nas_options", payload.Options)
+		for _, field := range []string{payload.Alias, payload.Host, payload.Share, payload.Username, payload.Options} {
+			if hasControlChars(field) {
+				http.Error(w, "parámetros NAS inválidos", http.StatusBadRequest)
+				return
+			}
 		}
 
-		// Disparar re-escaneo reactivo
+		if alias := strings.TrimSpace(payload.Alias); alias != "" {
+			_ = s.database.SetSetting("nas_alias", alias)
+		}
+		if host := strings.TrimSpace(payload.Host); host != "" {
+			_ = s.database.SetSetting("nas_host", host)
+		}
+		if share := strings.TrimSpace(payload.Share); share != "" {
+			_ = s.database.SetSetting("nas_share", share)
+		}
+		if user := strings.TrimSpace(payload.Username); user != "" {
+			_ = s.database.SetSetting("nas_user", user)
+		}
+		if opts := strings.TrimSpace(payload.Options); opts != "" {
+			_ = s.database.SetSetting("nas_options", opts)
+		}
+
+		// Disparar re-escaneo reactivo sin almacenar nas_pass en texto plano dentro de SQLite.
 		s.scanner.ScanLibraryAll()
 
 		jsonResponse(w, http.StatusOK, map[string]string{
 			"status":  "ok",
-			"message": "Configuración NAS guardada con éxito. Re-escaneo iniciado.",
+			"message": "Configuración NAS guardada (credenciales gestionadas vía .env del host). Re-escaneo iniciado.",
 		})
 		return
 	}

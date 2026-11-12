@@ -14,7 +14,7 @@ music/nas/*
 .env.local
 .env.*.local
 *.secret
-
+leeme.txt
 # Binarios compilados
 aurabox
 aurabox-bin

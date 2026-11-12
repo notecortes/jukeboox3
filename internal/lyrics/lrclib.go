@@ -3,6 +3,7 @@ package lyrics
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	maxLocalLRCBytes      = 512 * 1024
+	maxLyricsHTTPBytes    = 2 << 20
+	maxLyricsCacheEntries = 1000
+)
+
+var (
+	reTrackNum   = regexp.MustCompile(`^\s*\d+[\s\.\-_]+\s*`)
+	reNoise      = regexp.MustCompile(`(?i)[\(\[]\s*(remaster(?:ed)?(?:\s*\d{4})?|live|acoustic|mono|stereo|bonus\s*track|\d{4}\s*remaster|radio\s*edit|deluxe(?:\s*edition)?|flac|official\s*audio|explicit)[\)\]]`)
+	reMultiSpace = regexp.MustCompile(`\s+`)
+	reFeat       = regexp.MustCompile(`(?i)\s*[\(\[]?(?:feat\.|featuring|ft\.)[^\)\]]+[\)\]]?`)
+	reLRCLine    = regexp.MustCompile(`\[(\d+):(\d+(?:\.\d+)?)\](.*)`)
 )
 
 // LRCLIBResponse representa la respuesta de la API pública LRCLIB.
@@ -69,25 +84,41 @@ func cleanSongTitle(raw string) string {
 	}
 
 	// Eliminar prefijos de número de pista como "01 - ", "01. ", "1. ", "01 "
-	reTrackNum := regexp.MustCompile(`^\s*\d+[\s\.\-_]+\s*`)
 	s = reTrackNum.ReplaceAllString(s, "")
 
 	// Eliminar corchetes o paréntesis con etiquetas comunes como [Remastered], (2011 Remaster), [FLAC]
-	reNoise := regexp.MustCompile(`(?i)[\(\[]\s*(remaster(?:ed)?(?:\s*\d{4})?|live|acoustic|mono|stereo|bonus\s*track|\d{4}\s*remaster|radio\s*edit|deluxe(?:\s*edition)?|flac|official\s*audio|explicit)[\)\]]`)
 	s = reNoise.ReplaceAllString(s, "")
 
 	// Limpiar espacios múltiples y bordes
-	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+	s = reMultiSpace.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
 
 // cleanArtistName limpia colaboradores adicionales como feat. o ft. para maximizar coincidencia.
 func cleanArtistName(raw string) string {
 	s := strings.TrimSpace(raw)
-	reFeat := regexp.MustCompile(`(?i)\s*[\(\[]?(?:feat\.|featuring|ft\.)[^\)\]]+[\)\]]?`)
 	s = reFeat.ReplaceAllString(s, "")
-	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+	s = reMultiSpace.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
+}
+
+// readSafeLocalLRC lee un archivo .lrc verificando que sea regular, no symlink y menor a 512 KB.
+func readSafeLocalLRC(path string) ([]byte, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxLocalLRCBytes {
+		return nil, false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(io.LimitReader(f, maxLocalLRCBytes))
+	if err != nil {
+		return nil, false
+	}
+	return content, true
 }
 
 // checkLocalLRC comprueba si existe un archivo .lrc en disco junto a la pista de audio.
@@ -96,13 +127,11 @@ func checkLocalLRC(audioPath string) *LyricsResult {
 		return nil
 	}
 	base := strings.TrimSuffix(audioPath, filepath.Ext(audioPath))
-	lrcPath := base + ".lrc"
-	content, err := os.ReadFile(lrcPath)
-	if err != nil {
-		// Probar con minúscula .LRC
-		lrcPath = base + ".LRC"
-		content, err = os.ReadFile(lrcPath)
-		if err != nil {
+	content, ok := readSafeLocalLRC(base + ".lrc")
+	if !ok {
+		// Probar con extensión en mayúsculas .LRC
+		content, ok = readSafeLocalLRC(base + ".LRC")
+		if !ok {
 			return nil
 		}
 	}
@@ -118,6 +147,16 @@ func checkLocalLRC(audioPath string) *LyricsResult {
 		}
 	}
 	return nil
+}
+
+// setCachedLyrics guarda un resultado de letras en la caché en memoria aplicando un tope de entradas.
+func (s *Service) setCachedLyrics(cacheKey string, res *LyricsResult) {
+	s.mu.Lock()
+	if len(s.cache) >= maxLyricsCacheEntries {
+		clear(s.cache)
+	}
+	s.cache[cacheKey] = res
+	s.mu.Unlock()
 }
 
 // GetLyrics obtiene letras sincronizadas o texto plano consultando la API LRCLIB con caché en memoria.
@@ -136,9 +175,7 @@ func (s *Service) GetLyrics(trackName, artistName, albumName string, duration fl
 
 	// 1. Prioridad: Archivo .lrc local en disco
 	if localRes := checkLocalLRC(audioPath); localRes != nil {
-		s.mu.Lock()
-		s.cache[cacheKey] = localRes
-		s.mu.Unlock()
+		s.setCachedLyrics(cacheKey, localRes)
 		return localRes, nil
 	}
 
@@ -149,10 +186,7 @@ func (s *Service) GetLyrics(trackName, artistName, albumName string, duration fl
 		res = s.fetchLRCLIB(trackName, artistName, albumName, duration)
 	}
 
-	s.mu.Lock()
-	s.cache[cacheKey] = res
-	s.mu.Unlock()
-
+	s.setCachedLyrics(cacheKey, res)
 	return res, nil
 }
 
@@ -256,7 +290,7 @@ func (s *Service) httpGetSingle(reqURL string) *LRCLIBResponse {
 	defer resp.Body.Close()
 
 	var apiResp LRCLIBResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxLyricsHTTPBytes)).Decode(&apiResp); err != nil {
 		return nil
 	}
 	return &apiResp
@@ -280,7 +314,7 @@ func (s *Service) httpGetBestFromSearch(reqURL string) *LRCLIBResponse {
 	defer resp.Body.Close()
 
 	var items []LRCLIBResponse
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil || len(items) == 0 {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxLyricsHTTPBytes)).Decode(&items); err != nil || len(items) == 0 {
 		return nil
 	}
 
@@ -307,13 +341,12 @@ func parseLRC(lrcText string) []LyricLine {
 		return []LyricLine{}
 	}
 
-	re := regexp.MustCompile(`\[(\d+):(\d+(?:\.\d+)?)\](.*)`)
 	lines := strings.Split(lrcText, "\n")
 	var result []LyricLine
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		matches := re.FindStringSubmatch(line)
+		matches := reLRCLine.FindStringSubmatch(line)
 		if len(matches) == 4 {
 			min, _ := strconv.ParseFloat(matches[1], 64)
 			sec, _ := strconv.ParseFloat(matches[2], 64)

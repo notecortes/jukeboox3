@@ -20,6 +20,11 @@ LAST_CARDS_SIG=""
 MPD_PID=""
 STOP_REQUESTED=0
 
+# sanitize_mpd_value elimina comillas, barras invertidas y saltos de línea para evitar inyección en mpd.conf.
+sanitize_mpd_value() {
+    printf '%s' "$1" | tr -d '"\r\n\\'
+}
+
 # parse_aplay_cards extrae tarjetas y dispositivos ALSA reales tolerando espacios o símbolos en el ID.
 parse_aplay_cards() {
     awk '
@@ -152,8 +157,13 @@ EOF
     TAB=$(printf '\t')
 
     while IFS="$TAB" read -r CARD_NUM CARD_ID CARD_NAME DEV_NUM DEV_NAME DEV_PCM; do
+        CARD_NUM=$(printf '%s' "$CARD_NUM" | tr -cd '0-9')
+        DEV_NUM=$(printf '%s' "$DEV_NUM" | tr -cd '0-9')
         [ -z "$CARD_NUM" ] && continue
         [ -z "$DEV_NUM" ] && DEV_NUM="0"
+        CARD_ID=$(sanitize_mpd_value "$CARD_ID")
+        CARD_NAME=$(sanitize_mpd_value "$CARD_NAME")
+        DEV_NAME=$(sanitize_mpd_value "$DEV_NAME")
         [ -z "$CARD_NAME" ] && CARD_NAME="$CARD_ID"
         [ -z "$CARD_NAME" ] && CARD_NAME="Tarjeta $CARD_NUM"
 

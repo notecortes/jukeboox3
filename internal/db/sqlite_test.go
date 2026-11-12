@@ -312,3 +312,58 @@ func TestEmbeddedRadiosSeededAndCRUD(t *testing.T) {
 	}
 }
 
+// TestLikeWildcardEscapingInSearchAndPathPrefix valida que % y _ se interpreten de forma literal en búsquedas LIKE y prefijos.
+func TestLikeWildcardEscapingInSearchAndPathPrefix(t *testing.T) {
+	d := newTestDB(t)
+
+	samples := []*Track{
+		{
+			Path:     "/music/local/100%_Live/01.flac",
+			Filename: "01.flac",
+			Title:    "100% Pure Love",
+			Artist:   "Artist_One",
+			Album:    "Special 100%",
+			Format:   "FLAC",
+			Source:   "local",
+		},
+		{
+			Path:     "/music/local/100X_Other/02.flac",
+			Filename: "02.flac",
+			Title:    "1000 Nights",
+			Artist:   "ArtistXOne",
+			Album:    "Normal Album",
+			Format:   "FLAC",
+			Source:   "local",
+		},
+	}
+	for _, tr := range samples {
+		if err := d.UpsertTrack(tr); err != nil {
+			t.Fatalf("UpsertTrack falló: %v", err)
+		}
+	}
+
+	foundTracks, _, _, err := d.Search("100%")
+	if err != nil {
+		t.Fatalf("Search('100%%') falló: %v", err)
+	}
+	if len(foundTracks) != 1 || foundTracks[0].Title != "100% Pure Love" {
+		t.Fatalf("Search('100%%') debía devolver solo coincidencia literal, obtuvo %+v", foundTracks)
+	}
+
+	_, _, foundArtists, err := d.Search("Artist_One")
+	if err != nil {
+		t.Fatalf("Search('Artist_One') falló: %v", err)
+	}
+	if len(foundArtists) != 1 || foundArtists[0].Name != "Artist_One" {
+		t.Fatalf("Search('Artist_One') debía coincidir solo con '_', obtuvo %+v", foundArtists)
+	}
+
+	prefTracks, err := d.GetTracksByPathPrefix("/music/local/100%_Live")
+	if err != nil {
+		t.Fatalf("GetTracksByPathPrefix falló: %v", err)
+	}
+	if len(prefTracks) != 1 || prefTracks[0].Path != "/music/local/100%_Live/01.flac" {
+		t.Fatalf("GetTracksByPathPrefix debía devolver solo carpeta literal, obtuvo %+v", prefTracks)
+	}
+}
+

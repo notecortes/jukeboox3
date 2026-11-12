@@ -3,15 +3,19 @@ package smartmix
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"aurabox/internal/db"
 )
+
+const maxSmartMixHTTPBytes = 2 << 20
 
 // SmartMixService implementa el motor de recomendaciones musicales y mezcla inteligente.
 type SmartMixService struct {
@@ -178,7 +182,14 @@ func (s *SmartMixService) fetchSimilarArtists(seedArtist string) []string {
 
 // queryLastFM consulta la API de Last.fm para artistas similares.
 func (s *SmartMixService) queryLastFM(seedArtist string) ([]string, error) {
-	apiURL := fmt.Sprintf("https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=%s&api_key=b25b959554ed76058ac220b7b2e0a026&format=json&limit=15", url.QueryEscape(seedArtist))
+	apiKey := strings.TrimSpace(os.Getenv("LASTFM_API_KEY"))
+	if apiKey == "" {
+		apiKey = "b25b959554ed76058ac220b7b2e0a026"
+	}
+	apiURL := fmt.Sprintf("https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=%s&api_key=%s&format=json&limit=15",
+		url.QueryEscape(seedArtist),
+		url.QueryEscape(apiKey),
+	)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -196,7 +207,7 @@ func (s *SmartMixService) queryLastFM(seedArtist string) ([]string, error) {
 	}
 
 	var lfm LastFMResponse
-	if err := json.NewDecoder(resp.Body).Decode(&lfm); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxSmartMixHTTPBytes)).Decode(&lfm); err != nil {
 		return nil, err
 	}
 
@@ -229,7 +240,7 @@ func (s *SmartMixService) queryMusicBrainz(seedArtist string) ([]string, error) 
 	}
 
 	var mbResp MusicBrainzArtistResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mbResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxSmartMixHTTPBytes)).Decode(&mbResp); err != nil {
 		return nil, err
 	}
 

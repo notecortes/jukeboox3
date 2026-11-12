@@ -5,6 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe, notifyListeners } from './state.js';
+import { sanitizeCoverURL } from './sanitize.js';
 import { openNowPlaying, closeNowPlaying } from './gestures.js';
 
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
@@ -233,7 +234,11 @@ export function renderMiniPlayer() {
     : (track.artist || 'Artista');
 
   const coverImg = document.getElementById('miniCover');
-  coverImg.src = track.cover_url || '/assets/default-cover.svg';
+  if (coverImg) {
+    delete coverImg.dataset.fallbackApplied;
+    coverImg.dataset.fallback = '/assets/default-cover.svg';
+    coverImg.src = sanitizeCoverURL(track.cover_url);
+  }
 
   // Actualizar icono play / pausa en mini-player
   const icon = document.getElementById('miniPlayIcon');
@@ -333,13 +338,18 @@ export function renderNowPlaying() {
     ? formatLiveSubtitle(track, state.player.stream_title, true)
     : (track.artist || 'Artista');
 
-  const coverSrc = track.cover_url || '/assets/default-cover.svg';
-  document.getElementById('npCover').src = coverSrc;
+  const coverSrc = sanitizeCoverURL(track.cover_url);
+  const npCover = document.getElementById('npCover');
+  if (npCover) {
+    delete npCover.dataset.fallbackApplied;
+    npCover.dataset.fallback = '/assets/default-cover.svg';
+    npCover.src = coverSrc;
+  }
 
-  // Fondo adaptativo con desenfoque basado en la carátula
+  // Fondo adaptativo con desenfoque basado en la carátula validada sin riesgo de inyección CSS
   const bg = document.getElementById('npAmbientBg');
   if (bg) {
-    bg.style.backgroundImage = `url('${coverSrc}')`;
+    bg.style.backgroundImage = `url("${coverSrc}")`;
   }
 
   // Badge Hi-Fi técnico o transmisión en directo
@@ -500,7 +510,7 @@ function updateMediaSession() {
     artist: (isLive && icy) ? track.title : track.artist,
     album: isLive ? (track.artist || 'Radio en Directo') : track.album,
     artwork: [
-      { src: track.cover_url || '/assets/default-cover.svg', sizes: '512x512', type: 'image/png' }
+      { src: sanitizeCoverURL(track.cover_url), sizes: '512x512', type: 'image/png' }
     ]
   });
   navigator.mediaSession.playbackState = (state.player.status === 'play') ? 'playing' : 'paused';

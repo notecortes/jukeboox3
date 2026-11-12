@@ -368,6 +368,12 @@ func TestResolveStreamURLsAndPlaylistParsing(t *testing.T) {
 	if _, err := ValidateHTTPStreamURL("ftp://example.org/radio.mp3"); err == nil {
 		t.Fatalf("ValidateHTTPStreamURL debía rechazar protocolo ftp://")
 	}
+	if _, err := ValidateHTTPStreamURL("http://127.0.0.1:8080/internal.mp3"); err == nil {
+		t.Fatalf("ValidateHTTPStreamURL debía rechazar IP loopback SSRF")
+	}
+	if _, err := ValidateHTTPStreamURL("http://169.254.169.254/latest/meta-data/"); err == nil {
+		t.Fatalf("ValidateHTTPStreamURL debía rechazar IP link-local/metadata SSRF")
+	}
 	if _, err := ValidateHTTPStreamURL(""); err == nil {
 		t.Fatalf("ValidateHTTPStreamURL debía rechazar URL vacía")
 	}
@@ -399,6 +405,7 @@ func TestResolveStreamURLsAndPlaylistParsing(t *testing.T) {
 
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
+	defer SetRadioHTTPClientForTest(ts.Client())()
 	tsURL = ts.URL
 
 	plsURLs, err := ResolveStreamURLs(tsURL + "/station.pls")
@@ -982,5 +989,82 @@ func TestHardwareOutputErrorVsDecodeAndRadioRecovery(t *testing.T) {
 	}
 	if !restarted {
 		t.Fatalf("la radio cortada inesperadamente debía reconectarse automáticamente")
+	}
+}
+
+// TestSelectAudioOutputRollbackAndValidation verifica rollback al fallar enableoutput y normalización de ReplayGain/Crossfade.
+func TestSelectAudioOutputRollbackAndValidation(t *testing.T) {
+	if got, ok := NormalizeReplayGainMode("Track"); !ok || got != "track" {
+		t.Fatalf("NormalizeReplayGainMode('Track') inesperado: %q, %v", got, ok)
+	}
+	if _, ok := NormalizeReplayGainMode("track\nsetvol 100"); ok {
+		t.Fatalf("NormalizeReplayGainMode debía rechazar saltos de línea")
+	}
+	if ClampCrossfade(-5) != 0 || ClampCrossfade(99) != 15 || ClampCrossfade(4) != 4 {
+		t.Fatalf("ClampCrossfade fuera de rango esperado")
+	}
+
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "rollback_mpd.sock")
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Listen unix falló: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var mu sync.Mutex
+	var cmds []string
+	go func() {
+		for {
+			conn, aErr := ln.Accept()
+			if aErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = c.Write([]byte("OK MPD 0.24.18\n"))
+				r := bufio.NewReader(c)
+				for {
+					line, rErr := r.ReadString('\n')
+					if rErr != nil {
+						return
+					}
+					trimmed := strings.TrimSpace(line)
+					mu.Lock()
+					cmds = append(cmds, trimmed)
+					mu.Unlock()
+					switch trimmed {
+					case "outputs":
+						_, _ = c.Write([]byte("outputid: 0\noutputname: DAC USB\nplugin: alsa\noutputenabled: 1\n" +
+							"outputid: 1\noutputname: Jack 3.5mm\nplugin: alsa\noutputenabled: 0\nOK\n"))
+					case "enableoutput 1":
+						_, _ = c.Write([]byte("ACK [50@0] {enableoutput} Device or resource busy\n"))
+					default:
+						_, _ = c.Write([]byte("OK\n"))
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	client := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(client.Close)
+	client.tryConnect()
+
+	if err := client.SelectAudioOutput(1); err == nil {
+		t.Fatalf("SelectAudioOutput(1) debía devolver error cuando enableoutput falla")
+	}
+
+	mu.Lock()
+	joined := strings.Join(cmds, "\n")
+	mu.Unlock()
+	if strings.Contains(joined, "disableoutput 0") {
+		t.Fatalf("no debía deshabilitar la salida previa 0 si falló enableoutput 1; comandos:\n%s", joined)
+	}
+
+	st := client.GetState()
+	if st.ActiveOutput != "DAC USB" || len(st.AudioOutputs) < 2 || !st.AudioOutputs[0].Enabled || st.AudioOutputs[1].Enabled {
+		t.Fatalf("rollback de salidas inconsistente: active=%q outputs=%+v", st.ActiveOutput, st.AudioOutputs)
 	}
 }

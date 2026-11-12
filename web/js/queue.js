@@ -5,19 +5,9 @@
 
 import * as api from './api.js';
 import { state, subscribe, updatePlayerState } from './state.js';
+import { escapeHtml, sanitizeCoverURL } from './sanitize.js';
 import { formatTime, isLiveStreamTrack, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
-
-// escapeHtml escapa caracteres especiales HTML para prevenir inyecciones XSS en la cola.
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
 
 // initQueue configura los escuchadores de la vista de cola.
 export function initQueue() {
@@ -119,12 +109,12 @@ export function renderQueueList() {
       </div>
 
       <div style="display:flex; align-items:center; gap:14px; cursor:pointer;" id="queueHeroClickableArea">
-        <img src="${escapeHtml(cur.cover_url || '/assets/default-cover.svg')}" onerror="this.onerror=null;this.src='/assets/default-cover.svg';" style="width:68px; height:68px; min-width:68px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.5);" alt="Carátula"/>
+        <img src="${escapeHtml(sanitizeCoverURL(cur.cover_url))}" data-fallback="/assets/default-cover.svg" style="width:68px; height:68px; min-width:68px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.5);" alt="Carátula"/>
         <div style="flex:1; min-width:0;">
           <div style="font-size:1.05rem; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(cur.title || 'Canción')}</div>
           <div style="font-size:0.88rem; color:var(--text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(heroSubtitle)}</div>
           <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${escapeHtml(cur.format || (curIsLive ? 'STREAM' : 'FLAC'))} ${cur.bitrate || 128}kbps</span>
+            <span class="badge-format" style="font-size:0.7rem; padding:2px 8px;">${escapeHtml(cur.format || (curIsLive ? 'STREAM' : 'FLAC'))} ${escapeHtml(cur.bitrate || 128)}kbps</span>
             <span style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(heroTimeLabel)}</span>
           </div>
         </div>

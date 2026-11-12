@@ -14,11 +14,16 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+const maxDynamicSANs = 32
+
+var reLocalMDNSHost = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.local$`)
 
 // CertManager gestiona la autoridad certificadora local y los certificados TLS dinámicos de AuraBox.
 type CertManager struct {
@@ -30,6 +35,7 @@ type CertManager struct {
 	tlsCert     *tls.Certificate
 	dnsNames    map[string]bool
 	ipAddresses map[string]bool
+	dynamicSANs int
 	customCert  bool
 }
 
@@ -107,7 +113,19 @@ func (cm *CertManager) TLSConfig() *tls.Config {
 	}
 }
 
-// EnsureHost verifica que el host o IP solicitado figure en el certificado activo; si falta, lo re-emite al instante.
+// isAllowedDynamicHost valida que un host candidato a SAN dinámico sea una IP privada/loopback o un nombre mDNS .local válido.
+func isAllowedDynamicHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	return reLocalMDNSHost.MatchString(lower)
+}
+
+// EnsureHost verifica que el host o IP local solicitado figure en el certificado activo; si falta y cabe en el límite, lo re-emite.
 func (cm *CertManager) EnsureHost(rawHost string) {
 	host := extractHostOnly(rawHost)
 	if host == "" {
@@ -127,13 +145,21 @@ func (cm *CertManager) EnsureHost(rawHost string) {
 		if cm.ipAddresses[norm] {
 			return
 		}
+		if !isAllowedDynamicHost(norm) || cm.dynamicSANs >= maxDynamicSANs {
+			return
+		}
 		cm.ipAddresses[norm] = true
+		cm.dynamicSANs++
 	} else {
 		lower := strings.ToLower(host)
 		if cm.dnsNames[lower] {
 			return
 		}
+		if !isAllowedDynamicHost(lower) || cm.dynamicSANs >= maxDynamicSANs {
+			return
+		}
 		cm.dnsNames[lower] = true
+		cm.dynamicSANs++
 	}
 
 	_ = cm.issueLeafLocked()
@@ -422,10 +448,14 @@ func detectInterfaceIPs() []string {
 	return out
 }
 
-// randomSerialNumber genera un número de serie positivo de 128 bits conforme a RFC 5280.
+// randomSerialNumber genera un número de serie positivo (>= 1) de 128 bits conforme a RFC 5280.
 func randomSerialNumber() (*big.Int, error) {
-	limit := new(big.Int).Lsh(big.NewInt(1), 128)
-	return rand.Int(rand.Reader, limit)
+	limit := new(big.Int).Lsh(big.NewInt(1), 127)
+	n, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		return nil, err
+	}
+	return n.Add(n, big.NewInt(1)), nil
 }
 
 // computeSubjectKeyID calcula el identificador SHA-1 estándar de la clave pública ECDSA.

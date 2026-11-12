@@ -3,6 +3,7 @@ package tlsutil
 import (
 	"bytes"
 	"crypto/x509"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -60,6 +61,49 @@ func TestCertManagerCAAndDynamicSAN(t *testing.T) {
 	}
 	if !bytes.Equal(cm.CACertPEM(), cmReloaded.CACertPEM()) {
 		t.Fatalf("la CA local cambió al recargar desde disco")
+	}
+}
+
+// TestCertManagerRejectsExternalHostsAndCapsDynamicSANs verifica rechazo de dominios externos/IPs públicas y el límite de SANs dinámicos.
+func TestCertManagerRejectsExternalHostsAndCapsDynamicSANs(t *testing.T) {
+	certsDir := t.TempDir()
+	cm, err := InitCertManager(certsDir, nil, "", "")
+	if err != nil {
+		t.Fatalf("InitCertManager falló: %v", err)
+	}
+
+	cm.EnsureHost("evil.com")
+	cm.EnsureHost("8.8.8.8")
+	cm.EnsureHost("bad host\r\n")
+	for _, h := range cm.SANHosts() {
+		if h == "evil.com" || h == "8.8.8.8" {
+			t.Fatalf("EnsureHost no debía aceptar host externo %q", h)
+		}
+	}
+
+	// Host LAN privado y .local sí son aceptados hasta el tope maxDynamicSANs
+	cm.EnsureHost("192.168.1.99:4443")
+	cm.EnsureHost("salon.local")
+	foundLAN := false
+	foundLocal := false
+	for _, h := range cm.SANHosts() {
+		if h == "192.168.1.99" {
+			foundLAN = true
+		}
+		if h == "salon.local" {
+			foundLocal = true
+		}
+	}
+	if !foundLAN || !foundLocal {
+		t.Fatalf("se esperaba aceptar 192.168.1.99 y salon.local; SANHosts=%v", cm.SANHosts())
+	}
+
+	// Intentar inundar con más de maxDynamicSANs hosts .local debe truncarse sin DoS
+	for i := 0; i < maxDynamicSANs+15; i++ {
+		cm.EnsureHost(fmt.Sprintf("node-%d.local", i))
+	}
+	if cm.dynamicSANs > maxDynamicSANs {
+		t.Fatalf("dynamicSANs superó el máximo (%d > %d)", cm.dynamicSANs, maxDynamicSANs)
 	}
 }
 

@@ -786,17 +786,22 @@ func (d *DB) GetTracksByArtist(artistName string) ([]Track, error) {
 	return tracks, nil
 }
 
+// escapeLikePattern escapa comodines SQL LIKE (%, _, \) para búsquedas literales seguras con ESCAPE '\'.
+func escapeLikePattern(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // GetTracksByPathPrefix busca todas las pistas dentro de una carpeta o sus subcarpetas.
 func (d *DB) GetTracksByPathPrefix(folderPath string) ([]Track, error) {
 	clean := strings.TrimRight(folderPath, "/")
-	pattern := clean + "/%"
+	pattern := escapeLikePattern(clean) + "/%"
 
 	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
 		FROM tracks
-		WHERE path = ? OR path LIKE ?
+		WHERE path = ? OR path LIKE ? ESCAPE '\'
 		ORDER BY path ASC, track_number ASC
 	`, clean, pattern)
 	if err != nil {
@@ -912,7 +917,7 @@ func (d *DB) GetTracksByIDs(ids []int64) ([]Track, error) {
 
 // Search efectúa búsquedas instantáneas en pistas, álbumes y artistas con coincidencia parcial.
 func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
-	pattern := "%" + strings.TrimSpace(query) + "%"
+	pattern := "%" + escapeLikePattern(strings.TrimSpace(query)) + "%"
 	rDB := d.reader()
 
 	// Pistas
@@ -921,7 +926,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 		       year, duration, track_number, bitrate, sample_rate, format,
 		       source, cover_url, favorite, play_count, bpm, created_at
 		FROM tracks
-		WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR genre LIKE ?
+		WHERE title LIKE ? ESCAPE '\' OR artist LIKE ? ESCAPE '\' OR album LIKE ? ESCAPE '\' OR genre LIKE ? ESCAPE '\'
 		ORDER BY play_count DESC, title ASC
 		LIMIT 25
 	`, pattern, pattern, pattern, pattern)
@@ -959,7 +964,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
 			MAX(t.source) as source
 		FROM tracks t
-		WHERE t.album != '' AND (t.album LIKE ? OR t.artist LIKE ?)
+		WHERE t.album != '' AND (t.album LIKE ? ESCAPE '\' OR t.artist LIKE ? ESCAPE '\')
 		GROUP BY t.album COLLATE NOCASE
 		LIMIT 15
 	`, pattern, pattern)
@@ -980,7 +985,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	arRows, err := rDB.Query(`
 		SELECT id, name, bio, image_url, genre
 		FROM artists
-		WHERE name LIKE ?
+		WHERE name LIKE ? ESCAPE '\'
 		LIMIT 10
 	`, pattern)
 	if err != nil {
@@ -1336,14 +1341,14 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 	// Buscar hasta 10 artistas con géneros coincidentes o épocas cercanas
 	rows, err := rDB.Query(`
 		SELECT artist,
-		       (CASE WHEN genre LIKE ? THEN 3 ELSE 0 END +
+		       (CASE WHEN genre LIKE ? ESCAPE '\' THEN 3 ELSE 0 END +
 		        CASE WHEN ABS(AVG(year) - ?) <= 10 THEN 2 ELSE 0 END) AS similarity_score
 		FROM tracks
 		WHERE artist != ? COLLATE NOCASE AND artist != 'Artista Desconocido' AND artist != 'Varios Artistas'
 		GROUP BY artist
 		ORDER BY similarity_score DESC, COUNT(id) DESC
 		LIMIT 10
-	`, "%"+seedGenre+"%", avgYear, seedArtist)
+	`, "%"+escapeLikePattern(seedGenre)+"%", avgYear, seedArtist)
 	if err != nil {
 		return nil, err
 	}
