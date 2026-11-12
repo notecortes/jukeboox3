@@ -723,33 +723,54 @@
   display: none !important;
 }
 
-@media (orientation: landscape) and (min-width: 700px) {
-  .now-playing-modal.ambient-mode .np-grabber,
-  .now-playing-modal.ambient-mode .np-header,
-  .now-playing-modal.ambient-mode .np-meta-actions,
-  .now-playing-modal.ambient-mode .np-controls-row,
-  .now-playing-modal.ambient-mode .np-volume-section {
-    opacity: 0 !important;
-    pointer-events: none !important;
-  }
+/* Modo Marco Musical (Ambient Screen) en cualquier orientación (Vertical y Horizontal) */
+.now-playing-modal.ambient-mode .np-grabber,
+.now-playing-modal.ambient-mode .np-header,
+.now-playing-modal.ambient-mode .np-meta-actions,
+.now-playing-modal.ambient-mode .np-controls-row,
+.now-playing-modal.ambient-mode .np-volume-section {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 
-  .now-playing-modal.ambient-mode .np-grabber,
-  .now-playing-modal.ambient-mode .np-header,
-  .now-playing-modal.ambient-mode .np-meta-actions,
-  .now-playing-modal.ambient-mode .np-controls-row,
-  .now-playing-modal.ambient-mode .np-volume-section,
-  .now-playing-modal.ambient-mode .np-artwork-container,
-  .now-playing-modal.ambient-mode .np-track-title {
-    transition: opacity 0.55s ease, transform 0.55s ease, width 0.55s ease;
-  }
+.now-playing-modal.ambient-mode .np-grabber,
+.now-playing-modal.ambient-mode .np-header,
+.now-playing-modal.ambient-mode .np-meta-actions,
+.now-playing-modal.ambient-mode .np-controls-row,
+.now-playing-modal.ambient-mode .np-volume-section,
+.now-playing-modal.ambient-mode .np-artwork-container,
+.now-playing-modal.ambient-mode .np-track-title {
+  transition: opacity 0.55s ease, transform 0.55s ease, width 0.55s ease;
+}
 
+.now-playing-modal.ambient-mode .np-artwork-container {
+  display: block !important;
+  transform: scale(1.03);
+}
+
+.now-playing-modal.ambient-mode .np-lyrics-container.active {
+  display: none !important;
+}
+
+.now-playing-modal.ambient-mode .timeline-scrubber {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.now-playing-modal.ambient-mode .timeline-scrubber::-webkit-slider-thumb {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.now-playing-modal.ambient-mode .np-ambient-lyric:not(.hidden) {
+  display: -webkit-box;
+  opacity: 1;
+}
+
+@media (orientation: landscape) and (min-width: 560px) {
   .now-playing-modal.ambient-mode .np-artwork-container {
-    display: block !important;
     width: min(100%, 500px, max(200px, calc(100dvh - 80px)));
-  }
-
-  .now-playing-modal.ambient-mode .np-lyrics-container.active {
-    display: none !important;
   }
 
   .now-playing-modal.ambient-mode .np-track-title {
@@ -760,23 +781,10 @@
     -webkit-box-orient: vertical;
   }
 
-  .now-playing-modal.ambient-mode .timeline-scrubber {
-    height: 3px;
-    background: rgba(255, 255, 255, 0.14);
-  }
-
-  .now-playing-modal.ambient-mode .timeline-scrubber::-webkit-slider-thumb {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-
   .now-playing-modal.ambient-mode .np-ambient-lyric:not(.hidden) {
-    display: -webkit-box;
     grid-column: 2;
     grid-row: 5 / 7;
     align-self: start;
-    opacity: 1;
   }
 }
 

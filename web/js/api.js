@@ -106,11 +106,14 @@ export function getAudioDiagnostics() {
   return requestHelper('/player/outputs/diagnostics');
 }
 
-// setAudioConfig ajusta parámetros audiófilos de ReplayGain, Crossfade y Fade en pausa.
-export function setAudioConfig(replayGain, crossfade, softFade = undefined) {
+// setAudioConfig ajusta parámetros audiófilos de ReplayGain, Crossfade, Fade en pausa y su duración.
+export function setAudioConfig(replayGain, crossfade, softFade = undefined, softFadeMs = undefined) {
   let qs = `replay_gain=${encodeURIComponent(replayGain)}&crossfade=${encodeURIComponent(crossfade)}`;
   if (typeof softFade === 'boolean') {
     qs += `&soft_fade=${softFade ? 'true' : 'false'}`;
+  }
+  if (typeof softFadeMs === 'number' && Number.isFinite(softFadeMs) && softFadeMs >= 300) {
+    qs += `&soft_fade_ms=${encodeURIComponent(Math.round(softFadeMs))}`;
   }
   return requestHelper(`/player/config?${qs}`, { method: 'POST' });
 }

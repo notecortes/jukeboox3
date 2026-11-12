@@ -783,6 +783,15 @@ func (s *Server) handleAudioConfig(w http.ResponseWriter, r *http.Request) {
 		s.player.SetSoftFade(enabled)
 	}
 
+	if rawFadeMs := strings.TrimSpace(r.URL.Query().Get("soft_fade_ms")); rawFadeMs != "" {
+		ms, err := strconv.Atoi(rawFadeMs)
+		if err != nil || ms < 300 || ms > 3000 {
+			http.Error(w, "parámetro soft_fade_ms inválido (300..3000 ms)", http.StatusBadRequest)
+			return
+		}
+		s.player.SetSoftFadeDuration(ms)
+	}
+
 	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
 

@@ -3,14 +3,14 @@
 // Multi-Device Real-Time Synchronization (<50ms) & PWA Bootstrap
 // =====================================================================
 
-import * as api from './api.js';
-import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js';
-import { installImageFallbackListener } from './sanitize.js';
-import { initPlayer, showToast } from './player.js';
-import { initGestures } from './gestures.js';
-import { initQueue } from './queue.js';
-import { initLyrics } from './lyrics.js';
-import { initViews } from './views.js';
+import * as api from './api.js?v=21';
+import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js?v=21';
+import { installImageFallbackListener } from './sanitize.js?v=21';
+import { initPlayer, showToast } from './player.js?v=21';
+import { initGestures } from './gestures.js?v=21';
+import { initQueue } from './queue.js?v=21';
+import { initLyrics } from './lyrics.js?v=21';
+import { initViews } from './views.js?v=21';
 
 let syncRetryTimer = null;
 let activeEventSource = null;
@@ -503,10 +503,18 @@ function initWebStreamPlayer() {
   });
 }
 
-// registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
+// registerServiceWorker instala el Service Worker, fuerza actualización y recarga si hay nueva versión activa.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=20').then((reg) => {
+    let refreshing = false;
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+
+    navigator.serviceWorker.register('/sw.js?v=21').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);

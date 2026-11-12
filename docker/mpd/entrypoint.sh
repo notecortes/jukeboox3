@@ -41,6 +41,13 @@ read_dsp_preset() {
         night|voice|livingroom|bass|flat)
             printf '%s\n' "$PRESET_VAL"
             ;;
+        eq:*)
+            if printf '%s' "$PRESET_VAL" | grep -Eq '^eq:-?[0-9]{1,2}(,-?[0-9]{1,2}){4}$'; then
+                printf '%s\n' "$PRESET_VAL"
+            else
+                printf 'flat\n'
+            fi
+            ;;
         *)
             printf 'flat\n'
             ;;

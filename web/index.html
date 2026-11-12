@@ -15,9 +15,9 @@
   <link rel="apple-touch-icon" href="/assets/default-cover.svg"/>
 
   <!-- Hojas de estilo CSS modulares -->
-  <link rel="stylesheet" href="/css/app.css?v=12"/>
-  <link rel="stylesheet" href="/css/player.css?v=15"/>
-  <link rel="stylesheet" href="/css/views.css?v=14"/>
+  <link rel="stylesheet" href="/css/app.css?v=21"/>
+  <link rel="stylesheet" href="/css/player.css?v=21"/>
+  <link rel="stylesheet" href="/css/views.css?v=21"/>
 </head>
 <body>
   <div id="app">
@@ -171,25 +171,72 @@
               </div>
             </div>
             <div id="audioOutputsDiagnostics" style="margin-top:8px;"></div>
+          </div>
+        </div>
 
-            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);" id="dspPresetCard">
-              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
-                <span style="font-size:0.85rem; font-weight:700;">Ecualizador / Perfil DSP</span>
-                <span class="badge-format" id="dspModeBadge">Bit-Perfect</span>
+        <!-- Ecualizador y Perfiles DSP -->
+        <div class="settings-section" id="dspSection">
+          <div class="settings-section-title" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Ecualizador y Perfil DSP (SoX)</span>
+            <span class="badge-format" id="dspModeBadge">Bit-Perfect</span>
+          </div>
+          <div class="settings-card" id="dspPresetCard">
+            <div style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:10px;">
+              Salida configurada: <strong id="dspActiveOutputName">Detectando...</strong>
+            </div>
+            <div id="dspCompatHint" class="hidden" style="margin-bottom:10px; padding:8px 10px; border-radius:var(--radius-sm); background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); font-size:0.75rem; color:#fcd34d; line-height:1.4;"></div>
+
+            <div class="dsp-preset-grid" id="dspPresetSelector" role="group" aria-label="Perfiles DSP por salida">
+              <button type="button" class="dsp-opt active" data-dsp="flat">🎚️ Plano Hi-Fi</button>
+              <button type="button" class="dsp-opt" data-dsp="night">🌙 Noche / Loudness</button>
+              <button type="button" class="dsp-opt" data-dsp="voice">🎙️ Voz y Acústica</button>
+              <button type="button" class="dsp-opt" data-dsp="livingroom">🛋️ Altavoces Salón</button>
+              <button type="button" class="dsp-opt" data-dsp="bass">🔊 Graves Hi-Fi</button>
+              <button type="button" class="dsp-opt" data-dsp="custom">🎛️ Personalizado</button>
+            </div>
+            <p id="dspPresetDesc" style="font-size:0.75rem; color:var(--text-muted); margin-top:8px; margin-bottom:12px; line-height:1.4;">
+              Señal directa bit-perfect ALSA sin alterar muestras ni ecualización.
+            </p>
+
+            <div class="eq-bands-box">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:0.76rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Ecualizador Gráfico 5 Bandas (±12 dB)</span>
               </div>
-              <div style="font-size:0.75rem; color:var(--text-secondary); margin-bottom:8px;">
-                Salida configurada: <strong id="dspActiveOutputName">Detectando...</strong>
+              <div class="eq-bands-list" id="eqBandsList">
+                <div class="eq-band-row">
+                  <span class="eq-band-label">60 Hz<small>Graves</small></span>
+                  <input type="range" class="eq-band-slider" data-band="0" min="-12" max="12" step="1" value="0" aria-label="Banda 60 Hz"/>
+                  <span class="eq-band-value" data-band-val="0">0 dB</span>
+                </div>
+                <div class="eq-band-row">
+                  <span class="eq-band-label">250 Hz<small>Calidez</small></span>
+                  <input type="range" class="eq-band-slider" data-band="1" min="-12" max="12" step="1" value="0" aria-label="Banda 250 Hz"/>
+                  <span class="eq-band-value" data-band-val="1">0 dB</span>
+                </div>
+                <div class="eq-band-row">
+                  <span class="eq-band-label">1 kHz<small>Medios</small></span>
+                  <input type="range" class="eq-band-slider" data-band="2" min="-12" max="12" step="1" value="0" aria-label="Banda 1 kHz"/>
+                  <span class="eq-band-value" data-band-val="2">0 dB</span>
+                </div>
+                <div class="eq-band-row">
+                  <span class="eq-band-label">4 kHz<small>Presencia</small></span>
+                  <input type="range" class="eq-band-slider" data-band="3" min="-12" max="12" step="1" value="0" aria-label="Banda 4 kHz"/>
+                  <span class="eq-band-value" data-band-val="3">0 dB</span>
+                </div>
+                <div class="eq-band-row">
+                  <span class="eq-band-label">12 kHz<small>Agudos</small></span>
+                  <input type="range" class="eq-band-slider" data-band="4" min="-12" max="12" step="1" value="0" aria-label="Banda 12 kHz"/>
+                  <span class="eq-band-value" data-band-val="4">0 dB</span>
+                </div>
               </div>
-              <div class="dsp-preset-grid" id="dspPresetSelector" role="group" aria-label="Perfiles DSP por salida">
-                <button type="button" class="dsp-opt active" data-dsp="flat">🎚️ Plano Hi-Fi</button>
-                <button type="button" class="dsp-opt" data-dsp="night">🌙 Noche / Loudness</button>
-                <button type="button" class="dsp-opt" data-dsp="voice">🎙️ Voz y Acústica</button>
-                <button type="button" class="dsp-opt" data-dsp="livingroom">🛋️ Altavoces Salón</button>
-                <button type="button" class="dsp-opt" data-dsp="bass">🔊 Graves Hi-Fi</button>
+              <div class="eq-actions-row">
+                <button type="button" id="btnApplyCustomEQ" class="btn-secondary" style="flex:1; height:38px; justify-content:center; background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700;">
+                  🎛️ Aplicar Curva EQ
+                </button>
+                <button type="button" id="btnResetEQ" class="btn-secondary" style="height:38px; padding:0 14px; justify-content:center;">
+                  ↺ Plano (0 dB)
+                </button>
               </div>
-              <p id="dspPresetDesc" style="font-size:0.74rem; color:var(--text-muted); margin-top:8px; line-height:1.4;">
-                Señal directa bit-perfect ALSA sin alterar muestras ni ecualización.
-              </p>
             </div>
           </div>
         </div>
@@ -227,15 +274,26 @@
               </div>
             </div>
 
-            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
-              <div style="min-width:0;">
-                <div style="font-size:0.85rem; font-weight:600;">Fade In / Fade Out al Pausar (1,1s)</div>
-                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Atenúa suavemente el volumen antes de pausar y al reanudar para evitar cortes secos o pops.</p>
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div style="min-width:0;">
+                  <div style="font-size:0.85rem; font-weight:600;">Fade In / Fade Out al Pausar</div>
+                  <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Atenúa suavemente el volumen antes de pausar y al reanudar para evitar cortes secos o pops.</p>
+                </div>
+                <label class="toggle-switch" title="Activar fundido suave en pausa y reanudación">
+                  <input type="checkbox" id="settingSoftFade" checked/>
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
-              <label class="toggle-switch" title="Activar fundido suave en pausa y reanudación">
-                <input type="checkbox" id="settingSoftFade" checked/>
-                <span class="toggle-slider"></span>
-              </label>
+              <div style="margin-top:10px;">
+                <div style="font-size:0.74rem; color:var(--text-secondary); margin-bottom:6px; font-weight:600;">Duración del fundido suave:</div>
+                <div class="rg-segmented" id="softFadeDurationSelector" role="group" aria-label="Duración de fade in/out">
+                  <button type="button" class="rg-opt" data-fade-ms="500">0,5 s</button>
+                  <button type="button" class="rg-opt active" data-fade-ms="1100">1,1 s</button>
+                  <button type="button" class="rg-opt" data-fade-ms="1500">1,5 s</button>
+                  <button type="button" class="rg-opt" data-fade-ms="2000">2,0 s</button>
+                </div>
+              </div>
             </div>
 
             <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
@@ -249,15 +307,36 @@
               </label>
             </div>
 
-            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
-              <div style="min-width:0;">
-                <div style="font-size:0.85rem; font-weight:600;">Modo Marco Musical en Tablet (60s)</div>
-                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Oculta botones tras 60s sin tocar en Now Playing horizontal; un toque los recupera.</p>
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div style="min-width:0;">
+                  <div style="font-size:0.85rem; font-weight:600;">Modo Marco Musical (Ambient Screen)</div>
+                  <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Oculta los botones tras unos segundos sin tocar en Now Playing; un toque los recupera.</p>
+                </div>
+                <label class="toggle-switch" title="Activar vista minimalista por inactividad en Now Playing">
+                  <input type="checkbox" id="settingAmbientMode" checked/>
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
-              <label class="toggle-switch" title="Activar vista minimalista tras 60s en horizontal">
-                <input type="checkbox" id="settingAmbientMode" checked/>
-                <span class="toggle-slider"></span>
-              </label>
+
+              <div style="margin-top:10px;">
+                <div style="font-size:0.74rem; color:var(--text-secondary); margin-bottom:6px; font-weight:600;">Tiempo de espera sin tocar:</div>
+                <div class="rg-segmented" id="ambientTimeoutSelector" role="group" aria-label="Tiempo de espera Marco Musical" style="grid-template-columns:repeat(5, 1fr);">
+                  <button type="button" class="rg-opt" data-ambient-sec="10">10s</button>
+                  <button type="button" class="rg-opt" data-ambient-sec="15">15s</button>
+                  <button type="button" class="rg-opt" data-ambient-sec="30">30s</button>
+                  <button type="button" class="rg-opt active" data-ambient-sec="60">60s</button>
+                  <button type="button" class="rg-opt" data-ambient-sec="120">120s</button>
+                </div>
+              </div>
+
+              <div style="margin-top:10px;">
+                <div style="font-size:0.74rem; color:var(--text-secondary); margin-bottom:6px; font-weight:600;">Activar en pantalla:</div>
+                <div class="rg-segmented" id="ambientOrientationSelector" role="group" aria-label="Orientación Marco Musical" style="grid-template-columns:repeat(2, 1fr);">
+                  <button type="button" class="rg-opt active" data-ambient-orient="all">Vertical y Horizontal</button>
+                  <button type="button" class="rg-opt" data-ambient-orient="landscape">Solo Horizontal</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -521,6 +600,13 @@
           </div>
 
           <div class="np-header-actions">
+            <button type="button" class="np-header-btn" id="npBtnAmbient" title="Modo Marco Musical (pantalla limpia)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2"/>
+                <circle cx="8.5" cy="9.5" r="1.5"/>
+                <path d="M21 15l-5-5L5 20"/>
+              </svg>
+            </button>
             <div class="np-sleep-wrapper" id="npSleepWrapper">
               <button type="button" class="np-header-btn np-sleep-btn" id="npBtnSleep" title="Temporizador de apagado">
                 <span aria-hidden="true">🌙</span>
@@ -667,7 +753,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=20"></script>
+  <script type="module" src="/js/app.js?v=21"></script>
 </body>
 </html>
 

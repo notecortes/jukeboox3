@@ -53,6 +53,7 @@ type PlayerState struct {
 	Crossfade      int               `json:"crossfade"`
 	ReplayGain     string            `json:"replay_gain"` // "off", "track", "album", "auto"
 	SoftFade       bool              `json:"soft_fade"`
+	SoftFadeMs     int               `json:"soft_fade_ms"`
 	DSPPreset      string            `json:"dsp_preset"`
 	DSPPresets     map[string]string `json:"dsp_presets,omitempty"`
 	AudioOutputs   []OutputInfo      `json:"audio_outputs"`
@@ -103,6 +104,7 @@ type Client struct {
 	fadeEpoch          atomic.Int64
 	fadeActive         atomic.Bool
 	fadeDuration       time.Duration
+	softFadeMs         atomic.Int64
 	dspBootSynced      atomic.Bool
 	closeOnce          sync.Once
 	closed             atomic.Bool
@@ -119,15 +121,52 @@ func NormalizeReplayGainMode(raw string) (string, bool) {
 	}
 }
 
-// NormalizeDSPPreset valida y normaliza un perfil ecualizador/DSP contra la lista blanca soportada por SoX.
+// NormalizeDSPPreset valida y normaliza un perfil ecualizador/DSP o curva paramétrica de 5 bandas para SoX.
 func NormalizeDSPPreset(raw string) (string, bool) {
 	preset := strings.ToLower(strings.TrimSpace(raw))
 	switch preset {
 	case "flat", "night", "voice", "livingroom", "bass":
 		return preset, true
-	default:
-		return "", false
 	}
+	if strings.HasPrefix(preset, "eq:") {
+		parts := strings.Split(strings.TrimPrefix(preset, "eq:"), ",")
+		if len(parts) != 5 {
+			return "", false
+		}
+		var bands [5]int
+		allZero := true
+		for i, p := range parts {
+			val, err := strconv.Atoi(strings.TrimSpace(p))
+			if err != nil {
+				return "", false
+			}
+			if val < -12 {
+				val = -12
+			} else if val > 12 {
+				val = 12
+			}
+			bands[i] = val
+			if val != 0 {
+				allZero = false
+			}
+		}
+		if allZero {
+			return "flat", true
+		}
+		return fmt.Sprintf("eq:%d,%d,%d,%d,%d", bands[0], bands[1], bands[2], bands[3], bands[4]), true
+	}
+	return "", false
+}
+
+// ClampSoftFadeMs acota la duración del fundido suave de pausa/reanudación dentro del rango seguro [300, 3000] ms.
+func ClampSoftFadeMs(ms int) int {
+	if ms < 300 {
+		return 300
+	}
+	if ms > 3000 {
+		return 3000
+	}
+	return ms
 }
 
 // ClampCrossfade acota los segundos de crossfade dentro del rango seguro [0, 15].
@@ -154,7 +193,6 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		persistCh:     make(chan func(), 256),
 		stopCh:        make(chan struct{}),
 		sleepTrackIdx: -1,
-		fadeDuration:  1100 * time.Millisecond,
 		state: PlayerState{
 			Status:         "stop",
 			CurrentIndex:   -1,
@@ -165,12 +203,14 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 			Crossfade:      2,
 			ReplayGain:     "auto",
 			SoftFade:       true,
+			SoftFadeMs:     1100,
 			DSPPreset:      "flat",
 			DSPPresets:     make(map[string]string),
 			AudioOutputs:   make([]OutputInfo, 0),
 			ActiveOutput:   "Detectando audio...",
 		},
 	}
+	c.softFadeMs.Store(1100)
 
 	if database != nil {
 		if savedMax := database.GetSetting("max_volume_limit", ""); savedMax != "" {
@@ -198,6 +238,13 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		}
 		if savedFade := database.GetSetting("soft_fade", ""); savedFade != "" {
 			c.state.SoftFade = (strings.ToLower(strings.TrimSpace(savedFade)) != "false")
+		}
+		if savedFadeMs := database.GetSetting("soft_fade_ms", ""); savedFadeMs != "" {
+			if ms, err := strconv.Atoi(strings.TrimSpace(savedFadeMs)); err == nil {
+				clamped := ClampSoftFadeMs(ms)
+				c.state.SoftFadeMs = clamped
+				c.softFadeMs.Store(int64(clamped))
+			}
 		}
 		if savedDSP := database.GetSetting("dsp_presets_json", ""); savedDSP != "" {
 			var loaded map[string]string
@@ -1620,10 +1667,7 @@ func (c *Client) runFadeOutPause(epoch int64, targetVol int) {
 	}()
 
 	const steps = 14
-	dur := c.fadeDuration
-	if dur <= 0 {
-		dur = 1100 * time.Millisecond
-	}
+	dur := c.effectiveFadeDuration()
 	stepDur := dur / steps
 	if stepDur < 2*time.Millisecond {
 		stepDur = 2 * time.Millisecond
@@ -1754,10 +1798,7 @@ func (c *Client) runFadeInPlay(epoch int64, ver uint64, index, targetVol int) {
 	}
 
 	const steps = 14
-	dur := c.fadeDuration
-	if dur <= 0 {
-		dur = 1100 * time.Millisecond
-	}
+	dur := c.effectiveFadeDuration()
 	stepDur := dur / steps
 	if stepDur < 2*time.Millisecond {
 		stepDur = 2 * time.Millisecond
@@ -1787,6 +1828,18 @@ func (c *Client) runFadeInPlay(epoch int64, ver uint64, index, targetVol int) {
 	}
 }
 
+// effectiveFadeDuration devuelve la duración configurada de fade in/out priorizando overrides deterministas en tests.
+func (c *Client) effectiveFadeDuration() time.Duration {
+	if c.fadeDuration > 0 {
+		return c.fadeDuration
+	}
+	ms := c.softFadeMs.Load()
+	if ms <= 0 {
+		ms = 1100
+	}
+	return time.Duration(ClampSoftFadeMs(int(ms))) * time.Millisecond
+}
+
 // SetSoftFade activa o desactiva el desvanecimiento progresivo de volumen al pausar y reanudar.
 func (c *Client) SetSoftFade(enabled bool) {
 	c.mu.Lock()
@@ -1804,7 +1857,27 @@ func (c *Client) SetSoftFade(enabled bool) {
 		val = "true"
 	}
 	c.enqueuePersist(func() {
-		_ = c.database.SetSetting("soft_fade", val)
+		if c.database != nil {
+			_ = c.database.SetSetting("soft_fade", val)
+		}
+	})
+	c.broadcastState()
+}
+
+// SetSoftFadeDuration configura la duración del fundido suave al pausar/reanudar en milisegundos [300..3000].
+func (c *Client) SetSoftFadeDuration(ms int) {
+	clamped := ClampSoftFadeMs(ms)
+	c.softFadeMs.Store(int64(clamped))
+
+	c.mu.Lock()
+	c.state.SoftFadeMs = clamped
+	c.mu.Unlock()
+
+	msStr := strconv.Itoa(clamped)
+	c.enqueuePersist(func() {
+		if c.database != nil {
+			_ = c.database.SetSetting("soft_fade_ms", msStr)
+		}
 	})
 	c.broadcastState()
 }
@@ -3545,7 +3618,7 @@ func (c *Client) dspNeedsMPDReloadLockedCheck() bool {
 func (c *Client) SetOutputDSPPreset(outputName, preset string) (PlayerState, error) {
 	normPreset, ok := NormalizeDSPPreset(preset)
 	if !ok {
-		return c.GetState(), fmt.Errorf("perfil DSP inválido (permitidos: flat, night, voice, livingroom, bass)")
+		return c.GetState(), fmt.Errorf("perfil DSP inválido (permitidos: flat, night, voice, livingroom, bass o eq:b1,b2,b3,b4,b5)")
 	}
 
 	c.mu.Lock()

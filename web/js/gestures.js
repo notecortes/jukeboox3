@@ -3,9 +3,9 @@
 // Swipe-Up, Swipe-Down, Swipe-Horizontal & Queue Drag-and-Drop
 // =====================================================================
 
-import * as api from './api.js';
-import { state, notifyListeners } from './state.js';
-import { renderNowPlaying } from './player.js';
+import * as api from './api.js?v=21';
+import { state, notifyListeners } from './state.js?v=21';
+import { renderNowPlaying } from './player.js?v=21';
 
 // initGestures configura los detectores de gestos táctiles para el Mini-Player y Now Playing.
 export function initGestures() {

@@ -3,9 +3,9 @@
 // Real-Time Time Tracking & One-Tap Seeking
 // =====================================================================
 
-import * as api from './api.js';
-import { state, subscribe } from './state.js';
-import { isLiveStreamTrack } from './player.js';
+import * as api from './api.js?v=21';
+import { state, subscribe } from './state.js?v=21';
+import { isLiveStreamTrack } from './player.js?v=21';
 
 // initLyrics inicializa la sincronización de letras LRCLIB con el reproductor.
 export function initLyrics() {
@@ -13,11 +13,13 @@ export function initLyrics() {
     if (event === 'player_updated' || event === 'lyrics_view_opened') {
       checkAndFetchLyrics();
       syncActiveLyricLine();
+    } else if (event === 'ambient_mode_entered') {
+      syncActiveLyricLine(true);
     }
   });
 
   // Ticker de refresco frecuente para coincidencia exacta con el segundo actual
-  setInterval(syncActiveLyricLine, 250);
+  setInterval(() => syncActiveLyricLine(false), 250);
 }
 
 // parseRadioStreamSong extrae artista y título desde un metadato ICY con formato "Artista - Canción".
@@ -146,12 +148,12 @@ function updateAmbientLyricDisplay(text) {
 }
 
 // syncActiveLyricLine detecta la línea correspondiente al segundo actual y realiza auto-scroll suave.
-function syncActiveLyricLine() {
+function syncActiveLyricLine(forceAmbientRefresh = false) {
   if (!state.lyrics.found || state.lyrics.synced.length === 0) {
     updateAmbientLyricDisplay('');
     return;
   }
-  if (state.player.status !== 'play') return;
+  if (!forceAmbientRefresh && state.player.status !== 'play') return;
 
   const container = document.getElementById('npLyricsContainer');
   const lyricsOpen = Boolean(container && container.classList.contains('active'));
@@ -170,9 +172,9 @@ function syncActiveLyricLine() {
     }
   }
 
-  if (activeIdx !== state.lyrics.activeIndex && activeIdx >= 0) {
+  if (activeIdx >= 0 && (activeIdx !== state.lyrics.activeIndex || forceAmbientRefresh)) {
     // Remover activo anterior
-    if (state.lyrics.activeIndex >= 0) {
+    if (state.lyrics.activeIndex >= 0 && state.lyrics.activeIndex !== activeIdx) {
       document.getElementById(`lyric-line-${state.lyrics.activeIndex}`)?.classList.remove('active');
     }
 

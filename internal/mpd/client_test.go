@@ -1498,13 +1498,41 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 		t.Fatalf("al volver a DAC USB debía restaurar perfil 'night' y plugin 'pipe': %+v", stBack)
 	}
 
+	// Verificar curva paramétrica personalizada eq:b1,b2,b3,b4,b5 y normalización de ceros a flat
+	if norm, ok := NormalizeDSPPreset("EQ:18,-20,0,3,5"); !ok || norm != "eq:12,-12,0,3,5" {
+		t.Fatalf("NormalizeDSPPreset debía acotar bandas [-12..12], obtenido %q ok=%v", norm, ok)
+	}
+	if norm, ok := NormalizeDSPPreset("eq:0,0,0,0,0"); !ok || norm != "flat" {
+		t.Fatalf("eq todo ceros debía canonicalizarse a 'flat', obtenido %q ok=%v", norm, ok)
+	}
+	if _, ok := NormalizeDSPPreset("eq:1,2,3"); ok {
+		t.Fatalf("eq con menos de 5 bandas debía rechazarse")
+	}
+
+	stCustom, err := c.SetOutputDSPPreset("DAC USB (Topping)", "eq:4,1,0,-2,3")
+	if err != nil {
+		t.Fatalf("SetOutputDSPPreset('eq:4,1,0,-2,3') falló: %v", err)
+	}
+	if stCustom.DSPPreset != "eq:4,1,0,-2,3" || stCustom.AudioOutputs[0].Plugin != "pipe" {
+		t.Fatalf("curva EQ personalizada no reflejada en estado/plugin pipe: %+v", stCustom)
+	}
+
+	// Verificar duración configurable de soft fade
+	c.SetSoftFadeDuration(1500)
+	if gotMs := c.GetState().SoftFadeMs; gotMs != 1500 {
+		t.Fatalf("SoftFadeMs esperado 1500, obtenido %d", gotMs)
+	}
+
 	// Verificar persistencia tras reiniciar el cliente desde la misma SQLite
 	c.Close()
 	c2 := NewClient(sockPath, "127.0.0.1", "0", nil, database)
 	t.Cleanup(c2.Close)
 	reloaded := c2.GetState()
-	if reloaded.DSPPreset != "night" || reloaded.DSPPresets["DAC USB (Topping)"] != "night" {
-		t.Fatalf("el nuevo Client debía recuperar presets DSP desde SQLite: %+v", reloaded)
+	if reloaded.DSPPreset != "eq:4,1,0,-2,3" || reloaded.DSPPresets["DAC USB (Topping)"] != "eq:4,1,0,-2,3" {
+		t.Fatalf("el nuevo Client debía recuperar curva EQ desde SQLite: %+v", reloaded)
+	}
+	if reloaded.SoftFadeMs != 1500 {
+		t.Fatalf("el nuevo Client debía recuperar SoftFadeMs=1500 desde SQLite, obtenido %d", reloaded.SoftFadeMs)
 	}
 }
 

@@ -3,10 +3,10 @@
 // Safeguard Volume, Timeline Scrubber & Ambient Background Rendering
 // =====================================================================
 
-import * as api from './api.js';
-import { state, subscribe, notifyListeners } from './state.js';
-import { sanitizeCoverURL } from './sanitize.js';
-import { openNowPlaying, closeNowPlaying } from './gestures.js';
+import * as api from './api.js?v=21';
+import { state, subscribe, notifyListeners } from './state.js?v=21';
+import { sanitizeCoverURL } from './sanitize.js?v=21';
+import { openNowPlaying, closeNowPlaying } from './gestures.js?v=21';
 
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
 let isScrubbing = false;
@@ -15,6 +15,14 @@ let wakeLockEnabled = (typeof localStorage !== 'undefined' && localStorage.getIt
 let wakeLockSentinel = null;
 let lastSleepSyncAt = 0;
 let ambientModeEnabled = (typeof localStorage !== 'undefined' ? localStorage.getItem('aurabox_ambient_mode') !== 'false' : true);
+let ambientTimeoutSec = (() => {
+  if (typeof localStorage === 'undefined') return 60;
+  const raw = parseInt(localStorage.getItem('aurabox_ambient_timeout_sec') || '60', 10);
+  return [10, 15, 30, 60, 120].includes(raw) ? raw : 60;
+})();
+let ambientOrientation = (typeof localStorage !== 'undefined' && localStorage.getItem('aurabox_ambient_orientation') === 'landscape')
+  ? 'landscape'
+  : 'all';
 let ambientInactivityTimer = null;
 let swallowAmbientWakeClick = false;
 
@@ -352,9 +360,24 @@ async function syncWakeLockWithPlayback() {
   }
 }
 
-// isLandscapeTabletViewport comprueba si el dispositivo está en formato tablet/escritorio horizontal.
-function isLandscapeTabletViewport() {
-  return window.matchMedia('(orientation: landscape) and (min-width: 700px)').matches;
+// isAmbientViewportAllowed comprueba si el tamaño/orientación actual admite Modo Marco Musical según preferencias.
+function isAmbientViewportAllowed() {
+  if (ambientOrientation === 'landscape') {
+    return window.matchMedia('(orientation: landscape) and (min-width: 560px)').matches;
+  }
+  return true;
+}
+
+// enterAmbientModeNow activa de inmediato el Modo Marco Musical en Now Playing.
+export function enterAmbientModeNow() {
+  const modal = document.getElementById('nowPlayingModal');
+  if (!modal || !state.ui.isNowPlayingOpen) return;
+  if (ambientInactivityTimer) {
+    clearTimeout(ambientInactivityTimer);
+    ambientInactivityTimer = null;
+  }
+  modal.classList.add('ambient-mode');
+  notifyListeners('ambient_mode_entered', true);
 }
 
 // exitAmbientMode restaura los controles completos de Now Playing saliendo del modo marco musical.
@@ -372,40 +395,91 @@ function exitAmbientMode(restartTimer = true) {
   }
 }
 
-// resetAmbientTimer reinicia la cuenta atrás de 60s de inactividad para entrar en modo marco musical horizontal.
+// resetAmbientTimer reinicia la cuenta atrás configurada de inactividad para entrar en modo marco musical.
 function resetAmbientTimer() {
   if (ambientInactivityTimer) {
     clearTimeout(ambientInactivityTimer);
     ambientInactivityTimer = null;
   }
-  if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isLandscapeTabletViewport()) {
+  if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isAmbientViewportAllowed()) {
     return;
   }
   ambientInactivityTimer = setTimeout(() => {
     ambientInactivityTimer = null;
-    if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isLandscapeTabletViewport()) return;
-    const modal = document.getElementById('nowPlayingModal');
-    if (modal) {
-      modal.classList.add('ambient-mode');
-    }
-  }, 60000);
+    if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isAmbientViewportAllowed()) return;
+    enterAmbientModeNow();
+  }, ambientTimeoutSec * 1000);
 }
 
-// initAmbientScreen gestiona el modo marco musical tras 60s sin interacción en tablets en horizontal.
-function initAmbientScreen() {
+// syncAmbientSettingsUI sincroniza los selectores de parámetros del Modo Marco Musical en Ajustes.
+function syncAmbientSettingsUI() {
   const checkbox = document.getElementById('settingAmbientMode');
   if (checkbox) {
     checkbox.checked = ambientModeEnabled;
+  }
+  document.querySelectorAll('#ambientTimeoutSelector .rg-opt').forEach((btn) => {
+    const val = parseInt(btn.dataset.ambientSec || '60', 10);
+    btn.classList.toggle('active', val === ambientTimeoutSec);
+  });
+  document.querySelectorAll('#ambientOrientationSelector .rg-opt').forEach((btn) => {
+    btn.classList.toggle('active', (btn.dataset.ambientOrient || 'all') === ambientOrientation);
+  });
+}
+
+// initAmbientScreen gestiona el modo marco musical configurable y el acceso directo desde Now Playing.
+function initAmbientScreen() {
+  syncAmbientSettingsUI();
+
+  const checkbox = document.getElementById('settingAmbientMode');
+  if (checkbox) {
     checkbox.addEventListener('change', () => {
       ambientModeEnabled = checkbox.checked;
       localStorage.setItem('aurabox_ambient_mode', ambientModeEnabled ? 'true' : 'false');
       if (!ambientModeEnabled) {
         exitAmbientMode(false);
-        showToast('Modo Marco Musical desactivado');
+        showToast('Modo Marco Musical automático desactivado');
       } else {
         resetAmbientTimer();
-        showToast('Modo Marco Musical activado (60s en horizontal)');
+        showToast(`Modo Marco Musical activado (${ambientTimeoutSec}s)`);
       }
+    });
+  }
+
+  document.querySelectorAll('#ambientTimeoutSelector .rg-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sec = parseInt(btn.dataset.ambientSec || '60', 10);
+      if (![10, 15, 30, 60, 120].includes(sec)) return;
+      ambientTimeoutSec = sec;
+      localStorage.setItem('aurabox_ambient_timeout_sec', String(sec));
+      syncAmbientSettingsUI();
+      resetAmbientTimer();
+      showToast(`Marco Musical automático tras ${sec}s sin tocar`);
+    });
+  });
+
+  document.querySelectorAll('#ambientOrientationSelector .rg-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const orient = (btn.dataset.ambientOrient === 'landscape') ? 'landscape' : 'all';
+      ambientOrientation = orient;
+      localStorage.setItem('aurabox_ambient_orientation', orient);
+      syncAmbientSettingsUI();
+      if (!isAmbientViewportAllowed()) {
+        exitAmbientMode(false);
+      } else {
+        resetAmbientTimer();
+      }
+      showToast(orient === 'landscape'
+        ? 'Marco Musical limitado a pantalla horizontal'
+        : 'Marco Musical activo en vertical y horizontal');
+    });
+  });
+
+  const btnManualAmbient = document.getElementById('npBtnAmbient');
+  if (btnManualAmbient) {
+    btnManualAmbient.addEventListener('click', (e) => {
+      e.stopPropagation();
+      enterAmbientModeNow();
+      showToast('Modo Marco Musical activado • Toca la pantalla para volver');
     });
   }
 
@@ -414,6 +488,7 @@ function initAmbientScreen() {
 
   const handleActivity = (e) => {
     if (!state.ui.isNowPlayingOpen) return;
+    if (e.target && e.target.closest('#npBtnAmbient')) return;
     if (modal.classList.contains('ambient-mode')) {
       swallowAmbientWakeClick = true;
       setTimeout(() => {
@@ -445,7 +520,7 @@ function initAmbientScreen() {
   });
 
   const handleViewportChange = () => {
-    if (!isLandscapeTabletViewport() || !state.ui.isNowPlayingOpen) {
+    if (!isAmbientViewportAllowed() || !state.ui.isNowPlayingOpen) {
       exitAmbientMode(false);
     } else {
       resetAmbientTimer();
@@ -495,16 +570,67 @@ export function renderSleepTimerUI() {
   }
 }
 
-// describeDSPPreset devuelve etiqueta y explicación acústica breve para cada perfil DSP soportado.
+// DSP_PRESET_BANDS define las curvas orientativas de 5 bandas [60Hz, 250Hz, 1kHz, 4kHz, 12kHz] para cada perfil.
+export const DSP_PRESET_BANDS = {
+  flat: [0, 0, 0, 0, 0],
+  night: [4, 1, 0, 1, 2],
+  voice: [-4, -1, 2, 4, 1],
+  livingroom: [3, 1, 0, 2, 2],
+  bass: [6, -1, 0, 0, 1]
+};
+
+// DSP_PRESET_DESCRIPTIONS detalla la respuesta acústica de cada perfil DSP soportado por SoX.
 const DSP_PRESET_DESCRIPTIONS = {
   flat: 'Señal directa bit-perfect ALSA sin alterar muestras ni ecualización.',
   night: 'Realce de graves y agudos a bajo volumen con compresión suave de picos.',
   voice: 'Limpia subgraves y realza claridad vocal e instrumentos acústicos.',
   livingroom: 'Escena cálida con presencia en sala para altavoces domésticos.',
-  bass: 'Refuerzo cálido en subgraves para cajas compactas o auriculares abiertos.'
+  bass: 'Refuerzo cálido en subgraves para cajas compactas o auriculares abiertos.',
+  custom: 'Curva gráfica personalizada de 5 bandas (±12 dB) procesada a 32-bit en SoX.'
 };
 
-// syncSettingsAudioControls mantiene sincronizados Crossfade, ReplayGain, Fade y perfiles DSP entre dispositivos.
+// parseDSPBands extrae los 5 valores de ganancia en dB desde un perfil DSP o curva "eq:b1,b2,b3,b4,b5".
+export function parseDSPBands(preset) {
+  const clean = String(preset || 'flat').trim().toLowerCase();
+  if (clean.startsWith('eq:')) {
+    const parts = clean.slice(3).split(',').map((n) => {
+      const v = parseInt(n.trim(), 10);
+      if (Number.isNaN(v)) return 0;
+      return Math.max(-12, Math.min(12, v));
+    });
+    if (parts.length === 5) return parts;
+  }
+  return [...(DSP_PRESET_BANDS[clean] || DSP_PRESET_BANDS.flat)];
+}
+
+// formatEQPresetString serializa 5 bandas en formato backend "eq:b1,b2,b3,b4,b5" o "flat" si están a cero.
+export function formatEQPresetString(bands) {
+  const clean = [0, 1, 2, 3, 4].map((idx) => {
+    const v = parseInt(bands?.[idx] ?? 0, 10);
+    if (Number.isNaN(v)) return 0;
+    return Math.max(-12, Math.min(12, v));
+  });
+  if (clean.every((v) => v === 0)) return 'flat';
+  return `eq:${clean.join(',')}`;
+}
+
+// renderEQSliders actualiza visualmente los 5 deslizadores del ecualizador y sus lecturas en dB.
+export function renderEQSliders(bands) {
+  const safe = Array.isArray(bands) && bands.length === 5 ? bands : [0, 0, 0, 0, 0];
+  document.querySelectorAll('#eqBandsList .eq-band-slider').forEach((slider) => {
+    const idx = parseInt(slider.dataset.band || '0', 10);
+    const val = safe[idx] ?? 0;
+    if (document.activeElement !== slider) {
+      slider.value = String(val);
+    }
+    const label = document.querySelector(`#eqBandsList [data-band-val="${idx}"]`);
+    if (label) {
+      label.textContent = `${val > 0 ? '+' : ''}${val} dB`;
+    }
+  });
+}
+
+// syncSettingsAudioControls mantiene sincronizados Crossfade, ReplayGain, Fade, Marco Musical y EQ DSP entre dispositivos.
 function syncSettingsAudioControls() {
   const cfSlider = document.getElementById('settingCrossfade');
   const cfLabel = document.getElementById('labelCrossfade');
@@ -525,30 +651,65 @@ function syncSettingsAudioControls() {
   if (softFadeChk && typeof state.player.soft_fade === 'boolean') {
     softFadeChk.checked = state.player.soft_fade;
   }
+  const fadeMs = Number(state.player.soft_fade_ms || 1100);
+  document.querySelectorAll('#softFadeDurationSelector .rg-opt').forEach((btn) => {
+    const val = parseInt(btn.dataset.fadeMs || '1100', 10);
+    btn.classList.toggle('active', val === fadeMs);
+  });
 
   const activeOut = state.player.active_output || 'Sin salida';
+  const outputs = Array.isArray(state.player.audio_outputs) ? state.player.audio_outputs : [];
+  const activeObj = outputs.find((o) => o.name === activeOut || o.enabled);
+  const activePlugin = (activeObj?.plugin || '').toLowerCase();
+  const isNonDSPOutput = (activePlugin === 'pulse' || activePlugin === 'null' || activePlugin === 'httpd');
+
   const presetMap = (state.player.dsp_presets && typeof state.player.dsp_presets === 'object')
     ? state.player.dsp_presets
     : {};
-  const preset = (presetMap[activeOut] || state.player.dsp_preset || 'flat').toLowerCase();
+  const rawPreset = (presetMap[activeOut] || state.player.dsp_preset || 'flat').toLowerCase();
+  const uiPresetKey = rawPreset.startsWith('eq:') ? 'custom' : rawPreset;
 
   const dspOutLabel = document.getElementById('dspActiveOutputName');
   if (dspOutLabel) {
     dspOutLabel.textContent = activeOut;
   }
+
+  const compatHint = document.getElementById('dspCompatHint');
+  if (compatHint) {
+    if (activePlugin === 'pulse') {
+      compatHint.textContent = 'Nota: Estás usando la salida PulseAudio del host. En la Raspberry Pi (salidas ALSA, Jack 3.5mm, DAC USB o I2S HAT), el DSP SoX procesa directamente las 5 bandas y perfiles.';
+      compatHint.classList.remove('hidden');
+    } else if (activePlugin === 'null') {
+      compatHint.textContent = 'Nota: No hay tarjeta física ALSA detectada; selecciona un DAC USB, Jack o HDMI para aplicar ecualización DSP.';
+      compatHint.classList.remove('hidden');
+    } else {
+      compatHint.textContent = '';
+      compatHint.classList.add('hidden');
+    }
+  }
+
   const dspModeBadge = document.getElementById('dspModeBadge');
   if (dspModeBadge) {
-    const isDSPEnabled = preset !== 'flat';
-    dspModeBadge.textContent = isDSPEnabled ? 'DSP SoX' : 'Bit-Perfect';
-    dspModeBadge.style.background = isDSPEnabled ? 'rgba(99, 102, 241, 0.2)' : '';
-    dspModeBadge.style.color = isDSPEnabled ? 'var(--accent-light)' : '';
+    const isDSPEnabled = rawPreset !== 'flat';
+    dspModeBadge.textContent = isNonDSPOutput
+      ? (activePlugin ? activePlugin.toUpperCase() : 'NO ALSA')
+      : (isDSPEnabled ? 'DSP SoX' : 'Bit-Perfect');
+    dspModeBadge.style.background = (!isNonDSPOutput && isDSPEnabled) ? 'rgba(99, 102, 241, 0.2)' : '';
+    dspModeBadge.style.color = (!isNonDSPOutput && isDSPEnabled) ? 'var(--accent-light)' : '';
   }
+
   document.querySelectorAll('#dspPresetSelector .dsp-opt').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.dsp === preset);
+    btn.classList.toggle('active', btn.dataset.dsp === uiPresetKey);
   });
+
   const dspDesc = document.getElementById('dspPresetDesc');
   if (dspDesc) {
-    dspDesc.textContent = DSP_PRESET_DESCRIPTIONS[preset] || DSP_PRESET_DESCRIPTIONS.flat;
+    dspDesc.textContent = DSP_PRESET_DESCRIPTIONS[uiPresetKey] || DSP_PRESET_DESCRIPTIONS.flat;
+  }
+
+  const eqContainer = document.getElementById('eqBandsList');
+  if (!eqContainer || !eqContainer.contains(document.activeElement)) {
+    renderEQSliders(parseDSPBands(rawPreset));
   }
 }
 

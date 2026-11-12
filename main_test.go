@@ -706,27 +706,27 @@ func TestUXEndpointsAndFeatures(t *testing.T) {
 		t.Fatalf("álbumes por década 90s inesperados: %+v (err=%v)", genreAlbsResp, err)
 	}
 
-	// 8. Configuración soft_fade vía /api/player/config y /api/settings
+	// 8. Configuración soft_fade y soft_fade_ms vía /api/player/config
 	recFadeCfg := httptest.NewRecorder()
-	mux.ServeHTTP(recFadeCfg, httptest.NewRequest(http.MethodPost, "/api/player/config?replay_gain=auto&crossfade=2&soft_fade=false", nil))
+	mux.ServeHTTP(recFadeCfg, httptest.NewRequest(http.MethodPost, "/api/player/config?replay_gain=auto&crossfade=2&soft_fade=false&soft_fade_ms=1500", nil))
 	if recFadeCfg.Code != http.StatusOK {
-		t.Fatalf("POST /api/player/config con soft_fade=false devolvió %d: %s", recFadeCfg.Code, recFadeCfg.Body.String())
+		t.Fatalf("POST /api/player/config con soft_fade=false&soft_fade_ms=1500 devolvió %d: %s", recFadeCfg.Code, recFadeCfg.Body.String())
 	}
 	var fadeState mpd.PlayerState
-	if err := json.Unmarshal(recFadeCfg.Body.Bytes(), &fadeState); err != nil || fadeState.SoftFade {
-		t.Fatalf("SoftFade debía quedar false, obtenido %+v (err=%v)", fadeState, err)
+	if err := json.Unmarshal(recFadeCfg.Body.Bytes(), &fadeState); err != nil || fadeState.SoftFade || fadeState.SoftFadeMs != 1500 {
+		t.Fatalf("SoftFade debía quedar false y SoftFadeMs=1500, obtenido %+v (err=%v)", fadeState, err)
 	}
 
-	// 9. Endpoint POST /api/player/dsp (perfil válido y rechazo de perfil inválido)
+	// 9. Endpoint POST /api/player/dsp (perfil válido, curva EQ 5 bandas y rechazo inválido)
 	recDSPOk := httptest.NewRecorder()
-	reqDSPOk := httptest.NewRequest(http.MethodPost, "/api/player/dsp", bytes.NewBufferString(`{"output":"DAC USB Test","preset":"livingroom"}`))
+	reqDSPOk := httptest.NewRequest(http.MethodPost, "/api/player/dsp", bytes.NewBufferString(`{"output":"DAC USB Test","preset":"eq:3,1,0,2,-1"}`))
 	reqDSPOk.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(recDSPOk, reqDSPOk)
 	if recDSPOk.Code != http.StatusOK {
 		t.Fatalf("POST /api/player/dsp válido devolvió %d: %s", recDSPOk.Code, recDSPOk.Body.String())
 	}
 	var dspState mpd.PlayerState
-	if err := json.Unmarshal(recDSPOk.Body.Bytes(), &dspState); err != nil || dspState.DSPPresets["DAC USB Test"] != "livingroom" {
+	if err := json.Unmarshal(recDSPOk.Body.Bytes(), &dspState); err != nil || dspState.DSPPresets["DAC USB Test"] != "eq:3,1,0,2,-1" {
 		t.Fatalf("respuesta /api/player/dsp inesperada: %+v (err=%v)", dspState, err)
 	}
 
@@ -742,7 +742,10 @@ func TestUXEndpointsAndFeatures(t *testing.T) {
 	if got := database.GetSetting("soft_fade", ""); got != "false" {
 		t.Fatalf("setting soft_fade debía persistirse como 'false', obtenido %q", got)
 	}
-	if got := database.GetSetting("dsp_presets_json", ""); !strings.Contains(got, `"DAC USB Test":"livingroom"`) {
+	if got := database.GetSetting("soft_fade_ms", ""); got != "1500" {
+		t.Fatalf("setting soft_fade_ms debía persistirse como '1500', obtenido %q", got)
+	}
+	if got := database.GetSetting("dsp_presets_json", ""); !strings.Contains(got, `"DAC USB Test":"eq:3,1,0,2,-1"`) {
 		t.Fatalf("setting dsp_presets_json inesperado: %q", got)
 	}
 }

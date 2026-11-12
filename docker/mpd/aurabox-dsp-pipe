@@ -37,6 +37,43 @@ case "$PRESET" in
         exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
             gain -5.5 bass +5.5 95 0.65s equalizer 240 1.3q -1 treble +1 11000 0.7s
         ;;
+    eq:*)
+        if ! printf '%s' "$PRESET" | grep -Eq '^eq:-?[0-9]{1,2}(,-?[0-9]{1,2}){4}$'; then
+            echo "[AuraBox DSP] Curva EQ inválida: $PRESET" >&2
+            exit 1
+        fi
+        EQ_VALS="${PRESET#eq:}"
+        PARSED=$(printf '%s\n' "$EQ_VALS" | awk -F',' '
+        function clamp(v) {
+            v += 0
+            if (v < -12) return -12
+            if (v > 12) return 12
+            return int(v)
+        }
+        {
+            b1 = clamp($1); b2 = clamp($2); b3 = clamp($3); b4 = clamp($4); b5 = clamp($5);
+            maxp = 0;
+            if (b1 > maxp) maxp = b1;
+            if (b2 > maxp) maxp = b2;
+            if (b3 > maxp) maxp = b3;
+            if (b4 > maxp) maxp = b4;
+            if (b5 > maxp) maxp = b5;
+            headroom = (maxp > 0) ? sprintf("-%.1f", maxp + 1.0) : "0";
+            printf "%s %d %d %d %d %d\n", headroom, b1, b2, b3, b4, b5;
+        }')
+        set -- $PARSED
+        HEADROOM="$1"; B1="$2"; B2="$3"; B4_1K="$4"; B4="$5"; B5="$6"
+        if [ "$B1" = "0" ] && [ "$B2" = "0" ] && [ "$B4_1K" = "0" ] && [ "$B4" = "0" ] && [ "$B5" = "0" ]; then
+            exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV"
+        fi
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
+            gain "$HEADROOM" \
+            equalizer 60 1.0q "$B1" \
+            equalizer 250 1.0q "$B2" \
+            equalizer 1000 1.0q "$B4_1K" \
+            equalizer 4000 1.0q "$B4" \
+            equalizer 12000 1.0q "$B5"
+        ;;
     flat|"")
         exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV"
         ;;
@@ -45,4 +82,3 @@ case "$PRESET" in
         exit 1
         ;;
 esac
-

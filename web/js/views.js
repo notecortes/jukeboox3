@@ -3,11 +3,11 @@
 // Album Grids, Artists, Search, Smart Mix Generator & Settings
 // =====================================================================
 
-import * as api from './api.js';
-import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
-import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
-import { formatTime, renderSleepTimerUI, showToast } from './player.js';
-import { openNowPlaying } from './gestures.js';
+import * as api from './api.js?v=21';
+import { state, subscribe, notifyListeners, updatePlayerState } from './state.js?v=21';
+import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js?v=21';
+import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders } from './player.js?v=21';
+import { openNowPlaying } from './gestures.js?v=21';
 
 // debounce retrasa la ejecución de una función para no sobrecargar el hilo UI con entradas continuas.
 function debounce(fn, wait = 150) {
@@ -2236,7 +2236,9 @@ function renderRadiosChunked(container, radios, viewContainer) {
 function describeAudioOutput(output) {
   const plugin = (output.plugin || '').toLowerCase();
   const nameLower = (output.name || '').toLowerCase();
-  const dspTag = plugin === 'pipe' ? ' • DSP SoX activo' : '';
+  const activePreset = (state.player.dsp_presets && state.player.dsp_presets[output.name]) || '';
+  const presetLabel = activePreset.startsWith('eq:') ? 'EQ Personalizado' : activePreset;
+  const dspTag = plugin === 'pipe' ? (presetLabel ? ` • DSP SoX (${presetLabel})` : ' • DSP SoX activo') : '';
 
   if (plugin === 'httpd') {
     return {
@@ -2467,41 +2469,93 @@ function bindSettingsView() {
     runForcedScan(btnRescanLib, 'Iniciando re-escaneo completo de música...');
   });
 
-  // Perfiles de ecualización / DSP por salida activa
-  const dspButtons = document.querySelectorAll('#dspPresetSelector .dsp-opt');
-  dspButtons.forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (dspSwitchInFlight) return;
-      const preset = btn.dataset.dsp || 'flat';
-      const activeOutput = state.player.active_output || '';
-      if (!activeOutput || activeOutput === 'Detectando audio...') {
-        showToast('Espera a que se detecte la salida de audio activa');
-        return;
+  // Perfiles de ecualización / DSP y ecualizador gráfico de 5 bandas por salida activa
+  const applyDSPSelection = async (presetOrEq, successLabel) => {
+    if (dspSwitchInFlight) return;
+    const activeOutput = state.player.active_output || '';
+    if (!activeOutput || activeOutput === 'Detectando audio...') {
+      showToast('Espera a que se detecte la salida de audio activa');
+      return;
+    }
+
+    const dspButtons = document.querySelectorAll('#dspPresetSelector .dsp-opt');
+    const btnApplyEQ = document.getElementById('btnApplyCustomEQ');
+    const btnResetEQ = document.getElementById('btnResetEQ');
+
+    dspSwitchInFlight = true;
+    dspButtons.forEach((b) => { b.disabled = true; });
+    if (btnApplyEQ) btnApplyEQ.disabled = true;
+    if (btnResetEQ) btnResetEQ.disabled = true;
+
+    const descEl = document.getElementById('dspPresetDesc');
+    if (descEl) descEl.textContent = 'Aplicando ecualizador DSP en MPD...';
+
+    try {
+      const updatedState = await api.setOutputDSPPreset(activeOutput, presetOrEq);
+      if (updatedState) {
+        updatePlayerState(updatedState);
+        renderAudioOutputs(true);
       }
+      showToast(successLabel || 'Ecualizador DSP aplicado');
+    } catch (err) {
+      showToast(`No se pudo aplicar DSP: ${err.message}`);
+      updatePlayerState({});
+    } finally {
+      dspButtons.forEach((b) => { b.disabled = false; });
+      if (btnApplyEQ) btnApplyEQ.disabled = false;
+      if (btnResetEQ) btnResetEQ.disabled = false;
+      dspSwitchInFlight = false;
+    }
+  };
 
-      dspSwitchInFlight = true;
-      dspButtons.forEach((b) => {
-        b.disabled = true;
-        b.classList.toggle('active', b === btn);
-      });
-      const descEl = document.getElementById('dspPresetDesc');
-      if (descEl) descEl.textContent = 'Aplicando perfil DSP en MPD...';
-
-      try {
-        const updatedState = await api.setOutputDSPPreset(activeOutput, preset);
-        if (updatedState) {
-          updatePlayerState(updatedState);
-          renderAudioOutputs(true);
-        }
-        showToast(`Perfil DSP aplicado: ${btn.textContent.trim()}`);
-      } catch (err) {
-        showToast(`No se pudo aplicar DSP: ${err.message}`);
-        updatePlayerState({});
-      } finally {
-        dspButtons.forEach((b) => { b.disabled = false; });
-        dspSwitchInFlight = false;
+  const getSliderBands = () => {
+    const bands = [0, 0, 0, 0, 0];
+    document.querySelectorAll('#eqBandsList .eq-band-slider').forEach((sl) => {
+      const idx = parseInt(sl.dataset.band || '0', 10);
+      const val = parseInt(sl.value || '0', 10);
+      if (idx >= 0 && idx < 5 && !Number.isNaN(val)) {
+        bands[idx] = Math.max(-12, Math.min(12, val));
       }
     });
+    return bands;
+  };
+
+  const dspButtons = document.querySelectorAll('#dspPresetSelector .dsp-opt');
+  dspButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.dsp || 'flat';
+      if (key === 'custom') {
+        const eqStr = formatEQPresetString(getSliderBands());
+        applyDSPSelection(eqStr, 'Curva EQ personalizada aplicada');
+        return;
+      }
+      renderEQSliders(parseDSPBands(key));
+      applyDSPSelection(key, `Perfil DSP aplicado: ${btn.textContent.trim()}`);
+    });
+  });
+
+  document.querySelectorAll('#eqBandsList .eq-band-slider').forEach((slider) => {
+    slider.addEventListener('input', () => {
+      const idx = parseInt(slider.dataset.band || '0', 10);
+      const val = parseInt(slider.value || '0', 10);
+      const label = document.querySelector(`#eqBandsList [data-band-val="${idx}"]`);
+      if (label) {
+        label.textContent = `${val > 0 ? '+' : ''}${val} dB`;
+      }
+      dspButtons.forEach((b) => {
+        b.classList.toggle('active', b.dataset.dsp === 'custom');
+      });
+    });
+  });
+
+  document.getElementById('btnApplyCustomEQ')?.addEventListener('click', () => {
+    const eqStr = formatEQPresetString(getSliderBands());
+    applyDSPSelection(eqStr, eqStr === 'flat' ? 'Ecualizador restablecido a Plano Hi-Fi' : 'Curva EQ de 5 bandas aplicada');
+  });
+
+  document.getElementById('btnResetEQ')?.addEventListener('click', () => {
+    renderEQSliders([0, 0, 0, 0, 0]);
+    applyDSPSelection('flat', 'Ecualizador restablecido a Plano Hi-Fi (Bit-Perfect)');
   });
 
   // Límite máximo de salvaguarda de volumen
@@ -2572,7 +2626,7 @@ function bindSettingsView() {
     });
   });
 
-  // Interruptor Fade In / Fade Out suave al pausar y reanudar
+  // Interruptor Fade In / Fade Out suave al pausar y reanudar + duración configurable
   const softFadeCheckbox = document.getElementById('settingSoftFade');
   if (softFadeCheckbox) {
     if (typeof state.player.soft_fade === 'boolean') {
@@ -2592,6 +2646,23 @@ function bindSettingsView() {
       }
     });
   }
+
+  const fadeDurationButtons = document.querySelectorAll('#softFadeDurationSelector .rg-opt');
+  fadeDurationButtons.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const ms = parseInt(btn.dataset.fadeMs || '1100', 10);
+      const rg = (state.player.replay_gain || 'auto').toLowerCase();
+      const cf = Number(state.player.crossfade || 0);
+      fadeDurationButtons.forEach((b) => b.classList.toggle('active', b === btn));
+      try {
+        const updated = await api.setAudioConfig(rg, cf, undefined, ms);
+        if (updated) updatePlayerState(updated);
+        showToast(`Duración de fundido ajustada a ${(ms / 1000).toFixed(1)} s`);
+      } catch (err) {
+        showToast(`Error al cambiar duración de fundido: ${err.message}`);
+      }
+    });
+  });
 
   // Temporizador de apagado (Sleep Timer)
   const sleepButtons = document.querySelectorAll('.btn-sleep-timer');

@@ -1258,5 +1258,59 @@
   cursor: wait;
 }
 
+.eq-bands-box {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.eq-bands-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eq-band-row {
+  display: grid;
+  grid-template-columns: 74px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+
+.eq-band-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+
+.eq-band-label small {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.eq-band-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.eq-band-value {
+  text-align: right;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-light);
+  font-variant-numeric: tabular-nums;
+}
+
+.eq-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 
 
