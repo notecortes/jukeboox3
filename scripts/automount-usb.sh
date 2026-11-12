@@ -6,7 +6,17 @@
 
 ACTION="${1:-}"
 DEVNAME="${2:-}"
-MOUNT_BASE="/music/usb"
+CONFIG_FILE="/etc/default/aurabox-usb"
+MOUNT_BASE="${AURABOX_USB_MOUNT_BASE:-/music/usb}"
+AURABOX_PORT="${AURABOX_PORT:-4080}"
+AURABOX_HTTPS_PORT="${AURABOX_HTTPS_PORT:-4443}"
+
+if [ -r "$CONFIG_FILE" ]; then
+    CFG_MOUNT=$(awk -F= '$1 == "MOUNT_BASE" { sub(/^MOUNT_BASE=/, ""); gsub(/["'\''\r ]/, ""); print; exit }' "$CONFIG_FILE" 2>/dev/null || true)
+    if [ -n "$CFG_MOUNT" ] && [ "${CFG_MOUNT#/}" != "$CFG_MOUNT" ]; then
+        MOUNT_BASE="$CFG_MOUNT"
+    fi
+fi
 
 if [ -z "$DEVNAME" ]; then
     echo "Uso: $0 [add|remove] /dev/sdX1"
@@ -61,10 +71,27 @@ sanitize_label() {
 # trigger_rescan solicita a AuraBox re-escanear la biblioteca vía HTTP local o fallback HTTPS local.
 trigger_rescan() {
     local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:4080/api/library/scan 2>/dev/null || true)
+    code=$(curl -s -m 3 -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:${AURABOX_PORT}/api/library/scan" 2>/dev/null || true)
     if [ "$code" != "200" ] && [ "$code" != "202" ]; then
-        curl -sk -o /dev/null -X POST https://127.0.0.1:4443/api/library/scan >/dev/null 2>&1 || true
+        code=$(curl -sk -m 3 -o /dev/null -w "%{http_code}" -X POST "https://127.0.0.1:${AURABOX_HTTPS_PORT}/api/library/scan" 2>/dev/null || true)
     fi
+    if [ "$code" != "200" ] && [ "$code" != "202" ]; then
+        curl -s -m 3 -o /dev/null -X POST "http://127.0.0.1/api/library/scan" >/dev/null 2>&1 || true
+    fi
+}
+
+# mount_readonly_usb monta la partición USB en el namespace global (vía systemd-mount si está disponible) en solo lectura.
+mount_readonly_usb() {
+    local dev="$1"
+    local target="$2"
+    if command -v systemd-mount >/dev/null 2>&1; then
+        if systemd-mount --collect -o iocharset=utf8,ro,nosuid,nodev,noexec "$dev" "$target" 2>/dev/null || \
+           systemd-mount --collect -o ro,nosuid,nodev,noexec "$dev" "$target" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    mount -o iocharset=utf8,ro,nosuid,nodev,noexec "$dev" "$target" 2>/dev/null || \
+    mount -o ro,nosuid,nodev,noexec "$dev" "$target" 2>/dev/null
 }
 
 case "$ACTION" in
@@ -83,8 +110,7 @@ case "$ACTION" in
         mkdir -p "$TARGET_DIR"
 
         # Montaje de solo lectura y sin ejecución/suid/dispositivos para proteger el host
-        if mount -o iocharset=utf8,ro,nosuid,nodev,noexec "$DEVNAME" "$TARGET_DIR" 2>/dev/null || \
-           mount -o ro,nosuid,nodev,noexec "$DEVNAME" "$TARGET_DIR" 2>/dev/null; then
+        if mount_readonly_usb "$DEVNAME" "$TARGET_DIR"; then
             echo "[AuraBox USB] Montado correctamente en $TARGET_DIR"
             trigger_rescan
         else

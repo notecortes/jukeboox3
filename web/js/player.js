@@ -14,6 +14,9 @@ let lastShownPlayerError = '';
 let wakeLockEnabled = (typeof localStorage !== 'undefined' && localStorage.getItem('aurabox_wake_lock') === 'true');
 let wakeLockSentinel = null;
 let lastSleepSyncAt = 0;
+let ambientModeEnabled = (typeof localStorage !== 'undefined' ? localStorage.getItem('aurabox_ambient_mode') !== 'false' : true);
+let ambientInactivityTimer = null;
+let swallowAmbientWakeClick = false;
 
 // isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo.
 export function isLiveStreamTrack(track) {
@@ -39,10 +42,11 @@ export function initPlayer() {
   bindNowPlayingControls();
   bindNowPlayingSleepControls();
   initWakeLock();
+  initAmbientScreen();
   setupMediaSession();
 
   // Escuchar cambios reactivos en el estado
-  subscribe((event) => {
+  subscribe((event, payload) => {
     if (event === 'player_updated') {
       lastSleepSyncAt = Date.now();
       const errMsg = (state.player.last_error || '').trim();
@@ -56,6 +60,12 @@ export function initPlayer() {
       renderNowPlaying();
       syncWakeLockWithPlayback();
       updateMediaSession();
+    } else if (event === 'now_playing_toggled') {
+      if (payload) {
+        resetAmbientTimer();
+      } else {
+        exitAmbientMode(false);
+      }
     }
   });
 
@@ -342,6 +352,109 @@ async function syncWakeLockWithPlayback() {
   }
 }
 
+// isLandscapeTabletViewport comprueba si el dispositivo está en formato tablet/escritorio horizontal.
+function isLandscapeTabletViewport() {
+  return window.matchMedia('(orientation: landscape) and (min-width: 700px)').matches;
+}
+
+// exitAmbientMode restaura los controles completos de Now Playing saliendo del modo marco musical.
+function exitAmbientMode(restartTimer = true) {
+  const modal = document.getElementById('nowPlayingModal');
+  if (modal && modal.classList.contains('ambient-mode')) {
+    modal.classList.remove('ambient-mode');
+  }
+  if (ambientInactivityTimer) {
+    clearTimeout(ambientInactivityTimer);
+    ambientInactivityTimer = null;
+  }
+  if (restartTimer && state.ui.isNowPlayingOpen) {
+    resetAmbientTimer();
+  }
+}
+
+// resetAmbientTimer reinicia la cuenta atrás de 60s de inactividad para entrar en modo marco musical horizontal.
+function resetAmbientTimer() {
+  if (ambientInactivityTimer) {
+    clearTimeout(ambientInactivityTimer);
+    ambientInactivityTimer = null;
+  }
+  if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isLandscapeTabletViewport()) {
+    return;
+  }
+  ambientInactivityTimer = setTimeout(() => {
+    ambientInactivityTimer = null;
+    if (!ambientModeEnabled || !state.ui.isNowPlayingOpen || !isLandscapeTabletViewport()) return;
+    const modal = document.getElementById('nowPlayingModal');
+    if (modal) {
+      modal.classList.add('ambient-mode');
+    }
+  }, 60000);
+}
+
+// initAmbientScreen gestiona el modo marco musical tras 60s sin interacción en tablets en horizontal.
+function initAmbientScreen() {
+  const checkbox = document.getElementById('settingAmbientMode');
+  if (checkbox) {
+    checkbox.checked = ambientModeEnabled;
+    checkbox.addEventListener('change', () => {
+      ambientModeEnabled = checkbox.checked;
+      localStorage.setItem('aurabox_ambient_mode', ambientModeEnabled ? 'true' : 'false');
+      if (!ambientModeEnabled) {
+        exitAmbientMode(false);
+        showToast('Modo Marco Musical desactivado');
+      } else {
+        resetAmbientTimer();
+        showToast('Modo Marco Musical activado (60s en horizontal)');
+      }
+    });
+  }
+
+  const modal = document.getElementById('nowPlayingModal');
+  if (!modal) return;
+
+  const handleActivity = (e) => {
+    if (!state.ui.isNowPlayingOpen) return;
+    if (modal.classList.contains('ambient-mode')) {
+      swallowAmbientWakeClick = true;
+      setTimeout(() => {
+        swallowAmbientWakeClick = false;
+      }, 400);
+      exitAmbientMode(true);
+      if (e.cancelable && e.type !== 'keydown') {
+        e.stopPropagation();
+      }
+      return;
+    }
+    resetAmbientTimer();
+  };
+
+  modal.addEventListener('pointerdown', handleActivity, { capture: true, passive: true });
+  modal.addEventListener('touchstart', handleActivity, { capture: true, passive: true });
+  modal.addEventListener('wheel', handleActivity, { capture: true, passive: true });
+  modal.addEventListener('click', (e) => {
+    if (swallowAmbientWakeClick) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, { capture: true });
+
+  window.addEventListener('keydown', () => {
+    if (state.ui.isNowPlayingOpen) {
+      exitAmbientMode(true);
+    }
+  });
+
+  const handleViewportChange = () => {
+    if (!isLandscapeTabletViewport() || !state.ui.isNowPlayingOpen) {
+      exitAmbientMode(false);
+    } else {
+      resetAmbientTimer();
+    }
+  };
+  window.addEventListener('resize', handleViewportChange);
+  window.addEventListener('orientationchange', handleViewportChange);
+}
+
 // renderSleepTimerUI actualiza el distintivo del temporizador en Now Playing y en Ajustes.
 export function renderSleepTimerUI() {
   const btnSleep = document.getElementById('npBtnSleep');
@@ -382,7 +495,16 @@ export function renderSleepTimerUI() {
   }
 }
 
-// syncSettingsAudioControls mantiene sincronizados Crossfade y ReplayGain en Ajustes entre dispositivos.
+// describeDSPPreset devuelve etiqueta y explicación acústica breve para cada perfil DSP soportado.
+const DSP_PRESET_DESCRIPTIONS = {
+  flat: 'Señal directa bit-perfect ALSA sin alterar muestras ni ecualización.',
+  night: 'Realce de graves y agudos a bajo volumen con compresión suave de picos.',
+  voice: 'Limpia subgraves y realza claridad vocal e instrumentos acústicos.',
+  livingroom: 'Escena cálida con presencia en sala para altavoces domésticos.',
+  bass: 'Refuerzo cálido en subgraves para cajas compactas o auriculares abiertos.'
+};
+
+// syncSettingsAudioControls mantiene sincronizados Crossfade, ReplayGain, Fade y perfiles DSP entre dispositivos.
 function syncSettingsAudioControls() {
   const cfSlider = document.getElementById('settingCrossfade');
   const cfLabel = document.getElementById('labelCrossfade');
@@ -398,6 +520,36 @@ function syncSettingsAudioControls() {
   document.querySelectorAll('#replayGainSelector .rg-opt').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.rg === rg);
   });
+
+  const softFadeChk = document.getElementById('settingSoftFade');
+  if (softFadeChk && typeof state.player.soft_fade === 'boolean') {
+    softFadeChk.checked = state.player.soft_fade;
+  }
+
+  const activeOut = state.player.active_output || 'Sin salida';
+  const presetMap = (state.player.dsp_presets && typeof state.player.dsp_presets === 'object')
+    ? state.player.dsp_presets
+    : {};
+  const preset = (presetMap[activeOut] || state.player.dsp_preset || 'flat').toLowerCase();
+
+  const dspOutLabel = document.getElementById('dspActiveOutputName');
+  if (dspOutLabel) {
+    dspOutLabel.textContent = activeOut;
+  }
+  const dspModeBadge = document.getElementById('dspModeBadge');
+  if (dspModeBadge) {
+    const isDSPEnabled = preset !== 'flat';
+    dspModeBadge.textContent = isDSPEnabled ? 'DSP SoX' : 'Bit-Perfect';
+    dspModeBadge.style.background = isDSPEnabled ? 'rgba(99, 102, 241, 0.2)' : '';
+    dspModeBadge.style.color = isDSPEnabled ? 'var(--accent-light)' : '';
+  }
+  document.querySelectorAll('#dspPresetSelector .dsp-opt').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.dsp === preset);
+  });
+  const dspDesc = document.getElementById('dspPresetDesc');
+  if (dspDesc) {
+    dspDesc.textContent = DSP_PRESET_DESCRIPTIONS[preset] || DSP_PRESET_DESCRIPTIONS.flat;
+  }
 }
 
 // optimisticTogglePlay ofrece retroalimentación visual inmediata (<100ms) antes de respuesta del servidor.

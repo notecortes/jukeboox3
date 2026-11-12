@@ -51,6 +51,8 @@ type LibraryScanner struct {
 	coverCopyMu    sync.Mutex
 	mu             sync.Mutex
 	onScanComplete func()
+	watcherMu      sync.Mutex
+	autoWatcher    *autoWatcher
 }
 
 // NewLibraryScanner inicializa el escáner de biblioteca musical.
@@ -278,9 +280,16 @@ func (ls *LibraryScanner) pruneMissingSourceTracks(sourceName string, seenPaths 
 	if ls.database == nil {
 		return 0
 	}
-	// En orígenes montables (nas, usb), no podar si no se detectó ningún archivo (recurso desmontado o apagado).
-	if sourceName != "local" && len(seenPaths) == 0 {
+	// En NAS no podar si no se detectó ningún archivo (recurso de red temporalmente desconectado o desmontado).
+	if sourceName == "nas" && len(seenPaths) == 0 {
 		return 0
+	}
+	// En USB, podar solo si el directorio /music/usb existe vacío tras desmontar la unidad extraíble.
+	if sourceName == "usb" && len(seenPaths) == 0 {
+		entries, err := os.ReadDir(ls.usbDir)
+		if err != nil || len(entries) > 0 {
+			return 0
+		}
 	}
 	refs, err := ls.database.GetTrackRefsBySource(sourceName)
 	if err != nil || len(refs) == 0 {

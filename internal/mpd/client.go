@@ -2,12 +2,15 @@ package mpd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,10 +50,13 @@ type PlayerState struct {
 	MaxVolumeLimit int          `json:"max_volume_limit"`
 	Repeat         bool         `json:"repeat"`
 	Random         bool         `json:"random"`
-	Crossfade      int          `json:"crossfade"`
-	ReplayGain     string       `json:"replay_gain"` // "off", "track", "album", "auto"
-	AudioOutputs   []OutputInfo `json:"audio_outputs"`
-	ActiveOutput   string       `json:"active_output"`
+	Crossfade      int               `json:"crossfade"`
+	ReplayGain     string            `json:"replay_gain"` // "off", "track", "album", "auto"
+	SoftFade       bool              `json:"soft_fade"`
+	DSPPreset      string            `json:"dsp_preset"`
+	DSPPresets     map[string]string `json:"dsp_presets,omitempty"`
+	AudioOutputs   []OutputInfo      `json:"audio_outputs"`
+	ActiveOutput   string            `json:"active_output"`
 	SleepTimerSec  int          `json:"sleep_timer_sec"`
 	SleepTimerMode string       `json:"sleep_timer_mode,omitempty"`
 	StreamTitle    string       `json:"stream_title,omitempty"`
@@ -93,8 +99,13 @@ type Client struct {
 	persistCh         chan func()
 	stopCh            chan struct{}
 	persistWg         sync.WaitGroup
-	closeOnce         sync.Once
-	closed            atomic.Bool
+	fadeWg            sync.WaitGroup
+	fadeEpoch          atomic.Int64
+	fadeActive         atomic.Bool
+	fadeDuration       time.Duration
+	dspBootSynced      atomic.Bool
+	closeOnce          sync.Once
+	closed             atomic.Bool
 }
 
 // NormalizeReplayGainMode valida y normaliza el modo ReplayGain contra los valores oficiales de MPD.
@@ -103,6 +114,17 @@ func NormalizeReplayGainMode(raw string) (string, bool) {
 	switch mode {
 	case "off", "track", "album", "auto":
 		return mode, true
+	default:
+		return "", false
+	}
+}
+
+// NormalizeDSPPreset valida y normaliza un perfil ecualizador/DSP contra la lista blanca soportada por SoX.
+func NormalizeDSPPreset(raw string) (string, bool) {
+	preset := strings.ToLower(strings.TrimSpace(raw))
+	switch preset {
+	case "flat", "night", "voice", "livingroom", "bass":
+		return preset, true
 	default:
 		return "", false
 	}
@@ -132,6 +154,7 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		persistCh:     make(chan func(), 256),
 		stopCh:        make(chan struct{}),
 		sleepTrackIdx: -1,
+		fadeDuration:  1100 * time.Millisecond,
 		state: PlayerState{
 			Status:         "stop",
 			CurrentIndex:   -1,
@@ -141,6 +164,9 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 			Random:         false,
 			Crossfade:      2,
 			ReplayGain:     "auto",
+			SoftFade:       true,
+			DSPPreset:      "flat",
+			DSPPresets:     make(map[string]string),
 			AudioOutputs:   make([]OutputInfo, 0),
 			ActiveOutput:   "Detectando audio...",
 		},
@@ -170,6 +196,29 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 				c.state.Crossfade = ClampCrossfade(cf)
 			}
 		}
+		if savedFade := database.GetSetting("soft_fade", ""); savedFade != "" {
+			c.state.SoftFade = (strings.ToLower(strings.TrimSpace(savedFade)) != "false")
+		}
+		if savedDSP := database.GetSetting("dsp_presets_json", ""); savedDSP != "" {
+			var loaded map[string]string
+			if err := json.Unmarshal([]byte(savedDSP), &loaded); err == nil {
+				for outName, presetRaw := range loaded {
+					cleanName := strings.TrimSpace(outName)
+					if cleanName == "" {
+						continue
+					}
+					if p, ok := NormalizeDSPPreset(presetRaw); ok && p != "flat" {
+						c.state.DSPPresets[cleanName] = p
+					}
+				}
+			}
+		}
+		if savedOut := strings.TrimSpace(database.GetSetting("active_audio_output_name", "")); savedOut != "" {
+			if p, ok := c.state.DSPPresets[savedOut]; ok {
+				c.state.DSPPreset = p
+			}
+		}
+		_ = c.writeDSPConfigFile()
 		c.persistWg.Add(1)
 		go c.persistWorker()
 	}
@@ -180,11 +229,13 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 	return c
 }
 
-// Close detiene los workers de segundo plano, vacía escrituras SQLite pendientes y cierra la conexión MPD.
+// Close detiene los workers de segundo plano, cancela rampas de volumen, vacía SQLite y cierra la conexión MPD.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
+		c.cancelFade()
 		close(c.stopCh)
+		c.fadeWg.Wait()
 		c.persistWg.Wait()
 
 		c.connMu.Lock()
@@ -403,6 +454,13 @@ func (c *Client) tryConnect() {
 			}
 		}
 	}
+
+	_ = c.writeDSPConfigFile()
+	if c.dspNeedsMPDReloadLockedCheck() && c.dspBootSynced.CompareAndSwap(false, true) {
+		_, _ = c.RefreshAudioOutputs()
+		return
+	}
+	c.dspBootSynced.Store(true)
 
 	statusLines, statusErr := c.sendRawCommand("status\n")
 	mpdPlaylistLen := -1
@@ -707,6 +765,11 @@ func (c *Client) syncOutputsFromMPD() {
 		c.mu.Lock()
 		c.state.AudioOutputs = outputs
 		c.state.ActiveOutput = activeName
+		if preset, ok := c.state.DSPPresets[activeName]; ok {
+			c.state.DSPPreset = preset
+		} else {
+			c.state.DSPPreset = "flat"
+		}
 		c.mu.Unlock()
 	}
 }
@@ -1154,8 +1217,9 @@ func (c *Client) syncStatusFromMPD() bool {
 	prevLastErr = c.state.LastError
 	currQLen := len(c.queue)
 	wasLiveStream := isLiveStream || (c.state.CurrentTrack != nil && isHTTPStreamTrack(c.state.CurrentTrack))
+	fadeRunning := c.fadeActive.Load()
 
-	if mpdState != "" && mpdState != c.state.Status {
+	if !fadeRunning && mpdState != "" && mpdState != c.state.Status {
 		c.state.Status = mpdState
 		stateChanged = true
 	}
@@ -1248,7 +1312,7 @@ func (c *Client) syncStatusFromMPD() bool {
 		}
 	}
 
-	if volume >= 0 {
+	if !fadeRunning && volume >= 0 {
 		if volume > c.state.MaxVolumeLimit {
 			clampVolTarget = c.state.MaxVolumeLimit
 			if c.state.Volume != clampVolTarget {
@@ -1485,6 +1549,15 @@ func (c *Client) GetState() PlayerState {
 	} else {
 		st.AudioOutputs = make([]OutputInfo, 0)
 	}
+	if len(c.state.DSPPresets) > 0 {
+		presetsCopy := make(map[string]string, len(c.state.DSPPresets))
+		for k, v := range c.state.DSPPresets {
+			presetsCopy[k] = v
+		}
+		st.DSPPresets = presetsCopy
+	} else {
+		st.DSPPresets = make(map[string]string)
+	}
 	return st
 }
 
@@ -1497,7 +1570,246 @@ func (c *Client) GetQueue() []db.Track {
 	return copied
 }
 
-// Play reanuda o arranca la reproducción en MPD preservando la posición si estaba en pausa.
+// cancelFade invalida cualquier rampa de volumen activa para que un nuevo control tenga prioridad inmediata.
+func (c *Client) cancelFade() int64 {
+	next := c.fadeEpoch.Add(1)
+	c.fadeActive.Store(false)
+	return next
+}
+
+// sleepFadeStep espera un paso de rampa permitiendo abortar al instante ante cierre o cancelación.
+func (c *Client) sleepFadeStep(d time.Duration, epoch int64) bool {
+	if d <= 0 {
+		return !c.closed.Load() && c.fadeEpoch.Load() == epoch
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-c.stopCh:
+		return false
+	case <-timer.C:
+		return !c.closed.Load() && c.fadeEpoch.Load() == epoch
+	}
+}
+
+// restoreTargetVolumeIfNeeded devuelve MPD al volumen objetivo si se interrumpió una rampa activa.
+func (c *Client) restoreTargetVolumeIfNeeded(wasFading bool) {
+	if !wasFading || !c.isConnected() || c.closed.Load() {
+		return
+	}
+	c.mu.RLock()
+	vol := c.state.Volume
+	maxVol := c.state.MaxVolumeLimit
+	c.mu.RUnlock()
+	if vol > maxVol {
+		vol = maxVol
+	}
+	if vol < 0 {
+		vol = 0
+	}
+	_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", vol))
+}
+
+// runFadeOutPause atenúa suavemente el volumen hasta 0 antes de enviar pause 1 y restaura el volumen objetivo en pausa.
+func (c *Client) runFadeOutPause(epoch int64, targetVol int) {
+	defer c.fadeWg.Done()
+	defer func() {
+		if c.fadeEpoch.Load() == epoch {
+			c.fadeActive.Store(false)
+		}
+	}()
+
+	const steps = 14
+	dur := c.fadeDuration
+	if dur <= 0 {
+		dur = 1100 * time.Millisecond
+	}
+	stepDur := dur / steps
+	if stepDur < 2*time.Millisecond {
+		stepDur = 2 * time.Millisecond
+	}
+
+	lastSent := -1
+	for i := 1; i <= steps; i++ {
+		if c.closed.Load() || !c.isConnected() || c.fadeEpoch.Load() != epoch {
+			return
+		}
+		rem := 1.0 - float64(i)/float64(steps)
+		vol := int(math.Round(float64(targetVol) * rem * rem))
+		if i == steps {
+			vol = 0
+		}
+		if vol != lastSent {
+			if _, err := c.sendRawCommand(fmt.Sprintf("setvol %d\n", vol)); err != nil {
+				return
+			}
+			c.markControlUpdate()
+			lastSent = vol
+		}
+		if i < steps && !c.sleepFadeStep(stepDur, epoch) {
+			return
+		}
+	}
+
+	if c.closed.Load() || !c.isConnected() || c.fadeEpoch.Load() != epoch {
+		return
+	}
+	_, _ = c.sendRawCommand("pause 1\n")
+	c.markControlUpdate()
+
+	c.mu.RLock()
+	restoreVol := c.state.Volume
+	maxVol := c.state.MaxVolumeLimit
+	c.mu.RUnlock()
+	if restoreVol > maxVol {
+		restoreVol = maxVol
+	}
+	if restoreVol < 0 {
+		restoreVol = 0
+	}
+	_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", restoreVol))
+	c.markControlUpdate()
+}
+
+// runFadeInPlay reanuda desde volumen 0 (o nivel transitorio actual) y sube progresivamente hasta el volumen objetivo.
+func (c *Client) runFadeInPlay(epoch int64, ver uint64, index, targetVol int) {
+	defer c.fadeWg.Done()
+	defer func() {
+		if c.fadeEpoch.Load() == epoch {
+			c.fadeActive.Store(false)
+		}
+	}()
+
+	if c.closed.Load() || !c.isConnected() || c.fadeEpoch.Load() != epoch {
+		return
+	}
+
+	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncingQueue.Load() || c.syncedVersion.Load() != ver {
+		_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", targetVol))
+		c.fadeActive.Store(false)
+		go c.retryPlayIndexAfterSync(ver, index)
+		return
+	}
+
+	statusLines, stErr := c.sendRawCommand("status\n")
+	if stErr != nil || c.fadeEpoch.Load() != epoch {
+		return
+	}
+	if parseMPDPlaylistLength(statusLines) == 0 {
+		c.mpdQueueSynced.Store(false)
+		_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", targetVol))
+		c.fadeActive.Store(false)
+		go c.retryPlayIndexAfterSync(ver, index)
+		return
+	}
+
+	mpdState := ""
+	mpdVol := -1
+	for _, ln := range statusLines {
+		if strings.HasPrefix(ln, "state: ") {
+			mpdState = strings.TrimSpace(strings.TrimPrefix(ln, "state: "))
+		} else if strings.HasPrefix(ln, "volume: ") {
+			if v, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ln, "volume: "))); err == nil {
+				mpdVol = v
+			}
+		}
+	}
+
+	startVol := 0
+	switch mpdState {
+	case "pause":
+		if _, err := c.sendRawCommand("setvol 0\n"); err != nil {
+			return
+		}
+		if _, err := c.sendRawCommand("pause 0\n"); err != nil {
+			_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", targetVol))
+			c.fadeActive.Store(false)
+			c.playIndexOrRetry(ver, index, false)
+			return
+		}
+		c.markControlUpdate()
+	case "play":
+		// Si se reanudó en medio de un fade-out, continuar suavemente desde el volumen instantáneo actual
+		if mpdVol >= 0 && mpdVol < targetVol {
+			startVol = mpdVol
+		}
+		_, _ = c.sendRawCommand("pause 0\n")
+		c.markControlUpdate()
+	default:
+		if _, err := c.sendRawCommand("setvol 0\n"); err != nil {
+			return
+		}
+		if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", index)); err != nil {
+			_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", targetVol))
+			c.fadeActive.Store(false)
+			if !c.isConnected() {
+				c.pendingMPDSync.Store(true)
+				c.triggerReconnect()
+			} else if isMPDAckError(err) {
+				go c.retryPlayIndexAfterSync(ver, index)
+			}
+			return
+		}
+		c.markControlUpdate()
+	}
+
+	const steps = 14
+	dur := c.fadeDuration
+	if dur <= 0 {
+		dur = 1100 * time.Millisecond
+	}
+	stepDur := dur / steps
+	if stepDur < 2*time.Millisecond {
+		stepDur = 2 * time.Millisecond
+	}
+
+	lastSent := startVol
+	span := float64(targetVol - startVol)
+	for i := 1; i <= steps; i++ {
+		if c.closed.Load() || !c.isConnected() || c.fadeEpoch.Load() != epoch {
+			return
+		}
+		frac := float64(i) / float64(steps)
+		vol := startVol + int(math.Round(span*math.Pow(frac, 1.35)))
+		if i == steps {
+			vol = targetVol
+		}
+		if vol != lastSent {
+			if _, err := c.sendRawCommand(fmt.Sprintf("setvol %d\n", vol)); err != nil {
+				return
+			}
+			c.markControlUpdate()
+			lastSent = vol
+		}
+		if i < steps && !c.sleepFadeStep(stepDur, epoch) {
+			return
+		}
+	}
+}
+
+// SetSoftFade activa o desactiva el desvanecimiento progresivo de volumen al pausar y reanudar.
+func (c *Client) SetSoftFade(enabled bool) {
+	c.mu.Lock()
+	c.state.SoftFade = enabled
+	c.mu.Unlock()
+
+	if !enabled {
+		wasFading := c.fadeActive.Load()
+		c.cancelFade()
+		c.restoreTargetVolumeIfNeeded(wasFading)
+	}
+
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	c.enqueuePersist(func() {
+		_ = c.database.SetSetting("soft_fade", val)
+	})
+	c.broadcastState()
+}
+
+// Play reanuda o arranca la reproducción en MPD con Fade In suave si estaba en pausa.
 func (c *Client) Play() {
 	c.mu.Lock()
 	if len(c.queue) == 0 {
@@ -1521,10 +1833,27 @@ func (c *Client) Play() {
 	}
 	idx := c.state.CurrentIndex
 	trackID := trackCopy.ID
+	softFade := c.state.SoftFade
+	targetVol := c.state.Volume
+	if targetVol > c.state.MaxVolumeLimit {
+		targetVol = c.state.MaxVolumeLimit
+	}
 	ver := c.queueVersion.Load()
 	c.markControlUpdate()
 	c.mu.Unlock()
 
+	wasFading := c.fadeActive.Load()
+	epoch := c.cancelFade()
+
+	if prevStatus == "pause" && softFade && targetVol > 5 && c.isConnected() {
+		c.fadeActive.Store(true)
+		c.broadcastState()
+		c.fadeWg.Add(1)
+		go c.runFadeInPlay(epoch, ver, idx, targetVol)
+		return
+	}
+
+	c.restoreTargetVolumeIfNeeded(wasFading)
 	c.playIndexOrRetry(ver, idx, prevStatus == "pause")
 
 	if prevStatus == "stop" && trackID > 0 {
@@ -1536,9 +1865,15 @@ func (c *Client) Play() {
 	c.broadcastState()
 }
 
-// Pause pausa la reproducción actual manteniendo el punto exacto de la pista.
+// Pause pausa la reproducción actual aplicando Fade Out suave cuando está activado.
 func (c *Client) Pause() {
 	c.mu.Lock()
+	wasPlaying := (c.state.Status == "play")
+	softFade := c.state.SoftFade
+	targetVol := c.state.Volume
+	if targetVol > c.state.MaxVolumeLimit {
+		targetVol = c.state.MaxVolumeLimit
+	}
 	c.state.Status = "pause"
 	c.state.LastError = ""
 	c.radioRetryCount = 0
@@ -1546,11 +1881,23 @@ func (c *Client) Pause() {
 	c.markControlUpdate()
 	c.mu.Unlock()
 
-	if c.isConnected() {
+	epoch := c.cancelFade()
+	if !c.isConnected() {
+		c.broadcastState()
+		return
+	}
+
+	if !wasPlaying || !softFade || targetVol <= 5 {
 		_, _ = c.sendRawCommand("pause 1\n")
 		c.markControlUpdate()
+		c.broadcastState()
+		return
 	}
+
+	c.fadeActive.Store(true)
 	c.broadcastState()
+	c.fadeWg.Add(1)
+	go c.runFadeOutPause(epoch, targetVol)
 }
 
 // Toggle conmuta entre reproducir y pausar con actualización optimista.
@@ -1591,6 +1938,10 @@ func (c *Client) PlayIndex(index int) {
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
+
+	wasFading := c.fadeActive.Load()
+	c.cancelFade()
+	c.restoreTargetVolumeIfNeeded(wasFading)
 
 	c.playIndexOrRetry(ver, index, false)
 
@@ -1746,6 +2097,10 @@ func (c *Client) Next() {
 	c.markControlUpdate()
 	c.mu.Unlock()
 
+	wasFading := c.fadeActive.Load()
+	c.cancelFade()
+	c.restoreTargetVolumeIfNeeded(wasFading)
+
 	c.playIndexOrRetry(ver, nextIdx, false)
 
 	if trackID > 0 {
@@ -1808,6 +2163,10 @@ func (c *Client) Prev() {
 	c.markControlUpdate()
 	c.mu.Unlock()
 
+	wasFading := c.fadeActive.Load()
+	c.cancelFade()
+	c.restoreTargetVolumeIfNeeded(wasFading)
+
 	c.playIndexOrRetry(ver, prevIdx, false)
 
 	if trackID > 0 {
@@ -1859,6 +2218,8 @@ func (c *Client) SetRepeat(enabled bool) {
 
 // SetVolume ajusta el volumen general respetando el límite máximo de protección acústica.
 func (c *Client) SetVolume(volume int) {
+	c.cancelFade()
+
 	c.mu.Lock()
 	if volume < 0 {
 		volume = 0
@@ -1910,6 +2271,9 @@ func (c *Client) SetMaxVolumeLimit(limit int) {
 	c.markControlUpdate()
 	c.mu.Unlock()
 
+	if volChanged {
+		c.cancelFade()
+	}
 	if volChanged && c.isConnected() {
 		_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", newVol))
 		c.markControlUpdate()
@@ -1933,6 +2297,10 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 		c.ClearQueue()
 		return
 	}
+
+	wasFading := c.fadeActive.Load()
+	c.cancelFade()
+	c.restoreTargetVolumeIfNeeded(wasFading)
 
 	c.mu.Lock()
 	ver := c.queueVersion.Add(1)
@@ -2067,6 +2435,12 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	}
 	c.markControlUpdate()
 	c.mu.Unlock()
+
+	if needPlay {
+		wasFading := c.fadeActive.Load()
+		c.cancelFade()
+		c.restoreTargetVolumeIfNeeded(wasFading)
+	}
 
 	c.broadcastQueue()
 	c.broadcastState()
@@ -2717,6 +3091,10 @@ func (c *Client) RemoveFromQueue(index int) {
 
 // ClearQueue vacía completamente la lista de reproducción.
 func (c *Client) ClearQueue() {
+	wasFading := c.fadeActive.Load()
+	c.cancelFade()
+	c.restoreTargetVolumeIfNeeded(wasFading)
+
 	c.mu.Lock()
 	ver := c.queueVersion.Add(1)
 	c.queue = make([]db.Track, 0)
@@ -2994,8 +3372,15 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 			c.state.AudioOutputs[i].Enabled = false
 		}
 	}
+	targetPreset := c.state.DSPPreset
 	if selectedPlugin != "httpd" {
 		c.state.ActiveOutput = selectedName
+		if p, ok := c.state.DSPPresets[selectedName]; ok {
+			targetPreset = p
+		} else {
+			targetPreset = "flat"
+		}
+		c.state.DSPPreset = targetPreset
 	}
 	c.mu.Unlock()
 
@@ -3005,6 +3390,11 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 			c.mu.Lock()
 			c.state.AudioOutputs = outsCopy
 			c.state.ActiveOutput = prevActive
+			if p, ok := c.state.DSPPresets[prevActive]; ok {
+				c.state.DSPPreset = p
+			} else {
+				c.state.DSPPreset = "flat"
+			}
 			c.mu.Unlock()
 			c.syncOutputsFromMPD()
 			c.broadcastState()
@@ -3023,14 +3413,218 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 	outIDStr := strconv.Itoa(outputID)
 	outName := selectedName
 	outPlugin := selectedPlugin
-	c.enqueuePersist(func() {
+	if c.database != nil {
 		_ = c.database.SetSetting("active_audio_output", outIDStr)
 		if outPlugin != "httpd" {
 			_ = c.database.SetSetting("active_audio_output_name", outName)
 		}
-	})
+	}
+	_ = c.writeDSPConfigFile()
+
+	wantPipe := (targetPreset != "flat")
+	if c.isConnected() && ((wantPipe && selectedPlugin == "alsa") || (!wantPipe && selectedPlugin == "pipe")) {
+		_, _ = c.RefreshAudioOutputs()
+		return nil
+	}
+
 	c.broadcastState()
 	return nil
+}
+
+// sanitizeDSPConfigToken elimina caracteres de control y comillas para escribir /run/mpd/dsp_config con seguridad.
+func sanitizeDSPConfigToken(s string) string {
+	s = strings.NewReplacer("\r", "", "\n", "", "\t", " ", "\"", "", "\\", "").Replace(s)
+	return strings.TrimSpace(s)
+}
+
+// dspConfigPath devuelve la ruta del fichero compartido de perfiles DSP junto al socket Unix de MPD.
+func (c *Client) dspConfigPath() string {
+	if strings.TrimSpace(c.socketPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(c.socketPath), "dsp_config")
+}
+
+// writeDSPConfigFile escribe atómicamente la salida activa y los perfiles DSP asignados para entrypoint.sh de MPD.
+func (c *Client) writeDSPConfigFile() error {
+	cfgPath := c.dspConfigPath()
+	if cfgPath == "" {
+		return nil
+	}
+	dir := filepath.Dir(cfgPath)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil
+	}
+
+	c.mu.RLock()
+	active := sanitizeDSPConfigToken(c.state.ActiveOutput)
+	if active == "" || active == "Detectando audio..." {
+		active = ""
+	}
+	names := make([]string, 0, len(c.state.DSPPresets))
+	presetsCopy := make(map[string]string, len(c.state.DSPPresets))
+	for k, v := range c.state.DSPPresets {
+		cleanName := sanitizeDSPConfigToken(k)
+		if cleanName == "" {
+			continue
+		}
+		if norm, ok := NormalizeDSPPreset(v); ok && norm != "flat" {
+			presetsCopy[cleanName] = norm
+			names = append(names, cleanName)
+		}
+	}
+	c.mu.RUnlock()
+
+	if active == "" && c.database != nil {
+		active = sanitizeDSPConfigToken(c.database.GetSetting("active_audio_output_name", ""))
+	}
+
+	sort.Strings(names)
+	var b strings.Builder
+	if active != "" {
+		b.WriteString("ACTIVE=")
+		b.WriteString(active)
+		b.WriteByte('\n')
+	}
+	for _, n := range names {
+		b.WriteString("DSP\t")
+		b.WriteString(n)
+		b.WriteByte('\t')
+		b.WriteString(presetsCopy[n])
+		b.WriteByte('\n')
+	}
+
+	tmpFile, err := os.CreateTemp(dir, ".dsp_config.*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.WriteString(b.String()); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Chmod(0644); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, cfgPath)
+}
+
+// dspNeedsMPDReloadLockedCheck verifica si la salida habilitada actual en MPD difiere de su modo DSP configurado.
+func (c *Client) dspNeedsMPDReloadLockedCheck() bool {
+	if c.dspConfigPath() == "" {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, o := range c.state.AudioOutputs {
+		if !o.Enabled || o.Plugin == "httpd" || o.Plugin == "null" || o.Plugin == "pulse" {
+			continue
+		}
+		preset := c.state.DSPPresets[o.Name]
+		if preset == "" {
+			preset = "flat"
+		}
+		if preset != "flat" && o.Plugin == "alsa" {
+			return true
+		}
+		if preset == "flat" && o.Plugin == "pipe" {
+			return true
+		}
+	}
+	return false
+}
+
+// SetOutputDSPPreset guarda el perfil DSP de una salida de audio y recarga MPD si cambia el modo ALSA/SoX activo.
+func (c *Client) SetOutputDSPPreset(outputName, preset string) (PlayerState, error) {
+	normPreset, ok := NormalizeDSPPreset(preset)
+	if !ok {
+		return c.GetState(), fmt.Errorf("perfil DSP inválido (permitidos: flat, night, voice, livingroom, bass)")
+	}
+
+	c.mu.Lock()
+	target := strings.TrimSpace(outputName)
+	if target == "" {
+		target = strings.TrimSpace(c.state.ActiveOutput)
+	}
+	if target == "" || target == "Detectando audio..." {
+		c.mu.Unlock()
+		return c.GetState(), fmt.Errorf("no hay salida de audio seleccionada")
+	}
+
+	foundPlugin := ""
+	for _, o := range c.state.AudioOutputs {
+		if o.Name == target {
+			foundPlugin = o.Plugin
+			break
+		}
+	}
+	if foundPlugin == "" {
+		for _, o := range c.state.AudioOutputs {
+			if strings.EqualFold(o.Name, target) {
+				target = o.Name
+				foundPlugin = o.Plugin
+				break
+			}
+		}
+	}
+
+	switch foundPlugin {
+	case "httpd":
+		c.mu.Unlock()
+		return c.GetState(), fmt.Errorf("el stream HTTP no utiliza perfiles DSP locales")
+	case "null":
+		c.mu.Unlock()
+		return c.GetState(), fmt.Errorf("la salida virtual no admite perfiles DSP")
+	case "pulse":
+		c.mu.Unlock()
+		return c.GetState(), fmt.Errorf("las salidas PulseAudio del sistema no admiten DSP ALSA SoX")
+	}
+
+	prevPreset, hasPrev := c.state.DSPPresets[target]
+	if !hasPrev || prevPreset == "" {
+		prevPreset = "flat"
+	}
+
+	if normPreset == "flat" {
+		delete(c.state.DSPPresets, target)
+	} else {
+		c.state.DSPPresets[target] = normPreset
+	}
+
+	isActive := (target == c.state.ActiveOutput)
+	if isActive {
+		c.state.DSPPreset = normPreset
+	}
+
+	presetsSnapshot := make(map[string]string, len(c.state.DSPPresets))
+	for k, v := range c.state.DSPPresets {
+		presetsSnapshot[k] = v
+	}
+	c.mu.Unlock()
+
+	if c.database != nil {
+		if raw, err := json.Marshal(presetsSnapshot); err == nil {
+			_ = c.database.SetSetting("dsp_presets_json", string(raw))
+		}
+	}
+	_ = c.writeDSPConfigFile()
+
+	needsReload := isActive && prevPreset != normPreset && (foundPlugin == "alsa" || foundPlugin == "pipe")
+	if needsReload && c.isConnected() {
+		if _, err := c.RefreshAudioOutputs(); err == nil {
+			return c.GetState(), nil
+		}
+	}
+
+	c.broadcastState()
+	return c.GetState(), nil
 }
 
 // isDACOutputName identifica si el nombre de una salida corresponde a un DAC USB o tarjeta I2S HAT externa.
@@ -3053,7 +3647,7 @@ func (c *Client) GetAudioDiagnostics() AudioDiagnostics {
 	hasDAC := false
 	hasHW := false
 	for _, o := range st.AudioOutputs {
-		if o.Plugin == "alsa" || o.Plugin == "pulse" {
+		if o.Plugin == "alsa" || o.Plugin == "pulse" || o.Plugin == "pipe" {
 			hasHW = true
 		}
 		if isDACOutputName(o.Name) {
@@ -3080,6 +3674,9 @@ func (c *Client) GetAudioDiagnostics() AudioDiagnostics {
 
 // RefreshAudioOutputs solicita a MPD regenerar las tarjetas ALSA detectadas, reconecta y sincroniza la cola si es necesario.
 func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
+	_, _, wasPlayingBeforeReload, _ := c.snapshotQueueState()
+	_ = c.writeDSPConfigFile()
+
 	if c.socketPath != "" {
 		dir := filepath.Dir(c.socketPath)
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
@@ -3128,13 +3725,31 @@ func (c *Client) RefreshAudioOutputs() (AudioDiagnostics, error) {
 
 	c.syncOutputsFromMPD()
 
-	// Comprobar si MPD perdió la cola durante el reinicio rápido y restaurarla desde memoria
+	// Comprobar si MPD perdió la cola durante el reinicio rápido o quedó detenido y restaurar reproducción
 	if lines, err := c.sendRawCommand("status\n"); err == nil {
 		mpdPlaylistLen := parseMPDPlaylistLength(lines)
-		qCopy, currIdx, wasPlaying, ver := c.snapshotQueueState()
+		mpdState := ""
+		for _, ln := range lines {
+			if strings.HasPrefix(ln, "state: ") {
+				mpdState = strings.TrimSpace(strings.TrimPrefix(ln, "state: "))
+				break
+			}
+		}
+		qCopy, currIdx, wantPlaying, ver := c.snapshotQueueState()
+		shouldPlay := wantPlaying || wasPlayingBeforeReload
 		if len(qCopy) > 0 && (mpdPlaylistLen == 0 || !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || (mpdPlaylistLen >= 0 && mpdPlaylistLen != len(qCopy))) {
 			c.mpdQueueSynced.Store(false)
-			go c.pushQueueToMPD(ver, qCopy, currIdx, wasPlaying)
+			go c.pushQueueToMPD(ver, qCopy, currIdx, shouldPlay)
+		} else if shouldPlay && mpdPlaylistLen > 0 && mpdState != "play" {
+			if currIdx < 0 || currIdx >= len(qCopy) {
+				currIdx = 0
+			}
+			if _, playErr := c.sendRawCommand(fmt.Sprintf("play %d\n", currIdx)); playErr == nil {
+				c.mu.Lock()
+				c.state.Status = "play"
+				c.mu.Unlock()
+				c.markControlUpdate()
+			}
 		}
 	}
 

@@ -40,6 +40,7 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 	}
 
 	// Sembrar también una pista NAS en SQLite mientras nasDir está vacío (simulando NAS temporalmente desmontado)
+	// y una pista USB mientras usbDir está vacío (simulando pendrive desconectado).
 	if err := database.UpsertTrack(&db.Track{
 		Path:     filepath.Join(nasDir, "Artist", "Unmounted.flac"),
 		Filename: "Unmounted.flac",
@@ -51,6 +52,18 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 		Source:   "nas",
 	}); err != nil {
 		t.Fatalf("UpsertTrack NAS falló: %v", err)
+	}
+	if err := database.UpsertTrack(&db.Track{
+		Path:     filepath.Join(usbDir, "PENDRIVE", "Unplugged.mp3"),
+		Filename: "Unplugged.mp3",
+		Title:    "Unplugged",
+		Artist:   "USB Band",
+		Album:    "USB Album",
+		Duration: 150.0,
+		Format:   "MP3",
+		Source:   "usb",
+	}); err != nil {
+		t.Fatalf("UpsertTrack USB falló: %v", err)
 	}
 
 	sc := NewLibraryScanner(database, nil, localDir, nasDir, usbDir, coversDir)
@@ -83,6 +96,7 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 	foundKeep := false
 	foundDrop := false
 	foundNAS := false
+	foundUSB := false
 	for _, tr := range all {
 		switch tr.Path {
 		case keepFile:
@@ -93,6 +107,9 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 			if tr.Source == "nas" {
 				foundNAS = true
 			}
+			if tr.Source == "usb" {
+				foundUSB = true
+			}
 		}
 	}
 	if !foundKeep || foundDrop {
@@ -100,6 +117,9 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 	}
 	if !foundNAS {
 		t.Fatalf("la pista NAS no debe borrarse cuando /music/nas está vacío/desmontado")
+	}
+	if foundUSB {
+		t.Fatalf("la pista USB sí debía podarse cuando /music/usb está vacío tras desconectar pendrive")
 	}
 }
 

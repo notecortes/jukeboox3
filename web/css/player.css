@@ -704,6 +704,82 @@
   }
 }
 
+.np-ambient-lyric {
+  display: none;
+  font-size: 1.08rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 0 18px var(--accent-glow);
+  line-height: 1.45;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.np-ambient-lyric.hidden {
+  display: none !important;
+}
+
+@media (orientation: landscape) and (min-width: 700px) {
+  .now-playing-modal.ambient-mode .np-grabber,
+  .now-playing-modal.ambient-mode .np-header,
+  .now-playing-modal.ambient-mode .np-meta-actions,
+  .now-playing-modal.ambient-mode .np-controls-row,
+  .now-playing-modal.ambient-mode .np-volume-section {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  .now-playing-modal.ambient-mode .np-grabber,
+  .now-playing-modal.ambient-mode .np-header,
+  .now-playing-modal.ambient-mode .np-meta-actions,
+  .now-playing-modal.ambient-mode .np-controls-row,
+  .now-playing-modal.ambient-mode .np-volume-section,
+  .now-playing-modal.ambient-mode .np-artwork-container,
+  .now-playing-modal.ambient-mode .np-track-title {
+    transition: opacity 0.55s ease, transform 0.55s ease, width 0.55s ease;
+  }
+
+  .now-playing-modal.ambient-mode .np-artwork-container {
+    display: block !important;
+    width: min(100%, 500px, max(200px, calc(100dvh - 80px)));
+  }
+
+  .now-playing-modal.ambient-mode .np-lyrics-container.active {
+    display: none !important;
+  }
+
+  .now-playing-modal.ambient-mode .np-track-title {
+    font-size: clamp(1.5rem, 2.6vw, 2.05rem);
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .now-playing-modal.ambient-mode .timeline-scrubber {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .now-playing-modal.ambient-mode .timeline-scrubber::-webkit-slider-thumb {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .now-playing-modal.ambient-mode .np-ambient-lyric:not(.hidden) {
+    display: -webkit-box;
+    grid-column: 2;
+    grid-row: 5 / 7;
+    align-self: start;
+    opacity: 1;
+  }
+}
+
 /* Ajuste compacto adicional en móviles o pantallas muy bajas en horizontal */
 @media (orientation: landscape) and (max-height: 500px) {
   .np-content {

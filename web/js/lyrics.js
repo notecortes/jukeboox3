@@ -49,6 +49,7 @@ async function checkAndFetchLyrics() {
   state.lyrics.plain = '';
   state.lyrics.found = false;
   state.lyrics.activeIndex = -1;
+  updateAmbientLyricDisplay('');
 
   const container = document.getElementById('npLyricsContainer');
   if (!container) return;
@@ -130,14 +131,31 @@ function renderLyricsLines() {
   });
 }
 
+// updateAmbientLyricDisplay actualiza la línea actual mostrada en el modo marco musical horizontal.
+function updateAmbientLyricDisplay(text) {
+  const el = document.getElementById('npAmbientLyric');
+  if (!el) return;
+  const clean = (text || '').trim();
+  if (!clean || clean === '♪') {
+    el.textContent = '';
+    el.classList.add('hidden');
+  } else {
+    el.textContent = clean;
+    el.classList.remove('hidden');
+  }
+}
+
 // syncActiveLyricLine detecta la línea correspondiente al segundo actual y realiza auto-scroll suave.
 function syncActiveLyricLine() {
-  if (!state.lyrics.found || state.lyrics.synced.length === 0) return;
+  if (!state.lyrics.found || state.lyrics.synced.length === 0) {
+    updateAmbientLyricDisplay('');
+    return;
+  }
   if (state.player.status !== 'play') return;
 
-  // Optimización de recursos: no procesar scroll si la vista de letras está oculta
   const container = document.getElementById('npLyricsContainer');
-  if (!container || !container.classList.contains('active')) return;
+  const lyricsOpen = Boolean(container && container.classList.contains('active'));
+  if (!lyricsOpen && !state.ui.isNowPlayingOpen) return;
 
   const currentTime = state.player.elapsed_time || 0;
   const lines = state.lyrics.synced;
@@ -159,11 +177,17 @@ function syncActiveLyricLine() {
     }
 
     state.lyrics.activeIndex = activeIdx;
-    const currentEl = document.getElementById(`lyric-line-${activeIdx}`);
-    if (currentEl) {
-      currentEl.classList.add('active');
-      // Auto-scroll centrado en la vista
-      currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const activeItem = lines[activeIdx];
+    const activeText = activeItem?.text ?? activeItem?.Text ?? '';
+    updateAmbientLyricDisplay(activeText);
+
+    if (lyricsOpen) {
+      const currentEl = document.getElementById(`lyric-line-${activeIdx}`);
+      if (currentEl) {
+        currentEl.classList.add('active');
+        // Auto-scroll centrado en la vista
+        currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     }
   }
 }

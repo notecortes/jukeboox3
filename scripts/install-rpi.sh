@@ -71,10 +71,13 @@ echo "[5/6] Configurando regla udev para pendrives USB..."
 if [ -f "scripts/automount-usb.sh" ]; then
     sudo cp scripts/automount-usb.sh /usr/local/bin/aurabox-usb
     sudo chmod +x /usr/local/bin/aurabox-usb
+    USB_MOUNT_DIR="$(pwd)/music/usb"
+    mkdir -p "$USB_MOUNT_DIR"
+    printf 'MOUNT_BASE=%s\n' "$USB_MOUNT_DIR" | sudo tee /etc/default/aurabox-usb > /dev/null
     
     cat << 'EOF' | sudo tee /etc/udev/rules.d/99-aurabox-usb.rules > /dev/null
-ACTION=="add", SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", RUN+="/usr/local/bin/aurabox-usb add /dev/%k"
-ACTION=="remove", SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]", RUN+="/usr/local/bin/aurabox-usb remove /dev/%k"
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN+="/usr/local/bin/aurabox-usb add /dev/%k"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN+="/usr/local/bin/aurabox-usb remove /dev/%k"
 EOF
     sudo udevadm control --reload-rules || true
 fi

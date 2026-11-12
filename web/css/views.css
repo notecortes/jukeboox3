@@ -1138,4 +1138,125 @@
   transform: scale(1.08);
 }
 
+/* Explorador de Géneros y Décadas en Biblioteca */
+.genres-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.genre-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), transform var(--transition-fast), background var(--transition-fast);
+  min-width: 0;
+}
+
+.genre-card:active {
+  transform: scale(0.98);
+}
+
+.genre-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-surface-elevated);
+}
+
+.genre-card-cover {
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--bg-surface-elevated);
+}
+
+.genre-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.genre-card-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.genre-card-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.genre-card-mix-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: var(--accent-light);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.genre-card-mix-btn:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+/* Perfiles DSP / Ecualizador por salida en Ajustes */
+.dsp-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.dsp-opt {
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.dsp-opt:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.dsp-opt.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.dsp-opt:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+
 

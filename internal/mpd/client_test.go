@@ -551,9 +551,11 @@ type mockMPDBackend struct {
 	playlist    []string
 	state       string
 	song        int
+	volume      int
 	errMsg      string
 	addDelay    time.Duration
 	failAddPath string
+	outputs     []OutputInfo
 	cmds        []string
 }
 
@@ -568,8 +570,9 @@ func startStatefulMockMPDServer(t *testing.T, sockPath string) *mockMPDBackend {
 	t.Cleanup(func() { _ = ln.Close() })
 
 	srv := &mockMPDBackend{
-		state: "stop",
-		song:  -1,
+		state:  "stop",
+		song:   -1,
+		volume: 65,
 	}
 
 	unquote := func(s string) string {
@@ -606,11 +609,49 @@ func startStatefulMockMPDServer(t *testing.T, sockPath string) *mockMPDBackend {
 
 					switch {
 					case trimmed == "outputs":
-						_, _ = c.Write([]byte("outputid: 0\noutputname: DAC USB Test\nplugin: alsa\noutputenabled: 1\nOK\n"))
+						srv.mu.Lock()
+						outs := append([]OutputInfo(nil), srv.outputs...)
+						srv.mu.Unlock()
+						if len(outs) == 0 {
+							_, _ = c.Write([]byte("outputid: 0\noutputname: DAC USB Test\nplugin: alsa\noutputenabled: 1\nOK\n"))
+						} else {
+							var sb strings.Builder
+							for _, o := range outs {
+								en := 0
+								if o.Enabled {
+									en = 1
+								}
+								sb.WriteString(fmt.Sprintf("outputid: %d\noutputname: %s\nplugin: %s\noutputenabled: %d\n", o.ID, o.Name, o.Plugin, en))
+							}
+							sb.WriteString("OK\n")
+							_, _ = c.Write([]byte(sb.String()))
+						}
+					case strings.HasPrefix(trimmed, "enableoutput "):
+						if id, convErr := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "enableoutput "))); convErr == nil {
+							srv.mu.Lock()
+							for i := range srv.outputs {
+								if srv.outputs[i].ID == id {
+									srv.outputs[i].Enabled = true
+								}
+							}
+							srv.mu.Unlock()
+						}
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "disableoutput "):
+						if id, convErr := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "disableoutput "))); convErr == nil {
+							srv.mu.Lock()
+							for i := range srv.outputs {
+								if srv.outputs[i].ID == id {
+									srv.outputs[i].Enabled = false
+								}
+							}
+							srv.mu.Unlock()
+						}
+						_, _ = c.Write([]byte("OK\n"))
 					case trimmed == "status":
 						srv.mu.Lock()
 						var sb strings.Builder
-						sb.WriteString(fmt.Sprintf("volume: 65\nrepeat: 0\nstate: %s\nplaylistlength: %d\n", srv.state, len(srv.playlist)))
+						sb.WriteString(fmt.Sprintf("volume: %d\nrepeat: 0\nstate: %s\nplaylistlength: %d\n", srv.volume, srv.state, len(srv.playlist)))
 						if srv.song >= 0 && srv.song < len(srv.playlist) {
 							sb.WriteString(fmt.Sprintf("song: %d\nelapsed: 5.0\nduration: 200.0\n", srv.song))
 						}
@@ -740,6 +781,14 @@ func startStatefulMockMPDServer(t *testing.T, sockPath string) *mockMPDBackend {
 						srv.mu.Lock()
 						srv.errMsg = ""
 						srv.mu.Unlock()
+						_, _ = c.Write([]byte("OK\n"))
+					case strings.HasPrefix(trimmed, "setvol "):
+						volNum, convErr := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(trimmed, "setvol ")))
+						if convErr == nil {
+							srv.mu.Lock()
+							srv.volume = volNum
+							srv.mu.Unlock()
+						}
 						_, _ = c.Write([]byte("OK\n"))
 					default:
 						_, _ = c.Write([]byte("OK\n"))
@@ -1200,5 +1249,264 @@ func TestSleepAfterTrackPausesOnTrackAdvance(t *testing.T) {
 		t.Fatalf("tras cambiar de pista debía pausar y limpiar sleep timer: status=%q mode=%q idx=%d", st.Status, st.SleepTimerMode, st.CurrentIndex)
 	}
 }
+
+// TestSoftFadePauseResumeAndInterruption verifica Fade Out al pausar, restauración de volumen objetivo, Fade In al reanudar y cancelación segura.
+func TestSoftFadePauseResumeAndInterruption(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "softfade_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	database, err := db.InitDB(filepath.Join(tmpDir, "fade.db"))
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, database)
+	c.fadeDuration = 70 * time.Millisecond // Rampa ágil para prueba determinista
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	c.SetVolume(72)
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/local/01.flac", Title: "Fade Track", Artist: "Tester", Duration: 180},
+	}
+	c.ReplaceQueue(tracks, true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.mpdQueueSynced.Load() && c.syncedVersion.Load() == c.queueVersion.Load() {
+			srv.mu.Lock()
+			st := srv.state
+			srv.mu.Unlock()
+			if st == "play" {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Limpiar histórico de comandos antes de probar Pause()
+	srv.mu.Lock()
+	srv.cmds = nil
+	srv.mu.Unlock()
+
+	c.Pause()
+	if st := c.GetState(); st.Status != "pause" || st.Volume != 72 {
+		t.Fatalf("estado optimista tras Pause inesperado: status=%q vol=%d", st.Status, st.Volume)
+	}
+
+	// Esperar a que termine la rampa de fade-out
+	c.fadeWg.Wait()
+
+	srv.mu.Lock()
+	pauseCmds := append([]string(nil), srv.cmds...)
+	finalVol := srv.volume
+	finalState := srv.state
+	srv.cmds = nil
+	srv.mu.Unlock()
+
+	if finalState != "pause" || finalVol != 72 {
+		t.Fatalf("tras completar fade-out MPD debe quedar pausado y con volumen restaurado a 72: state=%q vol=%d", finalState, finalVol)
+	}
+
+	pauseIdx := -1
+	setvolZeroBeforePause := false
+	for idx, cmd := range pauseCmds {
+		if cmd == "pause 1" {
+			pauseIdx = idx
+			break
+		}
+		if cmd == "setvol 0" {
+			setvolZeroBeforePause = true
+		}
+	}
+	if pauseIdx <= 1 || !setvolZeroBeforePause {
+		t.Fatalf("se esperaba rampa gradual hasta setvol 0 antes de pause 1; comandos=%v", pauseCmds)
+	}
+
+	// Probar Fade In al reanudar desde pausa
+	c.Play()
+	c.fadeWg.Wait()
+
+	srv.mu.Lock()
+	playCmds := append([]string(nil), srv.cmds...)
+	resumedVol := srv.volume
+	resumedState := srv.state
+	srv.cmds = nil
+	srv.mu.Unlock()
+
+	if resumedState != "play" || resumedVol != 72 {
+		t.Fatalf("tras fade-in debía quedar reproduciendo a volumen 72: state=%q vol=%d", resumedState, resumedVol)
+	}
+	if len(playCmds) < 5 || !strings.Contains(strings.Join(playCmds, "\n"), "setvol 0\npause 0") {
+		t.Fatalf("se esperaba setvol 0 seguido de pause 0 y subida gradual; comandos=%v", playCmds)
+	}
+
+	// Probar cancelación instantánea si el usuario ajusta volumen manualmente durante fade-out
+	c.fadeDuration = 400 * time.Millisecond
+	c.Pause()
+	time.Sleep(40 * time.Millisecond)
+	c.SetVolume(55)
+	c.fadeWg.Wait()
+
+	srv.mu.Lock()
+	postCancelVol := srv.volume
+	postCancelState := srv.state
+	srv.mu.Unlock()
+	if postCancelVol != 55 || postCancelState != "play" {
+		t.Fatalf("SetVolume durante fade-out debía cancelar la pausa y fijar volumen 55: vol=%d state=%q", postCancelVol, postCancelState)
+	}
+
+	// Desactivar SoftFade debe pausar instantáneamente sin enviar setvol 0
+	c.SetSoftFade(false)
+	srv.mu.Lock()
+	srv.cmds = nil
+	srv.mu.Unlock()
+	c.Pause()
+	srv.mu.Lock()
+	noFadeCmds := strings.Join(srv.cmds, "\n")
+	srv.mu.Unlock()
+	if strings.Contains(noFadeCmds, "setvol 0") || !strings.Contains(noFadeCmds, "pause 1") {
+		t.Fatalf("con SoftFade=false debía pausar al instante sin atenuar volumen: %s", noFadeCmds)
+	}
+}
+
+// TestOutputDSPPresetPersistenceAndSwitch verifica validación, persistencia por salida, generación de dsp_config y conmutación ALSA/pipe.
+func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
+	if _, ok := NormalizeDSPPreset("night"); !ok {
+		t.Fatalf("NormalizeDSPPreset debía aceptar 'night'")
+	}
+	if _, ok := NormalizeDSPPreset("evil;rm -rf /"); ok {
+		t.Fatalf("NormalizeDSPPreset debía rechazar valores fuera de lista blanca")
+	}
+
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "dsp_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+	srv.mu.Lock()
+	srv.outputs = []OutputInfo{
+		{ID: 0, Name: "DAC USB (Topping)", Plugin: "alsa", Enabled: true},
+		{ID: 1, Name: "Jack 3.5mm (bcm2835)", Plugin: "alsa", Enabled: false},
+		{ID: 2, Name: "Transmisión Web HTTP (Hi-Fi Stream)", Plugin: "httpd", Enabled: true},
+	}
+	srv.mu.Unlock()
+
+	database, err := db.InitDB(filepath.Join(tmpDir, "dsp.db"))
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	// Simular entrypoint.sh observando reload_outputs y actualizando plugins ALSA/pipe según dsp_config
+	reloadStop := make(chan struct{})
+	defer close(reloadStop)
+	go func() {
+		reloadPath := filepath.Join(tmpDir, "reload_outputs")
+		cfgPath := filepath.Join(tmpDir, "dsp_config")
+		ticker := time.NewTicker(15 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-reloadStop:
+				return
+			case <-ticker.C:
+				if _, statErr := os.Stat(reloadPath); statErr == nil {
+					presets := map[string]string{}
+					activeName := ""
+					if raw, rErr := os.ReadFile(cfgPath); rErr == nil {
+						for _, ln := range strings.Split(string(raw), "\n") {
+							if strings.HasPrefix(ln, "ACTIVE=") {
+								activeName = strings.TrimPrefix(ln, "ACTIVE=")
+							} else if strings.HasPrefix(ln, "DSP\t") {
+								parts := strings.SplitN(ln, "\t", 3)
+								if len(parts) == 3 {
+									presets[parts[1]] = parts[2]
+								}
+							}
+						}
+					}
+					srv.mu.Lock()
+					for i := range srv.outputs {
+						if srv.outputs[i].Plugin == "httpd" {
+							continue
+						}
+						if p := presets[srv.outputs[i].Name]; p != "" && p != "flat" {
+							srv.outputs[i].Plugin = "pipe"
+						} else {
+							srv.outputs[i].Plugin = "alsa"
+						}
+						if activeName != "" {
+							srv.outputs[i].Enabled = (srv.outputs[i].Name == activeName)
+						}
+					}
+					srv.mu.Unlock()
+					_ = os.Remove(reloadPath)
+				}
+			}
+		}
+	}()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, database)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	// Preset inválido o salida HTTP deben devolver error controlado
+	if _, err := c.SetOutputDSPPreset("DAC USB (Topping)", "invalid"); err == nil {
+		t.Fatalf("se esperaba error al pasar preset DSP inválido")
+	}
+	if _, err := c.SetOutputDSPPreset("Transmisión Web HTTP (Hi-Fi Stream)", "night"); err == nil {
+		t.Fatalf("se esperaba error al asignar DSP ALSA al stream HTTP")
+	}
+
+	// Asignar 'night' al DAC USB activo -> debe generar dsp_config y recargar salida a plugin "pipe"
+	st, err := c.SetOutputDSPPreset("DAC USB (Topping)", "night")
+	if err != nil {
+		t.Fatalf("SetOutputDSPPreset('night') falló: %v", err)
+	}
+	if st.DSPPreset != "night" || st.DSPPresets["DAC USB (Topping)"] != "night" {
+		t.Fatalf("estado DSP tras asignar 'night' inesperado: %+v", st)
+	}
+	diag := c.GetAudioDiagnostics()
+	if !diag.HasHardware || diag.Outputs[0].Plugin != "pipe" {
+		t.Fatalf("se esperaba DAC USB recargado con plugin 'pipe' y HasHardware=true: %+v", diag)
+	}
+
+	cfgBytes, err := os.ReadFile(filepath.Join(tmpDir, "dsp_config"))
+	if err != nil {
+		t.Fatalf("no se generó dsp_config: %v", err)
+	}
+	if !strings.Contains(string(cfgBytes), "DSP\tDAC USB (Topping)\tnight") {
+		t.Fatalf("dsp_config inesperado:\n%s", string(cfgBytes))
+	}
+
+	// Cambiar a Jack 3.5mm (flat) -> debe actualizar DSPPreset activo a 'flat' y mantener plugin 'alsa'
+	if err := c.SelectAudioOutput(1); err != nil {
+		t.Fatalf("SelectAudioOutput(1) falló: %v", err)
+	}
+	stJack := c.GetState()
+	if stJack.ActiveOutput != "Jack 3.5mm (bcm2835)" || stJack.DSPPreset != "flat" {
+		t.Fatalf("al cambiar a Jack sin perfil debía quedar DSPPreset='flat', obtenido %+v", stJack)
+	}
+
+	// Volver al DAC USB -> debe recordar 'night' automáticamente y recargar plugin 'pipe'
+	if err := c.SelectAudioOutput(0); err != nil {
+		t.Fatalf("SelectAudioOutput(0) falló: %v", err)
+	}
+	stBack := c.GetState()
+	if stBack.ActiveOutput != "DAC USB (Topping)" || stBack.DSPPreset != "night" || stBack.AudioOutputs[0].Plugin != "pipe" {
+		t.Fatalf("al volver a DAC USB debía restaurar perfil 'night' y plugin 'pipe': %+v", stBack)
+	}
+
+	// Verificar persistencia tras reiniciar el cliente desde la misma SQLite
+	c.Close()
+	c2 := NewClient(sockPath, "127.0.0.1", "0", nil, database)
+	t.Cleanup(c2.Close)
+	reloaded := c2.GetState()
+	if reloaded.DSPPreset != "night" || reloaded.DSPPresets["DAC USB (Topping)"] != "night" {
+		t.Fatalf("el nuevo Client debía recuperar presets DSP desde SQLite: %+v", reloaded)
+	}
+}
+
 
 

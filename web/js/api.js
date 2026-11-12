@@ -90,14 +90,29 @@ export function refreshAudioOutputs() {
   return requestHelper('/player/outputs/refresh', { method: 'POST' });
 }
 
+// setOutputDSPPreset asigna un perfil DSP/ecualizador SoX por salida de audio y recarga MPD si está activa.
+export function setOutputDSPPreset(outputName, preset) {
+  return requestHelper('/player/dsp', {
+    method: 'POST',
+    body: JSON.stringify({
+      output: outputName || '',
+      preset: preset || 'flat'
+    })
+  });
+}
+
 // getAudioDiagnostics consulta las salidas actuales en MPD y la lista ALSA (aplay -l) del contenedor.
 export function getAudioDiagnostics() {
   return requestHelper('/player/outputs/diagnostics');
 }
 
-// setAudioConfig ajusta parámetros audiófilos de ReplayGain y Crossfade.
-export function setAudioConfig(replayGain, crossfade) {
-  return requestHelper(`/player/config?replay_gain=${encodeURIComponent(replayGain)}&crossfade=${encodeURIComponent(crossfade)}`, { method: 'POST' });
+// setAudioConfig ajusta parámetros audiófilos de ReplayGain, Crossfade y Fade en pausa.
+export function setAudioConfig(replayGain, crossfade, softFade = undefined) {
+  let qs = `replay_gain=${encodeURIComponent(replayGain)}&crossfade=${encodeURIComponent(crossfade)}`;
+  if (typeof softFade === 'boolean') {
+    qs += `&soft_fade=${softFade ? 'true' : 'false'}`;
+  }
+  return requestHelper(`/player/config?${qs}`, { method: 'POST' });
 }
 
 // setSleepTimer programa el apagado automático de la música en N minutos.
@@ -169,6 +184,13 @@ export function getLibraryAlbumDetail(id) {
   return requestHelper(`/library/album?id=${encodeURIComponent(id)}`);
 }
 
+// fetchAlbumCoverOnline busca y descarga la portada de un álbum desde Cover Art Archive sin alterar el NAS.
+export function fetchAlbumCoverOnline(albumId) {
+  return requestHelper(`/library/album/cover/fetch?album_id=${encodeURIComponent(albumId)}`, {
+    method: 'POST'
+  });
+}
+
 // getLibraryArtists obtiene los artistas de la colección con conteo de temas.
 export function getLibraryArtists() {
   return requestHelper('/library/artists');
@@ -182,6 +204,16 @@ export function getLibraryArtistDetail(artistName) {
 // getLibraryArtistTracks obtiene todas las pistas de un artista por nombre.
 export function getLibraryArtistTracks(artistName) {
   return requestHelper(`/library/artist/tracks?name=${encodeURIComponent(artistName)}`);
+}
+
+// getLibraryGenres obtiene el resumen navegable de géneros y décadas disponibles.
+export function getLibraryGenres() {
+  return requestHelper('/library/genres');
+}
+
+// getLibraryGenreAlbums devuelve los álbumes filtrados por un género musical o década.
+export function getLibraryGenreAlbums(type, value) {
+  return requestHelper(`/library/genres/albums?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}`);
 }
 
 // getLibraryFolders explora el árbol de carpetas de almacenamiento (Local, NAS, USB).

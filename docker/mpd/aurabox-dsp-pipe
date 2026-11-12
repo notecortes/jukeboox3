@@ -1,0 +1,48 @@
+#!/bin/sh
+# =====================================================================
+# AuraBox DSP Pipe — Procesamiento SoX 32-bit hacia dispositivo ALSA
+# =====================================================================
+set -eu
+
+ALSA_DEV="${1:-}"
+PRESET="${2:-flat}"
+
+# Validar formato estricto de dispositivo ALSA para impedir inyección de opciones o rutas arbitrarias.
+case "$ALSA_DEV" in
+    plughw:[A-Za-z0-9_.,=-]*) ;;
+    *)
+        echo "[AuraBox DSP] Dispositivo ALSA inválido: $ALSA_DEV" >&2
+        exit 1
+        ;;
+esac
+
+case "$PRESET" in
+    night)
+        # Noche / Loudness: realza graves y agudos a bajo volumen con compresión suave sin recorte.
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
+            gain -4.5 bass +4 100 0.7s treble +2 9000 0.7s compand 0.1,0.5 -40,-36,-16,-14,0,-3 0 -12 0.1
+        ;;
+    voice)
+        # Voz y Acústica: limpia retumbes subgraves y aporta claridad en medios vocales.
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
+            gain -3.5 highpass 80 equalizer 2200 1.2q +3.5 equalizer 350 1.4q -1.5
+        ;;
+    livingroom)
+        # Altavoces Salón: escena más amplia y presencia cálida en frecuencias medias-altas.
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
+            gain -3.5 bass +2.5 85 0.7s equalizer 3000 1.1q +2 treble +1.5 10000 0.7s
+        ;;
+    bass)
+        # Graves Hi-Fi: cuerpo extendido en subgraves para auriculares abiertos o cajas compactas.
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
+            gain -5.5 bass +5.5 95 0.65s equalizer 240 1.3q -1 treble +1 11000 0.7s
+        ;;
+    flat|"")
+        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV"
+        ;;
+    *)
+        echo "[AuraBox DSP] Preset no reconocido: $PRESET" >&2
+        exit 1
+        ;;
+esac
+

@@ -16,8 +16,8 @@
 
   <!-- Hojas de estilo CSS modulares -->
   <link rel="stylesheet" href="/css/app.css?v=12"/>
-  <link rel="stylesheet" href="/css/player.css?v=14"/>
-  <link rel="stylesheet" href="/css/views.css?v=13"/>
+  <link rel="stylesheet" href="/css/player.css?v=15"/>
+  <link rel="stylesheet" href="/css/views.css?v=14"/>
 </head>
 <body>
   <div id="app">
@@ -59,6 +59,7 @@
           <button class="sub-tab-btn active" data-subtab="albums">Álbumes</button>
           <button class="sub-tab-btn" data-subtab="recent">Recientes</button>
           <button class="sub-tab-btn" data-subtab="artists">Artistas</button>
+          <button class="sub-tab-btn" data-subtab="genres">Géneros</button>
           <button class="sub-tab-btn" data-subtab="favorites">Favoritos ♥</button>
           <button class="sub-tab-btn" data-subtab="radios">Radios</button>
           <button class="sub-tab-btn" data-subtab="folders">Carpetas</button>
@@ -170,6 +171,26 @@
               </div>
             </div>
             <div id="audioOutputsDiagnostics" style="margin-top:8px;"></div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);" id="dspPresetCard">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
+                <span style="font-size:0.85rem; font-weight:700;">Ecualizador / Perfil DSP</span>
+                <span class="badge-format" id="dspModeBadge">Bit-Perfect</span>
+              </div>
+              <div style="font-size:0.75rem; color:var(--text-secondary); margin-bottom:8px;">
+                Salida configurada: <strong id="dspActiveOutputName">Detectando...</strong>
+              </div>
+              <div class="dsp-preset-grid" id="dspPresetSelector" role="group" aria-label="Perfiles DSP por salida">
+                <button type="button" class="dsp-opt active" data-dsp="flat">🎚️ Plano Hi-Fi</button>
+                <button type="button" class="dsp-opt" data-dsp="night">🌙 Noche / Loudness</button>
+                <button type="button" class="dsp-opt" data-dsp="voice">🎙️ Voz y Acústica</button>
+                <button type="button" class="dsp-opt" data-dsp="livingroom">🛋️ Altavoces Salón</button>
+                <button type="button" class="dsp-opt" data-dsp="bass">🔊 Graves Hi-Fi</button>
+              </div>
+              <p id="dspPresetDesc" style="font-size:0.74rem; color:var(--text-muted); margin-top:8px; line-height:1.4;">
+                Señal directa bit-perfect ALSA sin alterar muestras ni ecualización.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -208,11 +229,33 @@
 
             <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
               <div style="min-width:0;">
+                <div style="font-size:0.85rem; font-weight:600;">Fade In / Fade Out al Pausar (1,1s)</div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Atenúa suavemente el volumen antes de pausar y al reanudar para evitar cortes secos o pops.</p>
+              </div>
+              <label class="toggle-switch" title="Activar fundido suave en pausa y reanudación">
+                <input type="checkbox" id="settingSoftFade" checked/>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div style="min-width:0;">
                 <div style="font-size:0.85rem; font-weight:600;">Modo Atril en Tablet (Mantener Pantalla)</div>
                 <p id="wakeLockStatusText" style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Evita que la pantalla se apague mientras suena música.</p>
               </div>
               <label class="toggle-switch" title="Mantener pantalla encendida durante reproducción">
                 <input type="checkbox" id="settingWakeLock"/>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div style="min-width:0;">
+                <div style="font-size:0.85rem; font-weight:600;">Modo Marco Musical en Tablet (60s)</div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Oculta botones tras 60s sin tocar en Now Playing horizontal; un toque los recupera.</p>
+              </div>
+              <label class="toggle-switch" title="Activar vista minimalista tras 60s en horizontal">
+                <input type="checkbox" id="settingAmbientMode" checked/>
                 <span class="toggle-slider"></span>
               </label>
             </div>
@@ -539,6 +582,9 @@
           </div>
         </div>
 
+        <!-- Línea de Letra Sincronizada en Modo Marco Musical (Ambient) -->
+        <div id="npAmbientLyric" class="np-ambient-lyric hidden" aria-live="polite"></div>
+
         <!-- Controles Principales -->
         <div class="np-controls-row">
           <button id="npBtnShuffle" class="btn-np-ctrl" title="Shuffle Anti-repetición">
@@ -621,7 +667,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=19"></script>
+  <script type="module" src="/js/app.js?v=20"></script>
 </body>
 </html>
 

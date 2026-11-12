@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"aurabox/internal/covers"
 	"aurabox/internal/db"
 	"aurabox/internal/events"
 	"aurabox/internal/mpd"
@@ -646,6 +647,103 @@ func TestUXEndpointsAndFeatures(t *testing.T) {
 	var stResp mpd.PlayerState
 	if err := json.Unmarshal(recSleep.Body.Bytes(), &stResp); err != nil || stResp.SleepTimerMode != "track_end" {
 		t.Fatalf("SleepTimerMode esperado 'track_end', obtenido %+v (err=%v)", stResp, err)
+	}
+
+	// 6. POST /api/library/album/cover/fetch (Cover Art Archive simulado sin tocar disco NAS)
+	validPNG := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D}
+	caaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(validPNG)
+	}))
+	defer caaSrv.Close()
+	mbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"release-groups": []map[string]interface{}{{"id": "rg-violator", "title": "Violator", "score": 100}},
+		})
+	}))
+	defer mbSrv.Close()
+	srv.covers = covers.NewServiceWithEndpoints(filepath.Join(tmpDir, "covers"), mbSrv.URL, caaSrv.URL, caaSrv.Client())
+
+	recFetchCover := httptest.NewRecorder()
+	mux.ServeHTTP(recFetchCover, httptest.NewRequest(http.MethodPost, "/api/library/album/cover/fetch?album_id="+strconv.FormatInt(albDefault[0].ID, 10), nil))
+	if recFetchCover.Code != http.StatusOK {
+		t.Fatalf("POST /api/library/album/cover/fetch devolvió %d: %s", recFetchCover.Code, recFetchCover.Body.String())
+	}
+	var coverResp struct {
+		CoverURL string `json:"cover_url"`
+	}
+	if err := json.Unmarshal(recFetchCover.Body.Bytes(), &coverResp); err != nil || !strings.HasPrefix(coverResp.CoverURL, "/api/covers/online_") {
+		t.Fatalf("respuesta cover/fetch inesperada: %+v (err=%v)", coverResp, err)
+	}
+	updatedAlbum, _, err := database.GetAlbumByID(albDefault[0].ID)
+	if err != nil || updatedAlbum.CoverURL != coverResp.CoverURL {
+		t.Fatalf("SQLite no actualizó CoverURL tras fetch online: %+v (err=%v)", updatedAlbum, err)
+	}
+
+	// 7. GET /api/library/genres y GET /api/library/genres/albums
+	recGenres := httptest.NewRecorder()
+	mux.ServeHTTP(recGenres, httptest.NewRequest(http.MethodGet, "/api/library/genres", nil))
+	if recGenres.Code != http.StatusOK {
+		t.Fatalf("GET /api/library/genres devolvió %d", recGenres.Code)
+	}
+	var genresOverview struct {
+		Genres  []db.CategorySummary `json:"genres"`
+		Decades []db.CategorySummary `json:"decades"`
+	}
+	if err := json.Unmarshal(recGenres.Body.Bytes(), &genresOverview); err != nil || len(genresOverview.Genres) == 0 || len(genresOverview.Decades) == 0 {
+		t.Fatalf("resumen de géneros/décadas inesperado: %+v (err=%v)", genresOverview, err)
+	}
+
+	recGenreAlbs := httptest.NewRecorder()
+	mux.ServeHTTP(recGenreAlbs, httptest.NewRequest(http.MethodGet, "/api/library/genres/albums?type=decade&value=1990", nil))
+	if recGenreAlbs.Code != http.StatusOK {
+		t.Fatalf("GET /api/library/genres/albums devolvió %d: %s", recGenreAlbs.Code, recGenreAlbs.Body.String())
+	}
+	var genreAlbsResp struct {
+		Label  string     `json:"label"`
+		Albums []db.Album `json:"albums"`
+	}
+	if err := json.Unmarshal(recGenreAlbs.Body.Bytes(), &genreAlbsResp); err != nil || genreAlbsResp.Label != "90s" || len(genreAlbsResp.Albums) != 2 {
+		t.Fatalf("álbumes por década 90s inesperados: %+v (err=%v)", genreAlbsResp, err)
+	}
+
+	// 8. Configuración soft_fade vía /api/player/config y /api/settings
+	recFadeCfg := httptest.NewRecorder()
+	mux.ServeHTTP(recFadeCfg, httptest.NewRequest(http.MethodPost, "/api/player/config?replay_gain=auto&crossfade=2&soft_fade=false", nil))
+	if recFadeCfg.Code != http.StatusOK {
+		t.Fatalf("POST /api/player/config con soft_fade=false devolvió %d: %s", recFadeCfg.Code, recFadeCfg.Body.String())
+	}
+	var fadeState mpd.PlayerState
+	if err := json.Unmarshal(recFadeCfg.Body.Bytes(), &fadeState); err != nil || fadeState.SoftFade {
+		t.Fatalf("SoftFade debía quedar false, obtenido %+v (err=%v)", fadeState, err)
+	}
+
+	// 9. Endpoint POST /api/player/dsp (perfil válido y rechazo de perfil inválido)
+	recDSPOk := httptest.NewRecorder()
+	reqDSPOk := httptest.NewRequest(http.MethodPost, "/api/player/dsp", bytes.NewBufferString(`{"output":"DAC USB Test","preset":"livingroom"}`))
+	reqDSPOk.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(recDSPOk, reqDSPOk)
+	if recDSPOk.Code != http.StatusOK {
+		t.Fatalf("POST /api/player/dsp válido devolvió %d: %s", recDSPOk.Code, recDSPOk.Body.String())
+	}
+	var dspState mpd.PlayerState
+	if err := json.Unmarshal(recDSPOk.Body.Bytes(), &dspState); err != nil || dspState.DSPPresets["DAC USB Test"] != "livingroom" {
+		t.Fatalf("respuesta /api/player/dsp inesperada: %+v (err=%v)", dspState, err)
+	}
+
+	recDSPBad := httptest.NewRecorder()
+	reqDSPBad := httptest.NewRequest(http.MethodPost, "/api/player/dsp", bytes.NewBufferString(`{"output":"DAC USB Test","preset":"unknown_eq"}`))
+	reqDSPBad.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(recDSPBad, reqDSPBad)
+	if recDSPBad.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/player/dsp inválido debía devolver 400, obtuvo %d", recDSPBad.Code)
+	}
+
+	player.Close()
+	if got := database.GetSetting("soft_fade", ""); got != "false" {
+		t.Fatalf("setting soft_fade debía persistirse como 'false', obtenido %q", got)
+	}
+	if got := database.GetSetting("dsp_presets_json", ""); !strings.Contains(got, `"DAC USB Test":"livingroom"`) {
+		t.Fatalf("setting dsp_presets_json inesperado: %q", got)
 	}
 }
 

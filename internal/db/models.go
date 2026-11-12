@@ -49,6 +49,16 @@ type ThemeOption struct {
 	TrackCount int    `json:"track_count"`
 }
 
+// CategorySummary resume un género musical o década navegable en Biblioteca con conteo de discos y carátula.
+type CategorySummary struct {
+	Type       string `json:"type"`
+	Value      string `json:"value"`
+	Label      string `json:"label"`
+	AlbumCount int    `json:"album_count"`
+	TrackCount int    `json:"track_count"`
+	CoverURL   string `json:"cover_url"`
+}
+
 // Artist representa a un músico o banda en la biblioteca de AuraBox.
 type Artist struct {
 	ID          int64    `json:"id"`

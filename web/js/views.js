@@ -27,7 +27,7 @@ let includeAllAlbums = localStorage.getItem('aurabox_include_all_albums') === 't
 let albumFilterQuery = '';
 let artistFilterQuery = '';
 let recentMode = 'added';
-const savedScrollTop = { albums: 0, artists: 0, artistDetail: 0 };
+const savedScrollTop = { albums: 0, artists: 0, artistDetail: 0, genres: 0, genreDetail: 0 };
 let preservedAlbumsRenderLimit = 48;
 let radioFilterQuery = '';
 let radioGenreFilter = 'Todos';
@@ -36,6 +36,7 @@ let hasLoadedRadios = false;
 let isGeneratingMix = false;
 let outputSwitchInFlight = false;
 let outputRefreshInFlight = false;
+let dspSwitchInFlight = false;
 let lastDiagnosticsFetchAt = 0;
 let cachedDiagnostics = null;
 let isLoadingLibrary = false;
@@ -65,6 +66,7 @@ function shouldDeferLibraryRender(isScanning = false) {
   if (isSelectingAlbums) return true;
   if (document.getElementById('albumTracksList') !== null) return true;
   if (document.getElementById('artistDetailView') !== null) return true;
+  if (document.getElementById('genreDetailView') !== null) return true;
   if (state.ui.activeSubTab === 'folders') return true;
   if (document.activeElement && (document.activeElement.id === 'albumFilterInput' || document.activeElement.id === 'artistFilterInput')) return true;
   if (isScanning) {
@@ -200,6 +202,9 @@ function renderActiveSubTab(restoreScrollKey = '') {
     case 'artists':
       renderArtistsList(container, restoreScrollKey === 'artists');
       break;
+    case 'genres':
+      renderGenresView(container, restoreScrollKey === 'genres');
+      break;
     case 'recent':
       renderRecentTracks(container);
       break;
@@ -215,7 +220,7 @@ function renderActiveSubTab(restoreScrollKey = '') {
   }
 }
 
-// navigateBackFromDetail cierra la ficha actual de álbum o artista restaurando la vista previa y su scroll.
+// navigateBackFromDetail cierra la ficha actual de álbum, artista o género restaurando la vista previa y su scroll.
 function navigateBackFromDetail() {
   const detail = state.ui.detailView;
   if (!detail) {
@@ -226,7 +231,11 @@ function navigateBackFromDetail() {
     openArtistDetail(detail.backContext.name, { restoreScroll: true, skipPush: true });
     return;
   }
-  const restoreKey = detail.type === 'artist' ? 'artists' : 'albums';
+  if (detail.type === 'album' && detail.backContext?.type === 'genre' && detail.backContext.catValue) {
+    openGenreDetail(detail.backContext.catType, detail.backContext.catValue, detail.backContext.label, { restoreScroll: true, skipPush: true });
+    return;
+  }
+  const restoreKey = detail.type === 'artist' ? 'artists' : (detail.type === 'genre' ? 'genres' : 'albums');
   state.ui.detailView = null;
   renderActiveSubTab(restoreKey);
 }
@@ -592,6 +601,8 @@ function bindMultiSelectBar() {
 async function openAlbumDetail(albumId, backContext = null) {
   if (backContext?.type === 'artist') {
     saveScrollPosition('artistDetail');
+  } else if (backContext?.type === 'genre') {
+    saveScrollPosition('genreDetail');
   } else {
     saveScrollPosition('albums');
   }
@@ -608,22 +619,30 @@ async function openAlbumDetail(albumId, backContext = null) {
 
     const backLabel = backContext?.type === 'artist'
       ? `← Volver a ${backContext.name}`
-      : '← Volver a Álbumes';
+      : (backContext?.type === 'genre'
+        ? `← Volver a ${backContext.label || backContext.catValue}`
+        : '← Volver a Álbumes');
     const cover = sanitizeCoverURL(album.cover_url);
+    const hasMissingCover = !album.cover_url || cover === '/assets/default-cover.svg';
     container.innerHTML = `
       <div style="margin-bottom:16px;">
         <button id="btnBackToAlbums" class="btn-secondary" style="margin-bottom:12px;">
           ${escapeHtml(backLabel)}
         </button>
         <div style="display:flex; gap:16px; align-items:center;">
-          <img src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
+          <img id="albumDetailCoverImg" src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
           <div style="min-width:0;">
             <h2 style="font-size:1.25rem; font-weight:700;">${escapeHtml(album.title)}</h2>
             <div id="albumDetailArtistLink" style="color:var(--accent-light); font-size:0.9rem; cursor:pointer; text-decoration:underline; text-decoration-style:dotted;">${escapeHtml(album.artist || 'Artista')}${album.year ? ' • ' + escapeHtml(album.year) : ''}</div>
-            <div style="margin-top:8px;">
+            <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:8px;">
               <button id="btnPlayAlbumNow" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#fff;">
                 ▶ Reproducir Álbum (${tracks.length} temas)
               </button>
+              ${hasMissingCover ? `
+                <button type="button" id="btnFetchOnlineCover" class="btn-secondary" style="font-size:0.8rem;" title="Descargar portada desde Cover Art Archive / MusicBrainz">
+                  🌐 Buscar carátula online
+                </button>
+              ` : ''}
             </div>
           </div>
         </div>
@@ -644,6 +663,30 @@ async function openAlbumDetail(albumId, backContext = null) {
     document.getElementById('btnPlayAlbumNow')?.addEventListener('click', () => {
       api.addToQueue({ album_id: album.id, mode: 'replace', clear_first: true });
       showToast(`Reproduciendo álbum: ${album.title}`);
+    });
+    document.getElementById('btnFetchOnlineCover')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Buscando portada...';
+      try {
+        const res = await api.fetchAlbumCoverOnline(album.id);
+        const newCover = sanitizeCoverURL(res?.cover_url);
+        const imgEl = document.getElementById('albumDetailCoverImg');
+        if (imgEl && newCover && newCover !== '/assets/default-cover.svg') {
+          imgEl.src = newCover;
+          btn.textContent = '✓ Carátula guardada';
+          showToast('Carátula descargada en caché local');
+          loadLibraryData({ skipRender: true });
+        } else {
+          btn.disabled = false;
+          btn.textContent = '🌐 Buscar carátula online';
+          showToast('No se encontró carátula para este álbum');
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '🌐 Buscar carátula online';
+        showToast('No se encontró carátula online para este disco');
+      }
     });
 
     const list = document.getElementById('albumTracksList');
@@ -769,6 +812,165 @@ async function openArtistDetail(artistName, options = {}) {
     }
   } catch (err) {
     showToast(`No se pudo cargar la ficha de ${artistName}`);
+  }
+}
+
+// buildGenreCategoryCard construye una tarjeta interactiva de género o década con botón rápido de Smart Mix.
+function buildGenreCategoryCard(cat) {
+  const card = document.createElement('div');
+  card.className = 'genre-card';
+  const cover = sanitizeCoverURL(cat.cover_url);
+  const albumLabel = cat.album_count === 1 ? '1 álbum' : `${cat.album_count} álbumes`;
+  card.innerHTML = `
+    <img class="genre-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(cat.label)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
+    <div class="genre-card-info">
+      <div class="genre-card-title">${escapeHtml(cat.label)}</div>
+      <div class="genre-card-meta">${escapeHtml(albumLabel)} • ${cat.track_count} temas</div>
+    </div>
+    <button type="button" class="genre-card-mix-btn" title="Crear Smart Mix de ${escapeHtml(cat.label)}">⚡</button>
+  `;
+
+  card.querySelector('.genre-card-mix-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    triggerThemeMix(cat.type, cat.value, cat.label);
+  });
+
+  card.addEventListener('click', () => {
+    saveScrollPosition('genres');
+    openGenreDetail(cat.type, cat.value, cat.label);
+  });
+  return card;
+}
+
+// renderGenresView muestra todos los estilos musicales y décadas del catálogo para explorar álbumes.
+async function renderGenresView(container, shouldRestoreScroll = false) {
+  container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando estilos y décadas...</div>';
+  try {
+    const data = await api.getLibraryGenres();
+    const genres = data?.genres || [];
+    const decades = data?.decades || [];
+
+    if (genres.length === 0 && decades.length === 0) {
+      container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No hay etiquetas de género o año registradas en tu música</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <div id="genresOverviewView">
+        ${genres.length > 0 ? `
+          <div class="settings-section-title" style="margin-bottom:10px;">Estilos y Géneros</div>
+          <div class="genres-grid" id="genresGridList"></div>
+        ` : ''}
+        ${decades.length > 0 ? `
+          <div class="settings-section-title" style="margin-bottom:10px;">Por Década</div>
+          <div class="genres-grid" id="decadesGridList"></div>
+        ` : ''}
+      </div>
+    `;
+
+    const gGrid = document.getElementById('genresGridList');
+    if (gGrid) {
+      const frag = document.createDocumentFragment();
+      genres.forEach((g) => frag.appendChild(buildGenreCategoryCard(g)));
+      gGrid.appendChild(frag);
+    }
+
+    const dGrid = document.getElementById('decadesGridList');
+    if (dGrid) {
+      const frag = document.createDocumentFragment();
+      decades.forEach((d) => frag.appendChild(buildGenreCategoryCard(d)));
+      dGrid.appendChild(frag);
+    }
+
+    if (shouldRestoreScroll) {
+      restoreScrollPosition('genres');
+    }
+  } catch (err) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar géneros y décadas</div>';
+  }
+}
+
+// openGenreDetail lista los álbumes filtrados de un género o década concreta con acceso a Smart Mix.
+async function openGenreDetail(catType, catValue, label = '', options = {}) {
+  const { restoreScroll = false, skipPush = false } = options;
+  const container = document.getElementById('libraryContent');
+  if (!container || !catValue) return;
+
+  try {
+    const data = await api.getLibraryGenreAlbums(catType || 'genre', catValue);
+    const albums = data?.albums || [];
+    const displayLabel = data?.label || label || catValue;
+
+    state.ui.detailView = {
+      type: 'genre',
+      catType: catType || 'genre',
+      catValue,
+      label: displayLabel
+    };
+    if (!skipPush) {
+      window.history.pushState({ tab: 'library', detail: 'genre', value: catValue }, '', '#library');
+    }
+
+    container.innerHTML = `
+      <div id="genreDetailView" style="margin-bottom:16px;">
+        <button id="btnBackToGenres" class="btn-secondary" style="margin-bottom:12px;">
+          ← Volver a Géneros
+        </button>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+          <div>
+            <h2 style="font-size:1.3rem; font-weight:700;">${escapeHtml(displayLabel)}</h2>
+            <div style="font-size:0.84rem; color:var(--text-secondary); margin-top:2px;">
+              ${albums.length} ${albums.length === 1 ? 'álbum' : 'álbumes'} disponibles
+            </div>
+          </div>
+          <button type="button" id="btnGenreSmartMix" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700;">
+            ⚡ Smart Mix ${escapeHtml(displayLabel)}
+          </button>
+        </div>
+
+        <div class="albums-grid density-3col" id="genreAlbumsGrid"></div>
+      </div>
+    `;
+
+    if (restoreScroll) {
+      restoreScrollPosition('genreDetail');
+    } else {
+      const mainEl = document.querySelector('.main-content');
+      if (mainEl) mainEl.scrollTop = 0;
+    }
+
+    document.getElementById('btnBackToGenres')?.addEventListener('click', () => navigateBackFromDetail());
+    document.getElementById('btnGenreSmartMix')?.addEventListener('click', () => {
+      triggerThemeMix(catType || 'genre', catValue, displayLabel);
+    });
+
+    const grid = document.getElementById('genreAlbumsGrid');
+    if (grid) {
+      if (albums.length === 0) {
+        grid.innerHTML = '<div style="text-align:center; padding:32px; color:var(--text-muted); grid-column:1/-1;">No hay álbumes completos en esta categoría</div>';
+      } else {
+        const frag = document.createDocumentFragment();
+        albums.forEach((alb) => {
+          const card = document.createElement('div');
+          card.className = 'album-card';
+          const cover = sanitizeCoverURL(alb.cover_url);
+          const displayTitle = cleanDisplayAlbumTitle(alb.title);
+          card.innerHTML = `
+            <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
+            <div class="album-card-title">${escapeHtml(displayTitle)}</div>
+            <div class="album-card-artist">${escapeHtml(alb.artist || 'Artista')}${alb.year > 0 ? ' • ' + alb.year : ''}</div>
+          `;
+          card.addEventListener('click', () => {
+            openAlbumDetail(alb.id, { type: 'genre', catType: catType || 'genre', catValue, label: displayLabel });
+          });
+          frag.appendChild(card);
+        });
+        grid.appendChild(frag);
+      }
+    }
+  } catch (err) {
+    showToast('No se pudieron cargar los álbumes de esta categoría');
   }
 }
 
@@ -2034,6 +2236,7 @@ function renderRadiosChunked(container, radios, viewContainer) {
 function describeAudioOutput(output) {
   const plugin = (output.plugin || '').toLowerCase();
   const nameLower = (output.name || '').toLowerCase();
+  const dspTag = plugin === 'pipe' ? ' • DSP SoX activo' : '';
 
   if (plugin === 'httpd') {
     return {
@@ -2058,30 +2261,37 @@ function describeAudioOutput(output) {
   }
   if (nameLower.includes('i2s') || nameLower.includes('hifiberry') || nameLower.includes('allo') || nameLower.includes('iqaudio') || nameLower.includes('justboom') || nameLower.includes('pisound')) {
     return {
-      badge: 'I2S',
+      badge: plugin === 'pipe' ? 'I2S • DSP' : 'I2S',
       isDAC: true,
-      description: 'DAC Hardware I2S HAT detectado en ALSA'
+      description: `DAC Hardware I2S HAT detectado en ALSA${dspTag}`
     };
   }
   if (nameLower.includes('usb') || nameLower.includes('dac') || nameLower.includes('codec') || nameLower.includes('topping') || nameLower.includes('fiio') || nameLower.includes('smsl')) {
     return {
-      badge: 'USB',
+      badge: plugin === 'pipe' ? 'USB • DSP' : 'USB',
       isDAC: true,
-      description: 'DAC USB externo Plug & Play detectado por ALSA'
+      description: `DAC USB externo Plug & Play detectado por ALSA${dspTag}`
     };
   }
   if (nameLower.includes('hdmi') || nameLower.includes('vc4')) {
     return {
-      badge: 'HDMI',
+      badge: plugin === 'pipe' ? 'HDMI • DSP' : 'HDMI',
       isDAC: false,
-      description: 'Salida de audio digital HDMI'
+      description: `Salida de audio digital HDMI${dspTag}`
     };
   }
   if (nameLower.includes('jack') || nameLower.includes('bcm2835') || nameLower.includes('headphone') || nameLower.includes('analóg') || nameLower.includes('analog')) {
     return {
-      badge: 'JACK',
+      badge: plugin === 'pipe' ? 'JACK • DSP' : 'JACK',
       isDAC: false,
-      description: 'Salida analógica integrada de hardware'
+      description: `Salida analógica integrada de hardware${dspTag}`
+    };
+  }
+  if (plugin === 'pipe') {
+    return {
+      badge: 'DSP',
+      isDAC: false,
+      description: 'Salida ALSA procesada mediante perfil DSP SoX'
     };
   }
   return {
@@ -2257,6 +2467,43 @@ function bindSettingsView() {
     runForcedScan(btnRescanLib, 'Iniciando re-escaneo completo de música...');
   });
 
+  // Perfiles de ecualización / DSP por salida activa
+  const dspButtons = document.querySelectorAll('#dspPresetSelector .dsp-opt');
+  dspButtons.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (dspSwitchInFlight) return;
+      const preset = btn.dataset.dsp || 'flat';
+      const activeOutput = state.player.active_output || '';
+      if (!activeOutput || activeOutput === 'Detectando audio...') {
+        showToast('Espera a que se detecte la salida de audio activa');
+        return;
+      }
+
+      dspSwitchInFlight = true;
+      dspButtons.forEach((b) => {
+        b.disabled = true;
+        b.classList.toggle('active', b === btn);
+      });
+      const descEl = document.getElementById('dspPresetDesc');
+      if (descEl) descEl.textContent = 'Aplicando perfil DSP en MPD...';
+
+      try {
+        const updatedState = await api.setOutputDSPPreset(activeOutput, preset);
+        if (updatedState) {
+          updatePlayerState(updatedState);
+          renderAudioOutputs(true);
+        }
+        showToast(`Perfil DSP aplicado: ${btn.textContent.trim()}`);
+      } catch (err) {
+        showToast(`No se pudo aplicar DSP: ${err.message}`);
+        updatePlayerState({});
+      } finally {
+        dspButtons.forEach((b) => { b.disabled = false; });
+        dspSwitchInFlight = false;
+      }
+    });
+  });
+
   // Límite máximo de salvaguarda de volumen
   const maxVolSlider = document.getElementById('settingMaxVol');
   const maxVolLabel = document.getElementById('labelMaxVol');
@@ -2324,6 +2571,27 @@ function bindSettingsView() {
       }
     });
   });
+
+  // Interruptor Fade In / Fade Out suave al pausar y reanudar
+  const softFadeCheckbox = document.getElementById('settingSoftFade');
+  if (softFadeCheckbox) {
+    if (typeof state.player.soft_fade === 'boolean') {
+      softFadeCheckbox.checked = state.player.soft_fade;
+    }
+    softFadeCheckbox.addEventListener('change', async () => {
+      const enabled = softFadeCheckbox.checked;
+      const rg = (state.player.replay_gain || 'auto').toLowerCase();
+      const cf = Number(state.player.crossfade || 0);
+      try {
+        const updated = await api.setAudioConfig(rg, cf, enabled);
+        if (updated) updatePlayerState(updated);
+        showToast(enabled ? 'Fade In / Fade Out en pausa activado' : 'Pausa instantánea (sin fade)');
+      } catch (err) {
+        softFadeCheckbox.checked = !enabled;
+        showToast(`Error al actualizar fade en pausa: ${err.message}`);
+      }
+    });
+  }
 
   // Temporizador de apagado (Sleep Timer)
   const sleepButtons = document.querySelectorAll('.btn-sleep-timer');

@@ -4,6 +4,7 @@ RUN apk add --no-cache \
     mpd \
     mpc \
     alsa-utils \
+    sox \
     lame \
     flac \
     curl \
@@ -14,8 +15,9 @@ RUN mkdir -p /var/lib/mpd/playlists /music /var/log/mpd /run/mpd && \
     ln -sfn /music /rawmusic
 
 COPY config/mpd.conf /etc/mpd.conf
+COPY docker/mpd/aurabox-dsp-pipe /usr/local/bin/aurabox-dsp-pipe
 COPY docker/mpd/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/aurabox-dsp-pipe
 
 EXPOSE 6600 4082
 

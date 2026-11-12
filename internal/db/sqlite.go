@@ -1658,6 +1658,170 @@ func (d *DB) GetTracksByDecade(decadeStart int, limit int) ([]Track, error) {
 	return scanTracksFromRows(rows)
 }
 
+// scanAlbumsFromRows lee filas estándar de consultas consolidadas de álbumes.
+func scanAlbumsFromRows(rows *sql.Rows) ([]Album, error) {
+	albums := make([]Album, 0)
+	for rows.Next() {
+		var a Album
+		if err := rows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.TotalDuration, &a.Source, &a.AddedSeq); err != nil {
+			return nil, err
+		}
+		albums = append(albums, a)
+	}
+	return albums, nil
+}
+
+// GetCategoriesOverview devuelve todos los géneros y décadas disponibles en Biblioteca con número de álbumes, pistas y carátula.
+func (d *DB) GetCategoriesOverview() ([]CategorySummary, []CategorySummary, error) {
+	rDB := d.reader()
+	genres := make([]CategorySummary, 0)
+	decades := make([]CategorySummary, 0)
+
+	gRows, err := rDB.Query(`
+		SELECT MIN(TRIM(genre)) AS g,
+		       COUNT(DISTINCT CASE WHEN album != '' THEN LOWER(album) END) AS alb_cnt,
+		       COUNT(id) AS tr_cnt,
+		       COALESCE(MAX(NULLIF(cover_url, '')), '') AS cover
+		FROM tracks
+		WHERE TRIM(COALESCE(genre, '')) != ''
+		GROUP BY LOWER(TRIM(genre))
+		HAVING COUNT(id) >= 1
+		ORDER BY tr_cnt DESC, g COLLATE NOCASE ASC
+	`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for gRows.Next() {
+		var item CategorySummary
+		if scanErr := gRows.Scan(&item.Value, &item.AlbumCount, &item.TrackCount, &item.CoverURL); scanErr == nil && item.Value != "" {
+			item.Type = "genre"
+			item.Label = item.Value
+			genres = append(genres, item)
+		}
+	}
+	_ = gRows.Close()
+
+	dRows, err := rDB.Query(`
+		SELECT (year / 10) * 10 AS decade,
+		       COUNT(DISTINCT CASE WHEN album != '' THEN LOWER(album) END) AS alb_cnt,
+		       COUNT(id) AS tr_cnt,
+		       COALESCE(MAX(NULLIF(cover_url, '')), '') AS cover
+		FROM tracks
+		WHERE year >= 1940 AND year <= 2039
+		GROUP BY decade
+		HAVING COUNT(id) >= 1
+		ORDER BY decade DESC
+	`)
+	if err != nil {
+		return genres, nil, err
+	}
+	defer dRows.Close()
+
+	for dRows.Next() {
+		var dec int
+		var item CategorySummary
+		if scanErr := dRows.Scan(&dec, &item.AlbumCount, &item.TrackCount, &item.CoverURL); scanErr == nil && dec > 0 {
+			item.Type = "decade"
+			item.Value = fmt.Sprintf("%d", dec)
+			item.Label = formatDecadeLabel(dec)
+			decades = append(decades, item)
+		}
+	}
+
+	return genres, decades, nil
+}
+
+// GetAlbumsByGenre devuelve los álbumes pertenecientes a un género musical concreto.
+func (d *DB) GetAlbumsByGenre(genre string) ([]Album, error) {
+	clean := strings.TrimSpace(genre)
+	if clean == "" {
+		return make([]Album, 0), nil
+	}
+	rows, err := d.reader().Query(`
+		SELECT 
+			MIN(t.id) as id,
+			t.album as title,
+			CASE 
+				WHEN COUNT(DISTINCT t.artist) > 1 THEN 
+					CASE 
+						WHEN MAX(t.album_artist) != '' AND MAX(t.album_artist) != MAX(t.artist) THEN MAX(t.album_artist)
+						ELSE 'Varios Artistas'
+					END
+				ELSE MAX(t.artist)
+			END as artist,
+			MAX(t.year) as year,
+			MAX(t.genre) as genre,
+			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
+			COUNT(t.id) as track_count,
+			COALESCE(SUM(t.duration), 0) as total_duration,
+			MAX(t.source) as source,
+			MAX(t.id) as added_seq
+		FROM tracks t
+		WHERE t.album != '' AND TRIM(t.genre) = ? COLLATE NOCASE
+		GROUP BY t.album COLLATE NOCASE
+		ORDER BY t.album COLLATE NOCASE ASC
+	`, clean)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAlbumsFromRows(rows)
+}
+
+// GetAlbumsByDecade devuelve los álbumes publicados dentro de la década [decadeStart, decadeStart+9].
+func (d *DB) GetAlbumsByDecade(decadeStart int) ([]Album, error) {
+	if decadeStart < 1900 || decadeStart > 2100 {
+		return make([]Album, 0), nil
+	}
+	rows, err := d.reader().Query(`
+		SELECT 
+			MIN(t.id) as id,
+			t.album as title,
+			CASE 
+				WHEN COUNT(DISTINCT t.artist) > 1 THEN 
+					CASE 
+						WHEN MAX(t.album_artist) != '' AND MAX(t.album_artist) != MAX(t.artist) THEN MAX(t.album_artist)
+						ELSE 'Varios Artistas'
+					END
+				ELSE MAX(t.artist)
+			END as artist,
+			MAX(t.year) as year,
+			MAX(t.genre) as genre,
+			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
+			COUNT(t.id) as track_count,
+			COALESCE(SUM(t.duration), 0) as total_duration,
+			MAX(t.source) as source,
+			MAX(t.id) as added_seq
+		FROM tracks t
+		WHERE t.album != '' AND t.year >= ? AND t.year < ?
+		GROUP BY t.album COLLATE NOCASE
+		ORDER BY MAX(t.year) DESC, t.album COLLATE NOCASE ASC
+	`, decadeStart, decadeStart+10)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAlbumsFromRows(rows)
+}
+
+// UpdateAlbumCover actualiza la carátula en todas las pistas del álbum indicado sin modificar archivos de disco.
+func (d *DB) UpdateAlbumCover(albumTitle, coverURL string) error {
+	cleanAlbum := strings.TrimSpace(albumTitle)
+	cleanCover := strings.TrimSpace(coverURL)
+	if cleanAlbum == "" || cleanCover == "" {
+		return fmt.Errorf("álbum y coverURL requeridos")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	if _, err := d.conn.Exec(`UPDATE tracks SET cover_url = ? WHERE album = ? COLLATE NOCASE`, cleanCover, cleanAlbum); err != nil {
+		return err
+	}
+	_, _ = d.conn.Exec(`UPDATE albums SET cover_url = ? WHERE title = ? COLLATE NOCASE`, cleanCover, cleanAlbum)
+	return nil
+}
+
 // Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.
 func (d *DB) Close() error {
 	if d.readConn != nil && d.readConn != d.conn {

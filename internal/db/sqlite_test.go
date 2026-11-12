@@ -537,6 +537,32 @@ func TestUXLibraryQueriesAndThemes(t *testing.T) {
 	if err != nil || len(eightiesTracks) != 4 {
 		t.Fatalf("GetTracksByDecade(1980) esperaba 4 pistas, obtuvo %d (err=%v)", len(eightiesTracks), err)
 	}
+
+	// UpdateAlbumCover actualiza las pistas del álbum sin tocar archivos externos
+	if err := d.UpdateAlbumCover("Alpha EP", "/api/covers/online_test.jpg"); err != nil {
+		t.Fatalf("UpdateAlbumCover falló: %v", err)
+	}
+	if _, epTracks, err := d.GetAlbumByID(allAlbums[0].ID); err == nil {
+		for _, tr := range epTracks {
+			if tr.Album == "Alpha EP" && tr.CoverURL != "/api/covers/online_test.jpg" {
+				t.Fatalf("carátula no actualizada en pista %q: %q", tr.Title, tr.CoverURL)
+			}
+		}
+	}
+
+	// GetCategoriesOverview y filtros por género/década para explorador de Biblioteca
+	genres, decades, err := d.GetCategoriesOverview()
+	if err != nil || len(genres) == 0 || len(decades) == 0 {
+		t.Fatalf("GetCategoriesOverview falló: genres=%d decades=%d err=%v", len(genres), len(decades), err)
+	}
+	synthAlbs, err := d.GetAlbumsByGenre("Synthpop")
+	if err != nil || len(synthAlbs) != 2 {
+		t.Fatalf("GetAlbumsByGenre('Synthpop') esperaba 2 álbumes, obtuvo %d (err=%v)", len(synthAlbs), err)
+	}
+	dec80Albs, err := d.GetAlbumsByDecade(1980)
+	if err != nil || len(dec80Albs) != 2 {
+		t.Fatalf("GetAlbumsByDecade(1980) esperaba 2 álbumes, obtuvo %d (err=%v)", len(dec80Albs), err)
+	}
 }
 
 

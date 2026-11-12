@@ -15,6 +15,7 @@ ln -sfn /music /rawmusic
 CONF_OUT="/tmp/mpd.runtime.conf"
 RELOAD_FLAG="/run/mpd/reload_outputs"
 ALSA_DIAG_FILE="/run/mpd/alsa_cards.txt"
+DSP_CONFIG_FILE="/run/mpd/dsp_config"
 ENABLE_HTTPD="yes"
 LAST_CARDS_SIG=""
 MPD_PID=""
@@ -23,6 +24,27 @@ STOP_REQUESTED=0
 # sanitize_mpd_value elimina comillas, barras invertidas y saltos de línea para evitar inyección en mpd.conf.
 sanitize_mpd_value() {
     printf '%s' "$1" | tr -d '"\r\n\\'
+}
+
+# read_preferred_active lee de /run/mpd/dsp_config la salida seleccionada por el usuario si existe.
+read_preferred_active() {
+    [ -f "$DSP_CONFIG_FILE" ] || return 0
+    awk -F= '$1 == "ACTIVE" { sub(/^ACTIVE=/, ""); print; exit }' "$DSP_CONFIG_FILE" 2>/dev/null || true
+}
+
+# read_dsp_preset consulta el perfil DSP asignado a una salida concreta en /run/mpd/dsp_config.
+read_dsp_preset() {
+    TARGET_OUT="$1"
+    [ -f "$DSP_CONFIG_FILE" ] || { printf 'flat\n'; return 0; }
+    PRESET_VAL=$(awk -F '\t' -v target="$TARGET_OUT" '$1 == "DSP" && $2 == target { print $3; exit }' "$DSP_CONFIG_FILE" 2>/dev/null || true)
+    case "$PRESET_VAL" in
+        night|voice|livingroom|bass|flat)
+            printf '%s\n' "$PRESET_VAL"
+            ;;
+        *)
+            printf 'flat\n'
+            ;;
+    esac
 }
 
 # parse_aplay_cards extrae tarjetas y dispositivos ALSA reales tolerando espacios o símbolos en el ID.
@@ -151,10 +173,12 @@ EOF
         fi
     fi
 
-    ADDED_ALSA=0
-    ENABLED_ONE=0
+    TMP_OUTPUTS="/tmp/alsa_outputs.tsv"
+    : > "$TMP_OUTPUTS"
     SEEN_HDMI_CARD=""
     TAB=$(printf '\t')
+    PREFERRED_ACTIVE=$(sanitize_mpd_value "$(read_preferred_active)")
+    HAS_PREFERRED_MATCH=0
 
     while IFS="$TAB" read -r CARD_NUM CARD_ID CARD_NAME DEV_NUM DEV_NAME DEV_PCM; do
         CARD_NUM=$(printf '%s' "$CARD_NUM" | tr -cd '0-9')
@@ -206,6 +230,7 @@ EOF
         if [ "$DEV_NUM" != "0" ] && [ -n "$DEV_NAME" ] && [ "$DEV_NAME" != "$CARD_NAME" ] && [ "$KIND" != "hdmi" ]; then
             DISPLAY_NAME="${DISPLAY_NAME} - ${DEV_NAME}"
         fi
+        DISPLAY_NAME=$(sanitize_mpd_value "$DISPLAY_NAME")
 
         # Usar nombre ALSA si es identificador seguro; si contiene espacios/símbolos usar índice numérico estable
         case "$CARD_ID" in
@@ -217,9 +242,24 @@ EOF
                 ;;
         esac
 
+        if [ -n "$PREFERRED_ACTIVE" ] && [ "$DISPLAY_NAME" = "$PREFERRED_ACTIVE" ]; then
+            HAS_PREFERRED_MATCH=1
+        fi
+        printf '%s\t%s\t%s\n' "$KIND" "$DISPLAY_NAME" "$ALSA_DEV" >> "$TMP_OUTPUTS"
+    done < "$TMP_CARDS"
+    rm -f "$TMP_CARDS"
+
+    ADDED_ALSA=0
+    ENABLED_ONE=0
+    while IFS="$TAB" read -r KIND DISPLAY_NAME ALSA_DEV; do
         OUT_ENABLED="no"
         if [ "$HAS_PULSE" -eq 0 ] && [ "$ENABLED_ONE" -eq 0 ]; then
-            if [ "$DEFAULT_CLASS" = "usb_or_hat" ] && [ "$KIND" = "usb_or_hat" ]; then
+            if [ "$HAS_PREFERRED_MATCH" -eq 1 ]; then
+                if [ "$DISPLAY_NAME" = "$PREFERRED_ACTIVE" ]; then
+                    OUT_ENABLED="yes"
+                    ENABLED_ONE=1
+                fi
+            elif [ "$DEFAULT_CLASS" = "usb_or_hat" ] && [ "$KIND" = "usb_or_hat" ]; then
                 OUT_ENABLED="yes"
                 ENABLED_ONE=1
             elif [ "$DEFAULT_CLASS" = "analog" ] && [ "$KIND" = "analog" ]; then
@@ -231,7 +271,27 @@ EOF
             fi
         fi
 
-        cat << EOF >> "$CONF_OUT"
+        DSP_PRESET=$(read_dsp_preset "$DISPLAY_NAME")
+        SAFE_PIPE_DEV="no"
+        case "$ALSA_DEV" in
+            plughw:*[!A-Za-z0-9_.,=-]*) SAFE_PIPE_DEV="no" ;;
+            plughw:*) SAFE_PIPE_DEV="yes" ;;
+        esac
+
+        if [ "$DSP_PRESET" != "flat" ] && [ "$SAFE_PIPE_DEV" = "yes" ] && command -v sox >/dev/null 2>&1; then
+            cat << EOF >> "$CONF_OUT"
+audio_output {
+    type        "pipe"
+    name        "${DISPLAY_NAME}"
+    command     "/usr/local/bin/aurabox-dsp-pipe '${ALSA_DEV}' '${DSP_PRESET}'"
+    format      "48000:32:2"
+    mixer_type  "software"
+    enabled     "${OUT_ENABLED}"
+}
+
+EOF
+        else
+            cat << EOF >> "$CONF_OUT"
 audio_output {
     type        "alsa"
     name        "${DISPLAY_NAME}"
@@ -241,9 +301,10 @@ audio_output {
 }
 
 EOF
+        fi
         ADDED_ALSA=$((ADDED_ALSA + 1))
-    done < "$TMP_CARDS"
-    rm -f "$TMP_CARDS"
+    done < "$TMP_OUTPUTS"
+    rm -f "$TMP_OUTPUTS"
 
     # Si no hay hardware físico ni PulseAudio, agregar salida nula para mantener el stream HTTP operativo
     if [ "$HAS_PULSE" -eq 0 ] && [ "$ADDED_ALSA" -eq 0 ]; then

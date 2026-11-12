@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"aurabox/internal/covers"
 	"aurabox/internal/db"
 	"aurabox/internal/events"
 	"aurabox/internal/lyrics"
@@ -33,12 +34,13 @@ import (
 
 // Server encapsula todas las dependencias y servicios activos de AuraBox.
 type Server struct {
-	database        *db.DB
-	eventsHub       *events.Hub
-	player          *mpd.Client
-	scanner         *scanner.LibraryScanner
-	smartmix        *smartmix.SmartMixService
-	lyrics          *lyrics.Service
+	database          *db.DB
+	eventsHub         *events.Hub
+	player            *mpd.Client
+	scanner           *scanner.LibraryScanner
+	smartmix          *smartmix.SmartMixService
+	lyrics            *lyrics.Service
+	covers            *covers.Service
 	certManager       *tlsutil.CertManager
 	streamClient      *http.Client
 	streamUpstreamURL string
@@ -149,6 +151,9 @@ func main() {
 	// Inicializar servicio de letras LRCLIB
 	lyrService := lyrics.NewService()
 
+	// Inicializar servicio de búsqueda de carátulas Cover Art Archive / MusicBrainz
+	coversService := covers.NewService(coversDir)
+
 	srv := &Server{
 		database:        database,
 		eventsHub:       hub,
@@ -156,6 +161,7 @@ func main() {
 		scanner:         libScanner,
 		smartmix:        smService,
 		lyrics:          lyrService,
+		covers:          coversService,
 		certManager:     certMgr,
 		streamClient:    newAudioStreamClient(),
 		localDir:        musicLocal,
@@ -170,6 +176,13 @@ func main() {
 
 	// Ejecutar escaneo incremental inicial (la reparación de duraciones corre tras indexar)
 	libScanner.ScanLibraryAll()
+
+	// Vigilar cambios automáticos en música local y unidades USB extraíbles sin intervención manual
+	if watchErr := libScanner.StartAutoWatcher(3 * time.Second); watchErr != nil {
+		log.Printf("[Watcher] Advertencia iniciando vigilancia automática: %v", watchErr)
+	}
+	defer libScanner.WaitForIdle()
+	defer libScanner.StopAutoWatcher()
 
 	// Enrutador HTTP principal
 	mux := http.NewServeMux()
@@ -297,6 +310,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/player/volume/step", requireMethod(s.handleVolumeStep, http.MethodPost))
 	mux.HandleFunc("/api/player/volume/max", requireMethod(s.handleVolumeMax, http.MethodPost))
 	mux.HandleFunc("/api/player/output", requireMethod(s.handleSelectOutput, http.MethodPost))
+	mux.HandleFunc("/api/player/dsp", requireMethod(s.handleSetDSP, http.MethodPost))
 	mux.HandleFunc("/api/player/outputs/refresh", requireMethod(s.handleRefreshOutputs, http.MethodPost))
 	mux.HandleFunc("/api/player/outputs/diagnostics", requireMethod(s.handleAudioDiagnostics, http.MethodGet))
 	mux.HandleFunc("/api/player/config", requireMethod(s.handleAudioConfig, http.MethodPost))
@@ -316,9 +330,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/library/recent", requireMethod(s.handleLibraryRecent, http.MethodGet))
 	mux.HandleFunc("/api/library/albums", requireMethod(s.handleLibraryAlbums, http.MethodGet))
 	mux.HandleFunc("/api/library/album", requireMethod(s.handleLibraryAlbumDetail, http.MethodGet))
+	mux.HandleFunc("/api/library/album/cover/fetch", requireMethod(s.handleLibraryAlbumCoverFetch, http.MethodPost))
 	mux.HandleFunc("/api/library/artists", requireMethod(s.handleLibraryArtists, http.MethodGet))
 	mux.HandleFunc("/api/library/artist", requireMethod(s.handleLibraryArtistDetail, http.MethodGet))
 	mux.HandleFunc("/api/library/artist/tracks", requireMethod(s.handleLibraryArtistTracks, http.MethodGet))
+	mux.HandleFunc("/api/library/genres", requireMethod(s.handleLibraryGenres, http.MethodGet))
+	mux.HandleFunc("/api/library/genres/albums", requireMethod(s.handleLibraryGenreAlbums, http.MethodGet))
 	mux.HandleFunc("/api/library/folders", requireMethod(s.handleLibraryFolders, http.MethodGet))
 	mux.HandleFunc("/api/library/scan", requireMethod(s.handleLibraryScan, http.MethodPost))
 	mux.HandleFunc("/api/library/favorite", requireMethod(s.handleFavoriteToggle, http.MethodPost))
@@ -756,7 +773,51 @@ func (s *Server) handleAudioConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.player.SetAudioConfig(replayGain, cf)
+
+	if rawFade := strings.TrimSpace(r.URL.Query().Get("soft_fade")); rawFade != "" {
+		enabled := (strings.EqualFold(rawFade, "true") || rawFade == "1")
+		if !enabled && !strings.EqualFold(rawFade, "false") && rawFade != "0" {
+			http.Error(w, "parámetro soft_fade inválido (true/false)", http.StatusBadRequest)
+			return
+		}
+		s.player.SetSoftFade(enabled)
+	}
+
 	jsonResponse(w, http.StatusOK, s.player.GetState())
+}
+
+// handleSetDSP guarda el perfil de ecualizador DSP SoX para una salida de audio específica y recarga MPD si está activa.
+func (s *Server) handleSetDSP(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Output string `json:"output"`
+		Preset string `json:"preset"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodeJSONBody(w, r, &body); err != nil {
+			http.Error(w, "cuerpo json inválido", http.StatusBadRequest)
+			return
+		}
+	}
+
+	outputName := strings.TrimSpace(body.Output)
+	if outputName == "" {
+		outputName = strings.TrimSpace(r.URL.Query().Get("output"))
+	}
+	preset := strings.TrimSpace(body.Preset)
+	if preset == "" {
+		preset = strings.TrimSpace(r.URL.Query().Get("preset"))
+	}
+	if preset == "" {
+		http.Error(w, "parámetro preset requerido", http.StatusBadRequest)
+		return
+	}
+
+	st, err := s.player.SetOutputDSPPreset(outputName, preset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jsonResponse(w, http.StatusOK, st)
 }
 
 // handleSleepTimer programa el temporizador de apagado por minutos o al finalizar la canción actual.
@@ -1036,6 +1097,68 @@ func (s *Server) handleLibraryAlbumDetail(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// handleLibraryAlbumCoverFetch busca y descarga la carátula del álbum desde Cover Art Archive / MusicBrainz.
+func (s *Server) handleLibraryAlbumCoverFetch(w http.ResponseWriter, r *http.Request) {
+	if s.covers == nil {
+		http.Error(w, "servicio de carátulas no inicializado", http.StatusServiceUnavailable)
+		return
+	}
+
+	var albumID int64
+	if idStr := strings.TrimSpace(r.URL.Query().Get("album_id")); idStr != "" {
+		parsed, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "parámetro album_id inválido", http.StatusBadRequest)
+			return
+		}
+		albumID = parsed
+	} else {
+		var payload struct {
+			AlbumID int64 `json:"album_id"`
+		}
+		if err := decodeJSONBody(w, r, &payload); err != nil || payload.AlbumID <= 0 {
+			http.Error(w, "album_id inválido o faltante", http.StatusBadRequest)
+			return
+		}
+		albumID = payload.AlbumID
+	}
+
+	album, _, err := s.database.GetAlbumByID(albumID)
+	if err != nil || album == nil {
+		http.Error(w, "álbum no encontrado", http.StatusNotFound)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+
+	coverURL, fetchErr := s.covers.FetchAndCacheAlbumCover(ctx, album.Title, album.Artist)
+	if fetchErr != nil || coverURL == "" {
+		log.Printf("[Covers] No se pudo obtener carátula online para %q (%s): %v", album.Title, album.Artist, fetchErr)
+		http.Error(w, "no se encontró carátula en Cover Art Archive", http.StatusNotFound)
+		return
+	}
+
+	if err := s.database.UpdateAlbumCover(album.Title, coverURL); err != nil {
+		log.Printf("[DB] Error guardando carátula online de %q: %v", album.Title, err)
+		http.Error(w, "error al guardar carátula en base de datos", http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("library_updated", map[string]interface{}{
+			"scanning": false,
+			"album_id": album.ID,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"album_id":  album.ID,
+		"cover_url": coverURL,
+		"source":    "coverartarchive",
+	})
+}
+
 // handleLibraryArtists devuelve todos los artistas con sus totales.
 func (s *Server) handleLibraryArtists(w http.ResponseWriter, r *http.Request) {
 	artists, err := s.database.GetArtists()
@@ -1091,6 +1214,79 @@ func (s *Server) handleLibraryArtistTracks(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonResponse(w, http.StatusOK, tracks)
+}
+
+// handleLibraryGenres devuelve el resumen navegable de géneros y décadas disponibles en la biblioteca.
+func (s *Server) handleLibraryGenres(w http.ResponseWriter, r *http.Request) {
+	genres, decades, err := s.database.GetCategoriesOverview()
+	if err != nil {
+		log.Printf("[DB] Error listando géneros y décadas: %v", err)
+		http.Error(w, "error al consultar géneros", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"genres":  genres,
+		"decades": decades,
+	})
+}
+
+// handleLibraryGenreAlbums devuelve los álbumes filtrados por un género musical o una década concreta.
+func (s *Server) handleLibraryGenreAlbums(w http.ResponseWriter, r *http.Request) {
+	catType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	value := strings.TrimSpace(r.URL.Query().Get("value"))
+	if catType == "" {
+		catType = "genre"
+	}
+	if value == "" {
+		http.Error(w, "parámetro value requerido", http.StatusBadRequest)
+		return
+	}
+
+	var albums []db.Album
+	var err error
+	label := value
+
+	switch catType {
+	case "genre":
+		albums, err = s.database.GetAlbumsByGenre(value)
+	case "decade":
+		cleanDec := strings.TrimSuffix(strings.ToLower(value), "s")
+		decInt, parseErr := strconv.Atoi(cleanDec)
+		if parseErr != nil {
+			http.Error(w, "década inválida", http.StatusBadRequest)
+			return
+		}
+		if decInt >= 0 && decInt < 100 {
+			if decInt >= 40 {
+				decInt += 1900
+			} else {
+				decInt += 2000
+			}
+		}
+		decInt = (decInt / 10) * 10
+		if decInt >= 1900 && decInt < 2000 {
+			label = fmt.Sprintf("%02ds", decInt%100)
+		} else {
+			label = fmt.Sprintf("%ds", decInt)
+		}
+		albums, err = s.database.GetAlbumsByDecade(decInt)
+	default:
+		http.Error(w, "tipo de categoría inválido", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		log.Printf("[DB] Error listando álbumes por categoría (%s=%q): %v", catType, value, err)
+		http.Error(w, "error al consultar álbumes de la categoría", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"type":   catType,
+		"value":  value,
+		"label":  label,
+		"albums": albums,
+	})
 }
 
 // handleLibraryFolders explora el almacenamiento por carpetas (Local, NAS, USB), omitiendo archivos no musicales.
@@ -1663,6 +1859,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				newCF = cf
 				audioChanged = true
+			case "soft_fade":
+				val := strings.ToLower(strings.TrimSpace(v))
+				if val != "true" && val != "false" && val != "1" && val != "0" {
+					http.Error(w, "soft_fade inválido (true/false)", http.StatusBadRequest)
+					return
+				}
+				s.player.SetSoftFade(val == "true" || val == "1")
 			default:
 				http.Error(w, "clave de ajuste no permitida", http.StatusBadRequest)
 				return
@@ -1682,6 +1885,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"player_volume":    s.database.GetSetting("player_volume", "65"),
 		"replay_gain":      s.database.GetSetting("replay_gain", "auto"),
 		"crossfade":        s.database.GetSetting("crossfade", "2"),
+		"soft_fade":        s.database.GetSetting("soft_fade", "true"),
 	})
 }
 
