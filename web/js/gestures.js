@@ -73,15 +73,18 @@ function setupNowPlayingGestures() {
   if (!modal || !grabber) return;
 
   let startY = 0;
+  let startScrollTop = 0;
 
   modal.addEventListener('touchstart', (e) => {
     // Si se desliza en scrubber, slider de volumen o letras, no cerrar
     if (e.target.closest('input') || e.target.closest('.np-lyrics-container')) return;
     startY = e.touches[0].clientY;
+    startScrollTop = modal.scrollTop;
   }, { passive: true });
 
   modal.addEventListener('touchend', (e) => {
     if (e.target.closest('input') || e.target.closest('.np-lyrics-container')) return;
+    if (startScrollTop > 2) return;
     const diffY = e.changedTouches[0].clientY - startY;
     // Deslizamiento hacia abajo significativo (> 70px)
     if (diffY > 70) {

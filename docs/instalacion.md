@@ -514,3 +514,28 @@ sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
 * **Aviso `Your kernel does not support memory limit capabilities` en Raspberry Pi:**
   * Es solo informativo y no afecta a la reproducción. Si quieres habilitar el control de memoria en el kernel de la Pi, añade `cgroup_enable=memory cgroup_memory=1` al final de la línea en `/boot/firmware/cmdline.txt` y reinicia.
 
+
+
+# Actualizar via GIT 
+
+1 en el pc:
+git add .gitignore docker-compose.yml docker/mpd/entrypoint.sh main.go main_test.go \
+  internal/ scripts/ web/ docs/seguridad.md
+git commit -m "Endurecimiento de seguridad y robustez 24/7"
+git push origin main
+
+2 en la raspberry
+cd ~/aurabox
+git pull origin main
+
+# Proteger credenciales de tu .env actual (no se sobrescribe con git pull)
+chmod 600 .env
+
+# Actualizar el script udev USB mejorado (si usas pendrives automáticos)
+if [ -f /usr/local/bin/aurabox-usb ]; then
+  sudo cp scripts/automount-usb.sh /usr/local/bin/aurabox-usb
+  sudo chmod +x /usr/local/bin/aurabox-usb
+fi
+
+# Reconstruir aurabox y mpd de uno en uno para cuidar la RAM de la Pi
+sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
