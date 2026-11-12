@@ -604,7 +604,10 @@ func (d *DB) GetRecentTracks(limit int) ([]Track, error) {
 	return tracks, nil
 }
 
-// GetAlbums devuelve la lista consolidada de álbumes agrupados por título (sin duplicados).
+// minAlbumTracksExclusive define el umbral estricto (> 5 temas, es decir, 6 o más) para mostrar un álbum en los listados reproducibles.
+const minAlbumTracksExclusive = 5
+
+// GetAlbums devuelve la lista consolidada de álbumes reproducibles (más de 5 canciones), agrupados por título sin duplicados.
 func (d *DB) GetAlbums() ([]Album, error) {
 	rows, err := d.reader().Query(`
 		SELECT 
@@ -627,8 +630,9 @@ func (d *DB) GetAlbums() ([]Album, error) {
 		FROM tracks t
 		WHERE t.album != ''
 		GROUP BY t.album COLLATE NOCASE
+		HAVING COUNT(t.id) > ?
 		ORDER BY t.album COLLATE NOCASE ASC
-	`)
+	`, minAlbumTracksExclusive)
 	if err != nil {
 		return nil, err
 	}
@@ -950,7 +954,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	}
 	_ = tRows.Close()
 
-	// Álbumes agrupados por título (sin repetición)
+	// Álbumes agrupados por título (sin repetición y con más de 5 canciones)
 	aRows, err := rDB.Query(`
 		SELECT 
 			MIN(t.id) as id,
@@ -962,12 +966,14 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 			MAX(t.year) as year,
 			MAX(t.genre) as genre,
 			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
+			COUNT(t.id) as track_count,
 			MAX(t.source) as source
 		FROM tracks t
 		WHERE t.album != '' AND (t.album LIKE ? ESCAPE '\' OR t.artist LIKE ? ESCAPE '\')
 		GROUP BY t.album COLLATE NOCASE
+		HAVING COUNT(t.id) > ?
 		LIMIT 15
-	`, pattern, pattern)
+	`, pattern, pattern, minAlbumTracksExclusive)
 	if err != nil {
 		return tracks, nil, nil, err
 	}
@@ -975,7 +981,7 @@ func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
 	albums := make([]Album, 0)
 	for aRows.Next() {
 		var a Album
-		if err := aRows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.Source); err == nil {
+		if err := aRows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.Source); err == nil {
 			albums = append(albums, a)
 		}
 	}

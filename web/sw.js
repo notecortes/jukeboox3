@@ -2,7 +2,7 @@
 // AuraBox Service Worker - PWA Caching & Offline Recovery
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v17';
+const CACHE_NAME = 'aurabox-v18';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',

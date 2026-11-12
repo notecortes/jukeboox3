@@ -367,3 +367,87 @@ func TestLikeWildcardEscapingInSearchAndPathPrefix(t *testing.T) {
 	}
 }
 
+// TestAlbumsRequireMoreThanFiveTracks verifica que GetAlbums y Search solo listan álbumes con más de 5 canciones (> 5), manteniendo las pistas individuales accesibles.
+func TestAlbumsRequireMoreThanFiveTracks(t *testing.T) {
+	d := newTestDB(t)
+
+	insertAlbumTracks := func(albumName string, count int) int64 {
+		var firstID int64
+		batch := make([]*Track, 0, count)
+		for i := 1; i <= count; i++ {
+			batch = append(batch, &Track{
+				Path:        fmt.Sprintf("/music/local/band/%s/%02d.flac", strings.ReplaceAll(albumName, " ", "_"), i),
+				Filename:    fmt.Sprintf("%02d.flac", i),
+				Title:       fmt.Sprintf("%s Track %02d", albumName, i),
+				Artist:      "Filter Band",
+				Album:       albumName,
+				Duration:    180.0,
+				TrackNumber: i,
+				Format:      "FLAC",
+				Source:      "local",
+			})
+		}
+		if err := d.BatchUpsertTracks(batch); err != nil {
+			t.Fatalf("BatchUpsertTracks (%s) falló: %v", albumName, err)
+		}
+		all, err := d.GetAllTracks()
+		if err != nil {
+			t.Fatalf("GetAllTracks falló: %v", err)
+		}
+		for _, tr := range all {
+			if tr.Album == albumName {
+				firstID = tr.ID
+				break
+			}
+		}
+		return firstID
+	}
+
+	singleID := insertAlbumTracks("Filter Single", 1)
+	epID := insertAlbumTracks("Filter EP5", 5)
+	lp6ID := insertAlbumTracks("Filter LP6", 6)
+	lp10ID := insertAlbumTracks("Filter LP10", 10)
+
+	albums, err := d.GetAlbums()
+	if err != nil {
+		t.Fatalf("GetAlbums falló: %v", err)
+	}
+	if len(albums) != 2 {
+		t.Fatalf("se esperaban exactamente 2 álbumes (> 5 temas), obtenidos %d: %+v", len(albums), albums)
+	}
+
+	gotTitles := map[string]int{
+		albums[0].Title: albums[0].TrackCount,
+		albums[1].Title: albums[1].TrackCount,
+	}
+	if gotTitles["Filter LP6"] != 6 || gotTitles["Filter LP10"] != 10 {
+		t.Fatalf("títulos/conteos inesperados en GetAlbums: %+v", gotTitles)
+	}
+
+	// En Search, los álbumes pequeños no deben aparecer en la sección de álbumes, pero sus pistas sí en Canciones.
+	foundTracks, foundAlbums, _, err := d.Search("Filter")
+	if err != nil {
+		t.Fatalf("Search('Filter') falló: %v", err)
+	}
+	if len(foundAlbums) != 2 {
+		t.Fatalf("Search debía devolver solo 2 álbumes (> 5 temas), obtuvo %d: %+v", len(foundAlbums), foundAlbums)
+	}
+	for _, a := range foundAlbums {
+		if a.TrackCount <= 5 {
+			t.Fatalf("álbum %q con %d temas no debería aparecer en Search", a.Title, a.TrackCount)
+		}
+	}
+	if len(foundTracks) == 0 {
+		t.Fatalf("Search debía seguir encontrando las pistas individuales")
+	}
+
+	// La consulta directa por ID sigue funcionando para pistas existentes (compatibilidad de API).
+	if singleID == 0 || epID == 0 || lp6ID == 0 || lp10ID == 0 {
+		t.Fatalf("IDs inválidos: single=%d ep=%d lp6=%d lp10=%d", singleID, epID, lp6ID, lp10ID)
+	}
+	if _, epTracks, err := d.GetAlbumByID(epID); err != nil || len(epTracks) != 5 {
+		t.Fatalf("GetAlbumByID(epID) debía seguir devolviendo sus 5 pistas, err=%v len=%d", err, len(epTracks))
+	}
+}
+
+

@@ -172,7 +172,7 @@ function cleanDisplayAlbumTitle(raw) {
 
 // renderAlbumsGrid dibuja la cuadrícula o lista compacta con soporte de selección múltiple y carga incremental.
 function renderAlbumsGrid(container) {
-  let albums = state.library.albums || [];
+  let albums = (state.library.albums || []).filter(a => Number(a.track_count || 0) > 5);
   if (albumFilterQuery) {
     const q = albumFilterQuery.toLowerCase();
     albums = albums.filter(a => (a.title && a.title.toLowerCase().includes(q)) || (a.artist && a.artist.toLowerCase().includes(q)));
@@ -257,7 +257,10 @@ function renderAlbumsGrid(container) {
 function renderAlbumCardsChunked(container, albums, isList) {
   container.innerHTML = '';
   if (albums.length === 0) {
-    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">No se encontraron álbumes</div>';
+    const emptyMsg = albumFilterQuery
+      ? 'No se encontraron álbumes'
+      : 'No hay álbumes con más de 5 canciones';
+    container.innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">${emptyMsg}</div>`;
     return;
   }
 
