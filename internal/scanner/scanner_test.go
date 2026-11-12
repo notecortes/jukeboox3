@@ -1,8 +1,10 @@
 package scanner
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -100,4 +102,62 @@ func TestPruneMissingSourceTracksOnRescan(t *testing.T) {
 		t.Fatalf("la pista NAS no debe borrarse cuando /music/nas está vacío/desmontado")
 	}
 }
+
+// TestScannerEmbeddedAndFallbackCovers verifica fallback por imagen arbitraria en carpeta y extracción desde etiquetas embebidas.
+func TestScannerEmbeddedAndFallbackCovers(t *testing.T) {
+	tmpDir := t.TempDir()
+	coversDir := filepath.Join(tmpDir, "covers")
+	if err := os.MkdirAll(coversDir, 0755); err != nil {
+		t.Fatalf("MkdirAll covers falló: %v", err)
+	}
+	sc := NewLibraryScanner(nil, nil, tmpDir, "", "", coversDir)
+
+	fakeJPEG := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xFF, 0xD9}
+
+	// 1. Carpeta con archivo de imagen con nombre no estándar ("sleeve_scan.jpg")
+	dirFallback := filepath.Join(tmpDir, "ArtistA", "AlbumA")
+	if err := os.MkdirAll(dirFallback, 0755); err != nil {
+		t.Fatalf("MkdirAll fallback falló: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirFallback, "sleeve_scan.jpg"), fakeJPEG, 0644); err != nil {
+		t.Fatalf("WriteFile sleeve_scan.jpg falló: %v", err)
+	}
+	trackPathFallback := filepath.Join(dirFallback, "01 - Uno.flac")
+	if err := os.WriteFile(trackPathFallback, []byte("fLaC"), 0644); err != nil {
+		t.Fatalf("WriteFile track falló: %v", err)
+	}
+	info1, _ := os.Stat(trackPathFallback)
+	tr1 := sc.parseTrackMetadata(trackPathFallback, tmpDir, "local", info1)
+	if !strings.HasPrefix(tr1.CoverURL, "/api/covers/") || !strings.HasSuffix(tr1.CoverURL, ".jpg") {
+		t.Fatalf("se esperaba carátula fallback desde sleeve_scan.jpg, obtuvo %q", tr1.CoverURL)
+	}
+
+	// 2. Carpeta sin archivos de imagen, pero FLAC con bloque PICTURE embebido
+	dirEmbedded := filepath.Join(tmpDir, "ArtistB", "AlbumB")
+	if err := os.MkdirAll(dirEmbedded, 0755); err != nil {
+		t.Fatalf("MkdirAll embedded falló: %v", err)
+	}
+	fakePNG := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D}
+	picBlock := buildFLACPictureBlock(3, "image/png", fakePNG)
+	var flacBuf bytes.Buffer
+	flacBuf.WriteString("fLaC")
+	pLen := len(picBlock)
+	flacBuf.Write([]byte{0x86, byte(pLen >> 16), byte(pLen >> 8), byte(pLen)})
+	flacBuf.Write(picBlock)
+
+	trackPathEmb := filepath.Join(dirEmbedded, "01 - Dos.flac")
+	if err := os.WriteFile(trackPathEmb, flacBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("WriteFile flac emb falló: %v", err)
+	}
+	info2, _ := os.Stat(trackPathEmb)
+	tr2 := sc.parseTrackMetadata(trackPathEmb, tmpDir, "local", info2)
+	if !strings.HasPrefix(tr2.CoverURL, "/api/covers/") || !strings.HasSuffix(tr2.CoverURL, ".png") {
+		t.Fatalf("se esperaba carátula extraída embebida PNG, obtuvo %q", tr2.CoverURL)
+	}
+	cachedFile := filepath.Join(coversDir, filepath.Base(tr2.CoverURL))
+	if st, err := os.Stat(cachedFile); err != nil || st.Size() != int64(len(fakePNG)) {
+		t.Fatalf("archivo de carátula embebida cacheado inválido (%s): err=%v", cachedFile, err)
+	}
+}
+
 

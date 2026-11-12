@@ -6,7 +6,7 @@
 import * as api from './api.js';
 import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
 import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
-import { formatTime, showToast } from './player.js';
+import { formatTime, renderSleepTimerUI, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
 // debounce retrasa la ejecución de una función para no sobrecargar el hilo UI con entradas continuas.
@@ -22,7 +22,13 @@ function debounce(fn, wait = 150) {
 let isSelectingAlbums = false;
 let selectedAlbumIds = new Set();
 let albumViewMode = localStorage.getItem('aurabox_album_view') || 'grid-4'; // 'grid-4' | 'grid-3' | 'list'
+let albumSortBy = localStorage.getItem('aurabox_album_sort') || 'title'; // 'title' | 'year' | 'recent' | 'tracks'
+let includeAllAlbums = localStorage.getItem('aurabox_include_all_albums') === 'true';
 let albumFilterQuery = '';
+let artistFilterQuery = '';
+let recentMode = 'added';
+const savedScrollTop = { albums: 0, artists: 0, artistDetail: 0 };
+let preservedAlbumsRenderLimit = 48;
 let radioFilterQuery = '';
 let radioGenreFilter = 'Todos';
 let cachedRadios = [];
@@ -36,17 +42,53 @@ let isLoadingLibrary = false;
 let pendingLibraryReload = null;
 let lastProgressiveFetchAt = 0;
 
+// saveScrollPosition guarda el desplazamiento actual del contenedor principal bajo una clave de vista.
+function saveScrollPosition(key) {
+  const mainEl = document.querySelector('.main-content');
+  if (mainEl && key) {
+    savedScrollTop[key] = mainEl.scrollTop || 0;
+  }
+}
+
+// restoreScrollPosition recupera el desplazamiento guardado al volver desde una vista de detalle.
+function restoreScrollPosition(key) {
+  const targetTop = savedScrollTop[key] || 0;
+  if (targetTop <= 0) return;
+  requestAnimationFrame(() => {
+    const mainEl = document.querySelector('.main-content');
+    if (mainEl) mainEl.scrollTop = targetTop;
+  });
+}
+
 // shouldDeferLibraryRender comprueba si el usuario interactúa con una vista que no conviene sobrescribir durante un escaneo progresivo.
 function shouldDeferLibraryRender(isScanning = false) {
   if (isSelectingAlbums) return true;
   if (document.getElementById('albumTracksList') !== null) return true;
+  if (document.getElementById('artistDetailView') !== null) return true;
   if (state.ui.activeSubTab === 'folders') return true;
-  if (document.activeElement && document.activeElement.id === 'albumFilterInput') return true;
+  if (document.activeElement && (document.activeElement.id === 'albumFilterInput' || document.activeElement.id === 'artistFilterInput')) return true;
   if (isScanning) {
     const mainEl = document.querySelector('.main-content');
     if (mainEl && mainEl.scrollTop > 120) return true;
   }
   return false;
+}
+
+// switchToLibrarySubTab cambia a Biblioteca y activa la sub-pestaña indicada sin perder sincronización visual.
+function switchToLibrarySubTab(subtab) {
+  document.querySelectorAll('.dock-item').forEach((item) => {
+    item.classList.toggle('active', item.dataset.tab === 'library');
+  });
+  const views = ['viewLibrary', 'viewSearch', 'viewMixes', 'viewQueue', 'viewSettings'];
+  views.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', id === 'viewLibrary');
+  });
+  state.ui.activeTab = 'library';
+  state.ui.activeSubTab = subtab;
+  document.querySelectorAll('.sub-tab-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.subtab === subtab);
+  });
 }
 
 // initViews inicializa sub-pestañas, índice A-Z, buscador y panel de ajustes.
@@ -82,11 +124,18 @@ export function initViews() {
       debouncedLibraryRefresh(payload);
     } else if (event === 'player_updated') {
       renderAudioOutputs();
+    } else if (event === 'trigger_artist_mix' && payload) {
+      triggerSmartMix(payload);
+    } else if (event === 'navigate_to_artist' && payload) {
+      switchToLibrarySubTab('artists');
+      openArtistDetail(payload);
+    } else if (event === 'navigate_back_detail') {
+      navigateBackFromDetail();
     }
   });
 }
 
-// loadLibraryData descarga álbumes, artistas y pistas recientes desde la API Go sin solapamientos.
+// loadLibraryData descarga álbumes, artistas, recientes y temáticas offline desde la API Go sin solapamientos.
 export async function loadLibraryData(options = {}) {
   const { skipRender = false } = options;
   if (isLoadingLibrary) {
@@ -95,19 +144,22 @@ export async function loadLibraryData(options = {}) {
   }
   isLoadingLibrary = true;
   try {
-    const [albums, artists, recent] = await Promise.all([
-      api.getLibraryAlbums(),
+    const [albums, artists, recent, themes] = await Promise.all([
+      api.getLibraryAlbums(includeAllAlbums),
       api.getLibraryArtists(),
-      api.getLibraryRecent(20)
+      api.getLibraryRecent(30, recentMode),
+      api.getSmartMixThemes().catch(() => [])
     ]);
     state.library.albums = albums || [];
     state.library.artists = artists || [];
     state.library.recentTracks = recent || [];
+    state.library.themes = themes || [];
 
     if (!skipRender) {
       renderActiveSubTab();
     }
     populateSmartMixArtists();
+    populateSmartMixThemes();
   } catch (err) {
     console.error('[Views] Error al cargar biblioteca:', err);
   } finally {
@@ -127,6 +179,7 @@ function bindSubTabs() {
     tab.addEventListener('click', () => {
       tabs.forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
+      state.ui.detailView = null;
       state.ui.activeSubTab = tab.dataset.subtab;
       renderActiveSubTab();
     });
@@ -134,16 +187,18 @@ function bindSubTabs() {
 }
 
 // renderActiveSubTab dibuja la vista correspondiente a la sub-pestaña activa.
-function renderActiveSubTab() {
+function renderActiveSubTab(restoreScrollKey = '') {
   const container = document.getElementById('libraryContent');
   if (!container) return;
 
+  state.ui.detailView = null;
+
   switch (state.ui.activeSubTab) {
     case 'albums':
-      renderAlbumsGrid(container);
+      renderAlbumsGrid(container, restoreScrollKey === 'albums');
       break;
     case 'artists':
-      renderArtistsList(container);
+      renderArtistsList(container, restoreScrollKey === 'artists');
       break;
     case 'recent':
       renderRecentTracks(container);
@@ -160,6 +215,22 @@ function renderActiveSubTab() {
   }
 }
 
+// navigateBackFromDetail cierra la ficha actual de álbum o artista restaurando la vista previa y su scroll.
+function navigateBackFromDetail() {
+  const detail = state.ui.detailView;
+  if (!detail) {
+    renderActiveSubTab();
+    return;
+  }
+  if (detail.type === 'album' && detail.backContext?.type === 'artist' && detail.backContext.name) {
+    openArtistDetail(detail.backContext.name, { restoreScroll: true, skipPush: true });
+    return;
+  }
+  const restoreKey = detail.type === 'artist' ? 'artists' : 'albums';
+  state.ui.detailView = null;
+  renderActiveSubTab(restoreKey);
+}
+
 // cleanDisplayAlbumTitle simplifica nombres cargados de etiquetas técnicas para la interfaz.
 function cleanDisplayAlbumTitle(raw) {
   if (!raw) return 'Álbum';
@@ -170,13 +241,37 @@ function cleanDisplayAlbumTitle(raw) {
     .trim();
 }
 
-// renderAlbumsGrid dibuja la cuadrícula o lista compacta con soporte de selección múltiple y carga incremental.
-function renderAlbumsGrid(container) {
-  let albums = (state.library.albums || []).filter(a => Number(a.track_count || 0) > 5);
+// sortAlbums ordena el catálogo de álbumes según el criterio seleccionado por el usuario.
+function sortAlbums(albums, mode) {
+  const copy = [...albums];
+  switch (mode) {
+    case 'year':
+      return copy.sort((a, b) => (b.year || 0) - (a.year || 0) || (a.title || '').localeCompare(b.title || '', 'es'));
+    case 'recent':
+      return copy.sort((a, b) => (b.added_seq || 0) - (a.added_seq || 0) || (b.id || 0) - (a.id || 0));
+    case 'tracks':
+      return copy.sort((a, b) => (b.track_count || 0) - (a.track_count || 0) || (a.title || '').localeCompare(b.title || '', 'es'));
+    default:
+      return copy.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'es'));
+  }
+}
+
+// getVisibleAlbums devuelve los álbumes filtrados y ordenados según las preferencias activas de la vista.
+function getVisibleAlbums() {
+  let albums = includeAllAlbums
+    ? [...(state.library.albums || [])]
+    : (state.library.albums || []).filter(a => Number(a.track_count || 0) > 5);
+
   if (albumFilterQuery) {
     const q = albumFilterQuery.toLowerCase();
     albums = albums.filter(a => (a.title && a.title.toLowerCase().includes(q)) || (a.artist && a.artist.toLowerCase().includes(q)));
   }
+  return sortAlbums(albums, albumSortBy);
+}
+
+// renderAlbumsGrid dibuja la cuadrícula o lista compacta con ordenación, filtro, álbum aleatorio y toggle de EPs.
+function renderAlbumsGrid(container, shouldRestoreScroll = false) {
+  const albums = getVisibleAlbums();
 
   const isList = (albumViewMode === 'list');
   const is3Col = (albumViewMode === 'grid-3');
@@ -190,8 +285,20 @@ function renderAlbumsGrid(container) {
   if (!filterInput || !albumsContainer) {
     container.innerHTML = `
       <div class="albums-toolbar">
-        <input type="text" id="albumFilterInput" placeholder="Filtrar álbumes..." value="${escapeHtml(albumFilterQuery)}" style="height:34px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; max-width:200px;"/>
+        <input type="text" id="albumFilterInput" placeholder="Filtrar álbumes..." value="${escapeHtml(albumFilterQuery)}" style="height:34px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:120px;"/>
         <div class="albums-toolbar-actions">
+          <select id="albumSortSelect" class="album-sort-select" title="Ordenar álbumes">
+            <option value="title" ${albumSortBy === 'title' ? 'selected' : ''}>A–Z</option>
+            <option value="year" ${albumSortBy === 'year' ? 'selected' : ''}>Año</option>
+            <option value="recent" ${albumSortBy === 'recent' ? 'selected' : ''}>Recientes</option>
+            <option value="tracks" ${albumSortBy === 'tracks' ? 'selected' : ''}>Nº temas</option>
+          </select>
+          <button type="button" id="btnRandomAlbum" class="btn-secondary" style="height:34px; padding:0 10px; font-size:0.82rem; border-radius:var(--radius-full);" title="Reproducir un álbum al azar en 1 toque">
+            🎲
+          </button>
+          <button type="button" id="btnToggleAllAlbums" class="btn-secondary btn-ep-toggle ${includeAllAlbums ? 'active' : ''}" style="height:34px; padding:0 10px; font-size:0.78rem; border-radius:var(--radius-full);" title="Mostrar solo discos largos (>5 temas) o incluir EPs y singles">
+            ${includeAllAlbums ? 'Todos' : 'LPs (>5)'}
+          </button>
           <button type="button" id="btnToggleAlbumView" class="btn-secondary" style="height:34px; padding:0 10px; font-size:0.82rem; border-radius:var(--radius-full);" title="Cambiar tamaño de carátulas / lista">
             ${is4Col ? '⊞ 4 Col' : is3Col ? '⊟ 3 Col' : '☰ Lista'}
           </button>
@@ -208,6 +315,7 @@ function renderAlbumsGrid(container) {
 
     const debouncedFilter = debounce((val) => {
       albumFilterQuery = val;
+      preservedAlbumsRenderLimit = 48;
       renderAlbumsGrid(container);
     }, 150);
 
@@ -215,10 +323,35 @@ function renderAlbumsGrid(container) {
       debouncedFilter(e.target.value);
     });
 
+    document.getElementById('albumSortSelect')?.addEventListener('change', (e) => {
+      albumSortBy = e.target.value || 'title';
+      localStorage.setItem('aurabox_album_sort', albumSortBy);
+      preservedAlbumsRenderLimit = 48;
+      renderAlbumsGrid(container);
+    });
+
+    document.getElementById('btnRandomAlbum')?.addEventListener('click', () => {
+      playRandomAlbum(getVisibleAlbums());
+    });
+
+    document.getElementById('btnToggleAllAlbums')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      includeAllAlbums = !includeAllAlbums;
+      localStorage.setItem('aurabox_include_all_albums', includeAllAlbums ? 'true' : 'false');
+      preservedAlbumsRenderLimit = 48;
+      try {
+        const fetched = await api.getLibraryAlbums(includeAllAlbums);
+        state.library.albums = fetched || [];
+      } catch (err) {
+        showToast('Error al cargar catálogo de álbumes');
+      }
+      renderAlbumsGrid(container);
+    });
+
     document.getElementById('btnToggleAlbumView')?.addEventListener('click', (e) => {
       e.preventDefault();
-      if (is4Col) albumViewMode = 'grid-3';
-      else if (is3Col) albumViewMode = 'list';
+      if (albumViewMode === 'grid-4' || albumViewMode === 'grid') albumViewMode = 'grid-3';
+      else if (albumViewMode === 'grid-3') albumViewMode = 'list';
       else albumViewMode = 'grid-4';
       localStorage.setItem('aurabox_album_view', albumViewMode);
       renderAlbumsGrid(container);
@@ -239,6 +372,11 @@ function renderAlbumsGrid(container) {
     if (btnToggle) {
       btnToggle.textContent = is4Col ? '⊞ 4 Col' : is3Col ? '⊟ 3 Col' : '☰ Lista';
     }
+    const btnEp = document.getElementById('btnToggleAllAlbums');
+    if (btnEp) {
+      btnEp.classList.toggle('active', includeAllAlbums);
+      btnEp.textContent = includeAllAlbums ? 'Todos' : 'LPs (>5)';
+    }
     const btnSelect = document.getElementById('btnToggleSelectAlbums');
     if (btnSelect) {
       btnSelect.className = `btn-secondary ${isSelectingAlbums ? 'active' : ''}`;
@@ -249,17 +387,41 @@ function renderAlbumsGrid(container) {
   }
 
   // Renderizar álbumes en bloques progresivos (chunking)
-  renderAlbumCardsChunked(albumsContainer, albums, isList);
+  const initialCount = shouldRestoreScroll ? Math.max(48, preservedAlbumsRenderLimit) : 48;
+  renderAlbumCardsChunked(albumsContainer, albums, isList, initialCount);
   updateMultiSelectBar();
+  if (shouldRestoreScroll) {
+    restoreScrollPosition('albums');
+  }
+}
+
+// playRandomAlbum selecciona un disco al azar de la vista activa y comienza su reproducción inmediata.
+async function playRandomAlbum(candidateAlbums) {
+  const pool = Array.isArray(candidateAlbums) && candidateAlbums.length > 0
+    ? candidateAlbums
+    : (state.library.albums || []).filter(a => includeAllAlbums || Number(a.track_count || 0) > 5);
+
+  if (pool.length === 0) {
+    showToast('No hay álbumes disponibles para elegir al azar');
+    return;
+  }
+
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  try {
+    await api.addToQueue({ album_id: pick.id, mode: 'replace', clear_first: true });
+    showToast(`🎲 ${cleanDisplayAlbumTitle(pick.title)} — ${pick.artist || 'Artista'}`, 'Ver álbum', () => openAlbumDetail(pick.id));
+  } catch (err) {
+    showToast('No se pudo reproducir el álbum aleatorio');
+  }
 }
 
 // renderAlbumCardsChunked renderiza álbumes progresivamente con IntersectionObserver evitando bloqueos en móviles.
-function renderAlbumCardsChunked(container, albums, isList) {
+function renderAlbumCardsChunked(container, albums, isList, initialBatchSize = 48) {
   container.innerHTML = '';
   if (albums.length === 0) {
     const emptyMsg = albumFilterQuery
       ? 'No se encontraron álbumes'
-      : 'No hay álbumes con más de 5 canciones';
+      : (includeAllAlbums ? 'No hay álbumes en la biblioteca' : 'No hay álbumes con más de 5 canciones');
     container.innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-muted); grid-column:1/-1;">${emptyMsg}</div>`;
     return;
   }
@@ -267,8 +429,8 @@ function renderAlbumCardsChunked(container, albums, isList) {
   const BATCH_SIZE = 48;
   let currentIndex = 0;
 
-  function appendBatch() {
-    const end = Math.min(currentIndex + BATCH_SIZE, albums.length);
+  function appendBatch(batchSize = BATCH_SIZE) {
+    const end = Math.min(currentIndex + batchSize, albums.length);
     const fragment = document.createDocumentFragment();
 
     for (let i = currentIndex; i < end; i++) {
@@ -304,6 +466,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
             }
             updateMultiSelectBar();
           } else {
+            preservedAlbumsRenderLimit = Math.max(preservedAlbumsRenderLimit, currentIndex);
             openAlbumDetail(album.id);
           }
         });
@@ -311,6 +474,9 @@ function renderAlbumCardsChunked(container, albums, isList) {
       } else {
         const row = document.createElement('div');
         row.className = `album-list-row ${isSelected ? 'selected' : ''}`;
+        if (album.title) {
+          row.id = `album-${album.title.charAt(0).toUpperCase()}`;
+        }
         row.innerHTML = `
           <img class="album-list-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
           <div class="album-list-info">
@@ -331,6 +497,7 @@ function renderAlbumCardsChunked(container, albums, isList) {
             }
             updateMultiSelectBar();
           } else {
+            preservedAlbumsRenderLimit = Math.max(preservedAlbumsRenderLimit, currentIndex);
             openAlbumDetail(album.id);
           }
         });
@@ -362,16 +529,16 @@ function renderAlbumCardsChunked(container, albums, isList) {
       observer = new IntersectionObserver((entries) => {
         if (entries[0].isIntersecting) {
           observer.disconnect();
-          appendBatch();
+          appendBatch(BATCH_SIZE);
         }
       }, { rootMargin: '300px' });
       observer.observe(sentinel);
     } else {
-      setTimeout(appendBatch, 100);
+      setTimeout(() => appendBatch(BATCH_SIZE), 100);
     }
   }
 
-  appendBatch();
+  appendBatch(initialBatchSize);
 }
 
 // updateMultiSelectBar actualiza la barra flotante de selección múltiple.
@@ -421,8 +588,14 @@ function bindMultiSelectBar() {
   });
 }
 
-// openAlbumDetail carga y muestra los temas de un álbum con opción de reproducción inmediata.
-async function openAlbumDetail(albumId) {
+// openAlbumDetail carga y muestra los temas de un álbum conservando el historial y la posición de scroll anterior.
+async function openAlbumDetail(albumId, backContext = null) {
+  if (backContext?.type === 'artist') {
+    saveScrollPosition('artistDetail');
+  } else {
+    saveScrollPosition('albums');
+  }
+
   try {
     const data = await api.getLibraryAlbumDetail(albumId);
     const container = document.getElementById('libraryContent');
@@ -430,18 +603,23 @@ async function openAlbumDetail(albumId) {
 
     const album = data.album;
     const tracks = data.tracks || [];
+    state.ui.detailView = { type: 'album', id: albumId, backContext };
+    window.history.pushState({ tab: 'library', detail: 'album' }, '', '#library');
 
+    const backLabel = backContext?.type === 'artist'
+      ? `← Volver a ${backContext.name}`
+      : '← Volver a Álbumes';
     const cover = sanitizeCoverURL(album.cover_url);
     container.innerHTML = `
       <div style="margin-bottom:16px;">
         <button id="btnBackToAlbums" class="btn-secondary" style="margin-bottom:12px;">
-          ← Volver a Álbumes
+          ${escapeHtml(backLabel)}
         </button>
         <div style="display:flex; gap:16px; align-items:center;">
           <img src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:96px; height:96px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.5);"/>
-          <div>
+          <div style="min-width:0;">
             <h2 style="font-size:1.25rem; font-weight:700;">${escapeHtml(album.title)}</h2>
-            <div style="color:var(--text-secondary); font-size:0.9rem;">${escapeHtml(album.artist || 'Artista')}${album.year ? ' • ' + escapeHtml(album.year) : ''}</div>
+            <div id="albumDetailArtistLink" style="color:var(--accent-light); font-size:0.9rem; cursor:pointer; text-decoration:underline; text-decoration-style:dotted;">${escapeHtml(album.artist || 'Artista')}${album.year ? ' • ' + escapeHtml(album.year) : ''}</div>
             <div style="margin-top:8px;">
               <button id="btnPlayAlbumNow" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#fff;">
                 ▶ Reproducir Álbum (${tracks.length} temas)
@@ -453,7 +631,16 @@ async function openAlbumDetail(albumId) {
       <div class="tracks-list" id="albumTracksList"></div>
     `;
 
-    document.getElementById('btnBackToAlbums')?.addEventListener('click', () => renderActiveSubTab());
+    const mainEl = document.querySelector('.main-content');
+    if (mainEl) mainEl.scrollTop = 0;
+
+    document.getElementById('btnBackToAlbums')?.addEventListener('click', () => navigateBackFromDetail());
+    document.getElementById('albumDetailArtistLink')?.addEventListener('click', () => {
+      if (album.artist) {
+        switchToLibrarySubTab('artists');
+        openArtistDetail(album.artist);
+      }
+    });
     document.getElementById('btnPlayAlbumNow')?.addEventListener('click', () => {
       api.addToQueue({ album_id: album.id, mode: 'replace', clear_first: true });
       showToast(`Reproduciendo álbum: ${album.title}`);
@@ -471,19 +658,168 @@ async function openAlbumDetail(albumId) {
   }
 }
 
-// renderArtistsList dibuja los artistas con botón directo para "Crear Smart Mix".
-function renderArtistsList(container) {
-  const artists = state.library.artists || [];
-  if (artists.length === 0) {
+// openArtistDetail muestra la ficha completa de un artista (discografía, canciones y acciones rápidas).
+async function openArtistDetail(artistName, options = {}) {
+  const { restoreScroll = false, skipPush = false } = options;
+  if (!artistName) return;
+
+  if (!state.ui.detailView && state.ui.activeSubTab === 'artists') {
+    saveScrollPosition('artists');
+  }
+
+  const container = document.getElementById('libraryContent');
+  if (!container) return;
+
+  try {
+    const data = await api.getLibraryArtistDetail(artistName);
+    const albums = data?.albums || [];
+    const tracks = data?.tracks || [];
+    const initial = artistName.charAt(0).toUpperCase();
+
+    state.ui.detailView = { type: 'artist', name: artistName };
+    if (!skipPush) {
+      window.history.pushState({ tab: 'library', detail: 'artist', name: artistName }, '', '#library');
+    }
+
+    container.innerHTML = `
+      <div id="artistDetailView" style="margin-bottom:16px;">
+        <button id="btnBackToArtists" class="btn-secondary" style="margin-bottom:12px;">
+          ← Volver a Artistas
+        </button>
+
+        <div style="display:flex; gap:14px; align-items:center; margin-bottom:14px;">
+          <div class="artist-avatar" style="width:64px; height:64px; min-width:64px; font-size:1.5rem;">${escapeHtml(initial)}</div>
+          <div style="min-width:0;">
+            <h2 style="font-size:1.3rem; font-weight:700; word-break:break-word;">${escapeHtml(data?.artist || artistName)}</h2>
+            <div style="font-size:0.84rem; color:var(--text-secondary); margin-top:2px;">
+              ${albums.length} ${albums.length === 1 ? 'álbum' : 'álbumes'} • ${tracks.length} canciones
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px;">
+          <button type="button" id="btnPlayArtistAll" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700;">
+            ▶ Reproducir todo
+          </button>
+          <button type="button" id="btnShuffleArtistAll" class="btn-secondary">
+            🔀 Aleatorio
+          </button>
+          <button type="button" id="btnArtistSmartMix" class="btn-secondary">
+            ⚡ Smart Mix
+          </button>
+        </div>
+
+        ${albums.length > 0 ? `
+          <h3 class="settings-section-title" style="margin-bottom:10px;">Discografía</h3>
+          <div class="artist-discography-grid" id="artistAlbumsGrid"></div>
+        ` : ''}
+
+        <h3 class="settings-section-title" style="margin-bottom:10px;">Todas las Canciones</h3>
+        <div class="tracks-list" id="artistTracksList"></div>
+      </div>
+    `;
+
+    if (restoreScroll) {
+      restoreScrollPosition('artistDetail');
+    } else {
+      const mainEl = document.querySelector('.main-content');
+      if (mainEl) mainEl.scrollTop = 0;
+    }
+
+    document.getElementById('btnBackToArtists')?.addEventListener('click', () => navigateBackFromDetail());
+    document.getElementById('btnPlayArtistAll')?.addEventListener('click', async () => {
+      await api.addToQueue({ artist: artistName, mode: 'replace', clear_first: true });
+      showToast(`Reproduciendo todo de ${artistName}`);
+    });
+    document.getElementById('btnShuffleArtistAll')?.addEventListener('click', async () => {
+      await api.addToQueue({ artist: artistName, mode: 'replace', clear_first: true, shuffle: true });
+      showToast(`🔀 Reproduciendo ${artistName} en aleatorio`);
+    });
+    document.getElementById('btnArtistSmartMix')?.addEventListener('click', () => {
+      triggerSmartMix(artistName);
+    });
+
+    const albGrid = document.getElementById('artistAlbumsGrid');
+    if (albGrid) {
+      albums.forEach((alb) => {
+        const card = document.createElement('div');
+        card.className = 'album-card';
+        const cover = sanitizeCoverURL(alb.cover_url);
+        const displayTitle = cleanDisplayAlbumTitle(alb.title);
+        card.innerHTML = `
+          <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
+          <div class="album-card-title">${escapeHtml(displayTitle)}</div>
+          <div class="album-card-artist">${alb.year > 0 ? alb.year + ' • ' : ''}${alb.track_count || 0} temas</div>
+        `;
+        card.addEventListener('click', () => {
+          openAlbumDetail(alb.id, { type: 'artist', name: artistName });
+        });
+        albGrid.appendChild(card);
+      });
+    }
+
+    const tracksList = document.getElementById('artistTracksList');
+    if (tracksList) {
+      tracks.forEach((track) => {
+        const row = createTrackRow(track, () => {
+          api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
+        });
+        tracksList.appendChild(row);
+      });
+    }
+  } catch (err) {
+    showToast(`No se pudo cargar la ficha de ${artistName}`);
+  }
+}
+
+// renderArtistsList dibuja el listado de artistas con filtro instantáneo y navegación a su discografía.
+function renderArtistsList(container, shouldRestoreScroll = false) {
+  const allArtists = (state.library.artists || []).filter(a => a && a.name);
+  if (allArtists.length === 0) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No hay artistas registrados</div>';
     return;
   }
 
-  container.innerHTML = '<div class="artists-list" id="artistsList"></div>';
-  const list = document.getElementById('artistsList');
+  const q = artistFilterQuery.trim().toLowerCase();
+  const artists = q ? allArtists.filter(a => a.name.toLowerCase().includes(q)) : allArtists;
 
+  let filterInput = document.getElementById('artistFilterInput');
+  let list = document.getElementById('artistsList');
+  let countEl = document.getElementById('artistCountBadge');
+
+  if (!filterInput || !list) {
+    container.innerHTML = `
+      <div class="artist-filter-bar">
+        <input type="text" id="artistFilterInput" placeholder="Filtrar artistas..." value="${escapeHtml(artistFilterQuery)}" style="height:36px; padding:0 14px; font-size:0.84rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:0;"/>
+        <span class="badge-format" id="artistCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem; white-space:nowrap;">${artists.length} artistas</span>
+      </div>
+      <div class="artists-list" id="artistsList"></div>
+    `;
+
+    filterInput = document.getElementById('artistFilterInput');
+    list = document.getElementById('artistsList');
+    countEl = document.getElementById('artistCountBadge');
+
+    const debouncedArtistFilter = debounce((val) => {
+      artistFilterQuery = val;
+      renderArtistsList(container);
+    }, 150);
+
+    filterInput?.addEventListener('input', (e) => {
+      debouncedArtistFilter(e.target.value);
+    });
+  } else if (countEl) {
+    countEl.textContent = `${artists.length} artistas`;
+  }
+
+  list.innerHTML = '';
+  if (artists.length === 0) {
+    list.innerHTML = '<div style="text-align:center; padding:32px; color:var(--text-muted);">No hay artistas que coincidan con el filtro</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
   artists.forEach((art) => {
-    if (!art || !art.name) return;
     const row = document.createElement('div');
     row.className = 'artist-row';
     const initial = art.name.charAt(0).toUpperCase();
@@ -494,7 +830,7 @@ function renderArtistsList(container) {
         <div class="artist-avatar">${escapeHtml(initial)}</div>
         <div>
           <div class="artist-name">${escapeHtml(art.name)}</div>
-          <div class="artist-meta">${art.track_count} temas • ${escapeHtml(art.genre || 'Rock')}</div>
+          <div class="artist-meta">${art.track_count} temas • ${escapeHtml(art.genre || 'Música')}</div>
         </div>
       </div>
       <button class="btn-secondary btn-quick-mix" style="padding:4px 10px; font-size:0.75rem;">
@@ -508,21 +844,79 @@ function renderArtistsList(container) {
       triggerSmartMix(art.name);
     });
 
-    // Tap en fila -> Encolar todas sus canciones
+    // Tap en fila -> Abrir discografía y temas completos del artista
     row.addEventListener('click', () => {
-      api.addToQueue({ artist: art.name, mode: 'play_now' });
-      showToast(`Reproduciendo temas de ${art.name}`);
+      openArtistDetail(art.name);
     });
 
-    list.appendChild(row);
+    fragment.appendChild(row);
   });
+  list.appendChild(fragment);
+
+  if (shouldRestoreScroll) {
+    restoreScrollPosition('artists');
+  }
 }
 
-// renderRecentTracks dibuja los temas añadidos más recientemente.
+// renderRecentTracks dibuja pistas recientes con selector entre Añadidas, Escuchadas y Más escuchadas.
 function renderRecentTracks(container) {
+  const modeOptions = [
+    { id: 'added', label: 'Añadidas' },
+    { id: 'played', label: 'Escuchadas' },
+    { id: 'top', label: 'Top' }
+  ];
+
+  let chipsWrapper = document.getElementById('recentModeChips');
+  let list = document.getElementById('recentTracksList');
+
+  if (!chipsWrapper || !list) {
+    container.innerHTML = `
+      <div class="recent-mode-chips" id="recentModeChips">
+        ${modeOptions.map(opt => `
+          <button type="button" class="recent-mode-chip ${recentMode === opt.id ? 'active' : ''}" data-recent-mode="${opt.id}">
+            ${opt.label}
+          </button>
+        `).join('')}
+      </div>
+      <div class="tracks-list" id="recentTracksList"></div>
+    `;
+
+    chipsWrapper = document.getElementById('recentModeChips');
+    list = document.getElementById('recentTracksList');
+
+    chipsWrapper?.querySelectorAll('.recent-mode-chip').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const nextMode = btn.dataset.recentMode || 'added';
+        if (nextMode === recentMode && state.library.recentTracks?.length > 0) return;
+        recentMode = nextMode;
+        chipsWrapper.querySelectorAll('.recent-mode-chip').forEach((b) => {
+          b.classList.toggle('active', b.dataset.recentMode === recentMode);
+        });
+        list.innerHTML = '<div style="text-align:center; padding:28px; color:var(--text-muted);">Cargando pistas...</div>';
+        try {
+          const fresh = await api.getLibraryRecent(30, recentMode);
+          state.library.recentTracks = fresh || [];
+        } catch (err) {
+          showToast('Error al cargar historial reciente');
+        }
+        renderRecentTracks(container);
+      });
+    });
+  } else {
+    chipsWrapper.querySelectorAll('.recent-mode-chip').forEach((b) => {
+      b.classList.toggle('active', b.dataset.recentMode === recentMode);
+    });
+  }
+
   const tracks = state.library.recentTracks || [];
-  container.innerHTML = '<div class="tracks-list" id="recentTracksList"></div>';
-  const list = document.getElementById('recentTracksList');
+  list.innerHTML = '';
+  if (tracks.length === 0) {
+    const emptyText = recentMode === 'played'
+      ? 'Aún no has reproducido pistas en AuraBox'
+      : (recentMode === 'top' ? 'Aún no hay estadísticas de reproducción' : 'No hay pistas recientes');
+    list.innerHTML = `<div style="text-align:center; padding:36px; color:var(--text-muted);">${emptyText}</div>`;
+    return;
+  }
 
   tracks.forEach((track) => {
     const row = createTrackRow(track, () => {
@@ -984,10 +1378,52 @@ function renderSearchResults(container, data) {
         <div class="album-card-title">${escapeHtml(album.title)}</div>
         <div class="album-card-artist">${escapeHtml(album.artist)}</div>
       `;
-      card.addEventListener('click', () => openAlbumDetail(album.id));
+      card.addEventListener('click', () => {
+        switchToLibrarySubTab('albums');
+        openAlbumDetail(album.id);
+      });
       grid.appendChild(card);
     });
     container.appendChild(grid);
+  }
+
+  // Artistas coincidentes
+  if (data.artists?.length > 0) {
+    const header = document.createElement('h3');
+    header.className = 'settings-section-title';
+    header.style.marginTop = '18px';
+    header.textContent = 'Artistas';
+    container.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'artists-list';
+    data.artists.forEach((art) => {
+      const row = document.createElement('div');
+      row.className = 'artist-row';
+      const initial = (art.name || 'A').charAt(0).toUpperCase();
+      row.innerHTML = `
+        <div class="artist-row-left">
+          <div class="artist-avatar">${escapeHtml(initial)}</div>
+          <div>
+            <div class="artist-name">${escapeHtml(art.name)}</div>
+            <div class="artist-meta">${art.track_count || 0} temas</div>
+          </div>
+        </div>
+        <button type="button" class="btn-secondary btn-quick-mix" style="padding:4px 10px; font-size:0.75rem;">
+          ⚡ Smart Mix
+        </button>
+      `;
+      row.querySelector('.btn-quick-mix')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        triggerSmartMix(art.name);
+      });
+      row.addEventListener('click', () => {
+        switchToLibrarySubTab('artists');
+        openArtistDetail(art.name);
+      });
+      list.appendChild(row);
+    });
+    container.appendChild(list);
   }
 }
 
@@ -1066,6 +1502,7 @@ function bindSmartMixView() {
   }
 
   populateSmartMixArtists();
+  populateSmartMixThemes();
 }
 
 // populateSmartMixArtists genera chips interactivos para los principales artistas del catálogo.
@@ -1092,6 +1529,135 @@ function populateSmartMixArtists() {
     });
     container.appendChild(chip);
   });
+}
+
+// populateSmartMixThemes dibuja chips de géneros y décadas disponibles localmente para mixes 100% offline.
+function populateSmartMixThemes() {
+  const container = document.getElementById('mixThemeChips');
+  if (!container) return;
+
+  const themes = state.library.themes || [];
+  container.innerHTML = '';
+  if (themes.length === 0) {
+    container.innerHTML = '<span style="font-size:0.78rem; color:var(--text-muted);">Escanea etiquetas de género o año en tu música para activar mixes temáticos</span>';
+    return;
+  }
+
+  themes.forEach((theme) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'mix-chip mix-chip-theme';
+    const icon = theme.type === 'decade' ? '🗓️' : '🎸';
+    chip.textContent = `${icon} ${theme.label} (${theme.track_count})`;
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      triggerThemeMix(theme.type, theme.value, theme.label);
+    });
+    container.appendChild(chip);
+  });
+}
+
+// renderMixResultsCard dibuja el resumen interactivo y la lista de pistas del Smart Mix generado.
+function renderMixResultsCard(resultsArea, res, titleLabel, subtitleLabel) {
+  if (!resultsArea || !res) return;
+  const similarChips = (res.similar_artists || []).map(a => `<span class="badge-format" style="background:rgba(99,102,241,0.18); color:var(--accent-light); margin:3px 2px;">${escapeHtml(a)}</span>`).join(' ');
+  resultsArea.innerHTML = `
+    <div class="mix-results-card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <div style="font-size:0.75rem; text-transform:uppercase; color:var(--accent-light); font-weight:700;">Smart Mix Generado</div>
+          <h3 style="font-size:1.2rem; font-weight:700; margin-top:2px;">${escapeHtml(titleLabel)}</h3>
+          <div style="font-size:0.82rem; color:var(--text-secondary); margin-top:4px;">
+            ${escapeHtml(subtitleLabel)}
+          </div>
+        </div>
+        <span class="badge-format" style="background:var(--accent); color:#ffffff; font-weight:700; font-size:0.8rem;">▶ REPRODUCIENDO</span>
+      </div>
+
+      ${similarChips ? `
+        <div style="margin-bottom:14px;">
+          <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:6px; font-weight:600;">Artistas en esta sesión:</div>
+          <div style="display:flex; flex-wrap:wrap; gap:4px;">
+            ${similarChips}
+          </div>
+        </div>
+      ` : ''}
+
+      <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <button type="button" id="btnPlayMixNow" class="btn-secondary" style="flex:1; background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; justify-content:center;">
+          ▶ Reiniciar Mix
+        </button>
+        <button type="button" id="btnAppendMixToQueue" class="btn-secondary" style="flex:1; justify-content:center;">
+          ➕ Añadir a Cola
+        </button>
+      </div>
+
+      <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Lista de temas remezclados:</div>
+      <div class="tracks-list" style="max-height:300px; overflow-y:auto; border-radius:var(--radius-sm); border:1px solid var(--border-subtle); padding:4px;">
+        ${res.tracks.map((t, idx) => `
+          <div class="track-row" style="padding:6px 10px;">
+            <span class="track-number" style="font-size:0.75rem;">${idx + 1}</span>
+            <img src="${escapeHtml(sanitizeCoverURL(t.cover_url))}" alt="" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
+            <div class="track-info">
+              <div class="track-title" style="font-size:0.85rem;">${escapeHtml(t.title)}</div>
+              <div class="track-artist" style="font-size:0.72rem;">${escapeHtml(t.artist)} • ${escapeHtml(t.album)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btnPlayMixNow')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'replace', clear_first: true });
+    showToast('Reproduciendo Smart Mix...');
+  });
+
+  document.getElementById('btnAppendMixToQueue')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'append' });
+    showToast(`Añadidas ${res.tracks.length} canciones del Mix a la cola`);
+  });
+}
+
+// triggerThemeMix genera una sesión offline balanceada por género o década desde el catálogo local.
+async function triggerThemeMix(themeType, themeValue, label) {
+  if (isGeneratingMix) return;
+  isGeneratingMix = true;
+
+  const resultsArea = document.getElementById('mixResultsArea');
+  showToast(`Creando Smart Mix offline de ${label}...`);
+
+  if (resultsArea) {
+    resultsArea.innerHTML = `
+      <div class="mix-results-card" style="text-align:center; padding:30px;">
+        <div style="font-size:2rem; animation: pulse 1s infinite;">⚡</div>
+        <div style="font-size:0.95rem; font-weight:700; margin-top:8px;">Generando sesión "${escapeHtml(label)}"...</div>
+        <div style="font-size:0.8rem; color:var(--text-muted); margin-top:4px;">Remezclando pistas locales sin repetir artistas consecutivos</div>
+      </div>
+    `;
+  }
+
+  try {
+    const res = await api.generateThemeMix(themeType, themeValue, 30, true);
+    if (!res || !res.tracks || res.tracks.length === 0) {
+      if (resultsArea) {
+        resultsArea.innerHTML = '<div class="mix-results-card" style="color:var(--color-danger);">No se encontraron temas suficientes para esta temática</div>';
+      }
+      return;
+    }
+
+    showToast(`¡Mix "${label}" sonando! ${res.tracks.length} temas`);
+    renderMixResultsCard(resultsArea, res, label, `${res.count} canciones locales intercaladas`);
+  } catch (err) {
+    showToast(`Error al crear mix temático: ${err.message}`);
+    if (resultsArea) {
+      resultsArea.innerHTML = `<div class="mix-results-card" style="color:var(--color-danger);">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  } finally {
+    isGeneratingMix = false;
+  }
 }
 
 // triggerSmartMix busca 10 artistas similares al elegido, extrae 10 canciones de cada uno y los remezcla.
@@ -1122,66 +1688,12 @@ async function triggerSmartMix(artist) {
     }
 
     showToast(`¡Smart Mix listo! ${res.tracks.length} temas remezclados`);
-
-    if (resultsArea) {
-      const similarChips = (res.similar_artists || []).map(a => `<span class="badge-format" style="background:rgba(99,102,241,0.18); color:var(--accent-light); margin:3px 2px;">${escapeHtml(a)}</span>`).join(' ');
-      resultsArea.innerHTML = `
-        <div class="mix-results-card">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
-            <div>
-              <div style="font-size:0.75rem; text-transform:uppercase; color:var(--accent-light); font-weight:700;">Smart Mix Generado</div>
-              <h3 style="font-size:1.2rem; font-weight:700; margin-top:2px;">${escapeHtml(res.seed_artist)} & 10 Similares</h3>
-              <div style="font-size:0.82rem; color:var(--text-secondary); margin-top:4px;">
-                ${res.count} canciones de ${1 + (res.similar_artists?.length || 0)} artistas intercalados
-              </div>
-            </div>
-            <span class="badge-format" style="background:var(--accent); color:#ffffff; font-weight:700; font-size:0.8rem;">▶ REPRODUCIENDO</span>
-          </div>
-
-          <div style="margin-bottom:14px;">
-            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:6px; font-weight:600;">Artistas relacionados en esta sesión:</div>
-            <div style="display:flex; flex-wrap:wrap; gap:4px;">
-              ${similarChips || '<span style="font-size:0.8rem; color:var(--text-muted);">Artistas de tu catálogo local</span>'}
-            </div>
-          </div>
-
-          <div style="display:flex; gap:8px; margin-bottom:14px;">
-            <button type="button" id="btnPlayMixNow" class="btn-secondary" style="flex:1; background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; justify-content:center;">
-              ▶ Reiniciar Mix
-            </button>
-            <button type="button" id="btnAppendMixToQueue" class="btn-secondary" style="flex:1; justify-content:center;">
-              ➕ Añadir a Cola
-            </button>
-          </div>
-
-          <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Lista de temas remezclados:</div>
-          <div class="tracks-list" style="max-height:300px; overflow-y:auto; border-radius:var(--radius-sm); border:1px solid var(--border-subtle); padding:4px;">
-            ${res.tracks.map((t, idx) => `
-              <div class="track-row" style="padding:6px 10px;">
-                <span class="track-number" style="font-size:0.75rem;">${idx + 1}</span>
-                <img src="${escapeHtml(sanitizeCoverURL(t.cover_url))}" alt="" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
-                <div class="track-info">
-                  <div class="track-title" style="font-size:0.85rem;">${escapeHtml(t.title)}</div>
-                  <div class="track-artist" style="font-size:0.72rem;">${escapeHtml(t.artist)} • ${escapeHtml(t.album)}</div>
-                </div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-
-      document.getElementById('btnPlayMixNow')?.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'replace', clear_first: true });
-        showToast('Reproduciendo Smart Mix...');
-      });
-
-      document.getElementById('btnAppendMixToQueue')?.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await api.addToQueue({ track_ids: res.tracks.map(t => t.id), mode: 'append' });
-        showToast(`Añadidas ${res.tracks.length} canciones del Mix a la cola`);
-      });
-    }
+    renderMixResultsCard(
+      resultsArea,
+      res,
+      `${res.seed_artist} & 10 Similares`,
+      `${res.count} canciones de ${1 + (res.similar_artists?.length || 0)} artistas intercalados`
+    );
   } catch (err) {
     showToast(`Error al crear mix: ${err.message}`);
     if (resultsArea) {
@@ -1771,19 +2283,75 @@ function bindSettingsView() {
     });
   }
 
+  // Crossfade en caliente (0..15 segundos)
+  const crossfadeSlider = document.getElementById('settingCrossfade');
+  const crossfadeLabel = document.getElementById('labelCrossfade');
+  if (crossfadeSlider) {
+    const initialCF = Number(state.player.crossfade || 0);
+    crossfadeSlider.value = initialCF;
+    if (crossfadeLabel) crossfadeLabel.textContent = `${initialCF}s`;
+
+    crossfadeSlider.addEventListener('input', () => {
+      if (crossfadeLabel) crossfadeLabel.textContent = `${crossfadeSlider.value}s`;
+    });
+
+    crossfadeSlider.addEventListener('change', async () => {
+      const cf = parseInt(crossfadeSlider.value, 10);
+      const rg = (state.player.replay_gain || 'auto').toLowerCase();
+      try {
+        const updated = await api.setAudioConfig(rg, cf);
+        if (updated) updatePlayerState(updated);
+        showToast(cf === 0 ? 'Crossfade desactivado (Gapless puro)' : `Crossfade ajustado a ${cf}s`);
+      } catch (err) {
+        showToast(`Error al ajustar Crossfade: ${err.message}`);
+      }
+    });
+  }
+
+  // Selector ReplayGain en vivo (auto / track / album / off)
+  const rgButtons = document.querySelectorAll('#replayGainSelector .rg-opt');
+  rgButtons.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const rg = btn.dataset.rg || 'auto';
+      const cf = Number(state.player.crossfade || 0);
+      rgButtons.forEach((b) => b.classList.toggle('active', b === btn));
+      try {
+        const updated = await api.setAudioConfig(rg, cf);
+        if (updated) updatePlayerState(updated);
+        showToast(`ReplayGain ajustado a: ${btn.textContent}`);
+      } catch (err) {
+        showToast(`Error al cambiar ReplayGain: ${err.message}`);
+      }
+    });
+  });
+
   // Temporizador de apagado (Sleep Timer)
   const sleepButtons = document.querySelectorAll('.btn-sleep-timer');
   sleepButtons.forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const mins = parseInt(btn.dataset.minutes, 10);
-      await api.setSleepTimer(mins);
-      if (mins > 0) {
-        showToast(`Temporizador programado para apagarse en ${mins} minutos`);
-      } else {
-        showToast('Temporizador de apagado desactivado');
+      try {
+        if (btn.dataset.sleepMode === 'track_end') {
+          const updated = await api.setSleepAfterTrack();
+          if (updated) updatePlayerState(updated);
+          renderSleepTimerUI();
+          showToast('La música se pausará al terminar la canción actual');
+        } else {
+          const mins = parseInt(btn.dataset.minutes, 10);
+          const updated = await api.setSleepTimer(mins);
+          if (updated) updatePlayerState(updated);
+          renderSleepTimerUI();
+          if (mins > 0) {
+            showToast(`Temporizador programado para apagarse en ${mins} minutos`);
+          } else {
+            showToast('Temporizador de apagado desactivado');
+          }
+        }
+      } catch (err) {
+        showToast(err.message || 'No se pudo configurar el temporizador');
       }
     });
   });
+  renderSleepTimerUI();
 
   // Cargar emisoras de radio, configuración del NAS y estado HTTPS
   loadRadioStations();

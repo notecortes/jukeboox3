@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -373,4 +374,90 @@ func antiRepetitionDistribute(artistTracks map[string][]db.Track, artists []stri
 	}
 
 	return result
+}
+
+// parseDecadeStart convierte una cadena de década ("1980", "80s", "2000s") en el año inicial correspondiente.
+func parseDecadeStart(val string) (int, string, error) {
+	clean := strings.TrimSpace(strings.ToLower(val))
+	clean = strings.TrimSuffix(clean, "s")
+	clean = strings.TrimSuffix(clean, "'")
+	n, err := strconv.Atoi(clean)
+	if err != nil {
+		return 0, "", fmt.Errorf("década inválida: %q", val)
+	}
+	if n >= 0 && n < 100 {
+		if n >= 40 {
+			n += 1900
+		} else {
+			n += 2000
+		}
+	}
+	n = (n / 10) * 10
+	if n < 1940 || n > 2090 {
+		return 0, "", fmt.Errorf("década fuera de rango: %d", n)
+	}
+	label := fmt.Sprintf("%ds", n)
+	if n >= 1900 && n < 2000 {
+		label = fmt.Sprintf("%02ds", n%100)
+	}
+	return n, label, nil
+}
+
+// GenerateThemeMix crea un mix 100% offline por género o década evitando artistas consecutivos.
+func (s *SmartMixService) GenerateThemeMix(themeType, themeValue string, count int) ([]db.Track, string, error) {
+	tType := strings.ToLower(strings.TrimSpace(themeType))
+	tVal := strings.TrimSpace(themeValue)
+	if tType == "" || tVal == "" {
+		return nil, "", fmt.Errorf("debes especificar theme_type y theme_value")
+	}
+	if count <= 0 {
+		count = 30
+	}
+	if count > 120 {
+		count = 120
+	}
+
+	var candidates []db.Track
+	var label string
+	var err error
+
+	switch tType {
+	case "genre":
+		label = tVal
+		candidates, err = s.database.GetTracksByGenre(tVal, count*3)
+	case "decade":
+		decadeStart, decLabel, parseErr := parseDecadeStart(tVal)
+		if parseErr != nil {
+			return nil, "", parseErr
+		}
+		label = decLabel
+		candidates, err = s.database.GetTracksByDecade(decadeStart, count*3)
+	default:
+		return nil, "", fmt.Errorf("tipo de mix temático no soportado: %q", themeType)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if len(candidates) == 0 {
+		return nil, label, fmt.Errorf("no se encontraron pistas para %s '%s'", tType, tVal)
+	}
+
+	byArtist := make(map[string][]db.Track)
+	artistOrder := make([]string, 0)
+	for _, tr := range candidates {
+		artKey := strings.ToLower(strings.TrimSpace(tr.Artist))
+		if artKey == "" {
+			artKey = "desconocido"
+		}
+		if _, ok := byArtist[artKey]; !ok {
+			artistOrder = append(artistOrder, artKey)
+		}
+		byArtist[artKey] = append(byArtist[artKey], tr)
+	}
+
+	mixed := antiRepetitionDistribute(byArtist, artistOrder)
+	if len(mixed) > count {
+		mixed = mixed[:count]
+	}
+	return mixed, label, nil
 }

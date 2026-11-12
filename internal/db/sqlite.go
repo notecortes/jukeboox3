@@ -607,8 +607,80 @@ func (d *DB) GetRecentTracks(limit int) ([]Track, error) {
 // minAlbumTracksExclusive define el umbral estricto (> 5 temas, es decir, 6 o más) para mostrar un álbum en los listados reproducibles.
 const minAlbumTracksExclusive = 5
 
+// scanTracksFromRows recorre un conjunto de filas SQL estándar de pistas y construye el slice tipado.
+func scanTracksFromRows(rows *sql.Rows) ([]Track, error) {
+	tracks := make([]Track, 0)
+	for rows.Next() {
+		var t Track
+		var fav int
+		var createdAt string
+		err := rows.Scan(
+			&t.ID, &t.Path, &t.Filename, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.Genre,
+			&t.Year, &t.Duration, &t.TrackNumber, &t.Bitrate, &t.SampleRate, &t.Format,
+			&t.Source, &t.CoverURL, &fav, &t.PlayCount, &t.BPM, &createdAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		t.Favorite = (fav == 1)
+		tracks = append(tracks, t)
+	}
+	return tracks, nil
+}
+
+// GetRecentlyPlayedTracks devuelve las últimas pistas reproducidas realmente según el historial.
+func (d *DB) GetRecentlyPlayedTracks(limit int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := d.reader().Query(`
+		SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.album_artist, t.genre,
+		       t.year, t.duration, t.track_number, t.bitrate, t.sample_rate, t.format,
+		       t.source, t.cover_url, t.favorite, t.play_count, t.bpm, t.created_at
+		FROM tracks t
+		INNER JOIN (
+			SELECT track_id, MAX(id) AS latest_play_id
+			FROM playback_history
+			GROUP BY track_id
+		) h ON h.track_id = t.id
+		ORDER BY h.latest_play_id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTracksFromRows(rows)
+}
+
+// GetMostPlayedTracks devuelve las pistas con mayor número de reproducciones registradas.
+func (d *DB) GetMostPlayedTracks(limit int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := d.reader().Query(`
+		SELECT id, path, filename, title, artist, album, album_artist, genre,
+		       year, duration, track_number, bitrate, sample_rate, format,
+		       source, cover_url, favorite, play_count, bpm, created_at
+		FROM tracks
+		WHERE play_count > 0
+		ORDER BY play_count DESC, last_played DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTracksFromRows(rows)
+}
+
 // GetAlbums devuelve la lista consolidada de álbumes reproducibles (más de 5 canciones), agrupados por título sin duplicados.
 func (d *DB) GetAlbums() ([]Album, error) {
+	return d.GetAlbumsFiltered(minAlbumTracksExclusive)
+}
+
+// GetAlbumsFiltered devuelve álbumes consolidados filtrados por número mínimo estricto de pistas (> minTracksExclusive).
+func (d *DB) GetAlbumsFiltered(minTracksExclusive int) ([]Album, error) {
 	rows, err := d.reader().Query(`
 		SELECT 
 			MIN(t.id) as id,
@@ -626,13 +698,14 @@ func (d *DB) GetAlbums() ([]Album, error) {
 			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
 			COUNT(t.id) as track_count,
 			COALESCE(SUM(t.duration), 0) as total_duration,
-			MAX(t.source) as source
+			MAX(t.source) as source,
+			MAX(t.id) as added_seq
 		FROM tracks t
 		WHERE t.album != ''
 		GROUP BY t.album COLLATE NOCASE
 		HAVING COUNT(t.id) > ?
 		ORDER BY t.album COLLATE NOCASE ASC
-	`, minAlbumTracksExclusive)
+	`, minTracksExclusive)
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +714,42 @@ func (d *DB) GetAlbums() ([]Album, error) {
 	albums := make([]Album, 0)
 	for rows.Next() {
 		var a Album
-		if err := rows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.TotalDuration, &a.Source); err != nil {
+		if err := rows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.TotalDuration, &a.Source, &a.AddedSeq); err != nil {
+			return nil, err
+		}
+		albums = append(albums, a)
+	}
+	return albums, nil
+}
+
+// GetAlbumsByArtist devuelve la discografía completa de un artista en la biblioteca (incluyendo EPs y sencillos).
+func (d *DB) GetAlbumsByArtist(artistName string) ([]Album, error) {
+	rows, err := d.reader().Query(`
+		SELECT 
+			MIN(t.id) as id,
+			t.album as title,
+			MAX(t.artist) as artist,
+			MAX(t.year) as year,
+			MAX(t.genre) as genre,
+			COALESCE(MAX(NULLIF(t.cover_url, '')), '') as cover_url,
+			COUNT(t.id) as track_count,
+			COALESCE(SUM(t.duration), 0) as total_duration,
+			MAX(t.source) as source,
+			MAX(t.id) as added_seq
+		FROM tracks t
+		WHERE t.album != '' AND t.artist = ? COLLATE NOCASE
+		GROUP BY t.album COLLATE NOCASE
+		ORDER BY MAX(t.year) DESC, t.album COLLATE NOCASE ASC
+	`, artistName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	albums := make([]Album, 0)
+	for rows.Next() {
+		var a Album
+		if err := rows.Scan(&a.ID, &a.Title, &a.Artist, &a.Year, &a.Genre, &a.CoverURL, &a.TrackCount, &a.TotalDuration, &a.Source, &a.AddedSeq); err != nil {
 			return nil, err
 		}
 		albums = append(albums, a)
@@ -1432,6 +1540,122 @@ func (d *DB) GetSimilarArtistsOffline(seedArtist string) ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+// formatDecadeLabel formatea un año de inicio de década (ej. 1980 -> "80s", 2000 -> "2000s").
+func formatDecadeLabel(decadeStart int) string {
+	if decadeStart >= 1900 && decadeStart < 2000 {
+		return fmt.Sprintf("%02ds", decadeStart%100)
+	}
+	return fmt.Sprintf("%ds", decadeStart)
+}
+
+// GetLibraryThemes extrae los principales géneros y décadas disponibles en SQLite para generar mixes temáticos offline.
+func (d *DB) GetLibraryThemes() ([]ThemeOption, error) {
+	rDB := d.reader()
+	themes := make([]ThemeOption, 0)
+
+	gRows, err := rDB.Query(`
+		SELECT TRIM(genre) AS g, COUNT(id) AS cnt
+		FROM tracks
+		WHERE TRIM(COALESCE(genre, '')) != ''
+		GROUP BY LOWER(TRIM(genre))
+		HAVING COUNT(id) >= 2
+		ORDER BY cnt DESC, g COLLATE NOCASE ASC
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, err
+	}
+	for gRows.Next() {
+		var genre string
+		var cnt int
+		if scanErr := gRows.Scan(&genre, &cnt); scanErr == nil && genre != "" {
+			themes = append(themes, ThemeOption{
+				Type:       "genre",
+				Value:      genre,
+				Label:      genre,
+				TrackCount: cnt,
+			})
+		}
+	}
+	_ = gRows.Close()
+
+	dRows, err := rDB.Query(`
+		SELECT (year / 10) * 10 AS decade, COUNT(id) AS cnt
+		FROM tracks
+		WHERE year >= 1940 AND year <= 2039
+		GROUP BY decade
+		HAVING COUNT(id) >= 2
+		ORDER BY decade DESC
+		LIMIT 8
+	`)
+	if err != nil {
+		return themes, err
+	}
+	defer dRows.Close()
+
+	for dRows.Next() {
+		var decade, cnt int
+		if scanErr := dRows.Scan(&decade, &cnt); scanErr == nil && decade > 0 {
+			themes = append(themes, ThemeOption{
+				Type:       "decade",
+				Value:      fmt.Sprintf("%d", decade),
+				Label:      formatDecadeLabel(decade),
+				TrackCount: cnt,
+			})
+		}
+	}
+	return themes, nil
+}
+
+// GetTracksByGenre devuelve pistas aleatorias de un género musical específico (insensible a mayúsculas).
+func (d *DB) GetTracksByGenre(genre string, limit int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 60
+	}
+	clean := strings.TrimSpace(genre)
+	if clean == "" {
+		return make([]Track, 0), nil
+	}
+	rows, err := d.reader().Query(`
+		SELECT id, path, filename, title, artist, album, album_artist, genre,
+		       year, duration, track_number, bitrate, sample_rate, format,
+		       source, cover_url, favorite, play_count, bpm, created_at
+		FROM tracks
+		WHERE TRIM(genre) = ? COLLATE NOCASE
+		ORDER BY RANDOM()
+		LIMIT ?
+	`, clean, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTracksFromRows(rows)
+}
+
+// GetTracksByDecade devuelve pistas aleatorias publicadas dentro de una década concreta [decadeStart, decadeStart+9].
+func (d *DB) GetTracksByDecade(decadeStart int, limit int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 60
+	}
+	if decadeStart < 1900 || decadeStart > 2100 {
+		return make([]Track, 0), nil
+	}
+	rows, err := d.reader().Query(`
+		SELECT id, path, filename, title, artist, album, album_artist, genre,
+		       year, duration, track_number, bitrate, sample_rate, format,
+		       source, cover_url, favorite, play_count, bpm, created_at
+		FROM tracks
+		WHERE year >= ? AND year < ?
+		ORDER BY RANDOM()
+		LIMIT ?
+	`, decadeStart, decadeStart+10, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTracksFromRows(rows)
 }
 
 // Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.

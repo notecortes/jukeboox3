@@ -11,6 +11,9 @@ import { openNowPlaying, closeNowPlaying } from './gestures.js';
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
 let isScrubbing = false;
 let lastShownPlayerError = '';
+let wakeLockEnabled = (typeof localStorage !== 'undefined' && localStorage.getItem('aurabox_wake_lock') === 'true');
+let wakeLockSentinel = null;
+let lastSleepSyncAt = 0;
 
 // isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo.
 export function isLiveStreamTrack(track) {
@@ -34,11 +37,14 @@ function formatLiveSubtitle(track, streamTitle, includeStation = true) {
 export function initPlayer() {
   bindMiniPlayerControls();
   bindNowPlayingControls();
+  bindNowPlayingSleepControls();
+  initWakeLock();
   setupMediaSession();
 
   // Escuchar cambios reactivos en el estado
   subscribe((event) => {
     if (event === 'player_updated') {
+      lastSleepSyncAt = Date.now();
       const errMsg = (state.player.last_error || '').trim();
       if (errMsg && errMsg !== lastShownPlayerError) {
         lastShownPlayerError = errMsg;
@@ -48,6 +54,7 @@ export function initPlayer() {
       }
       renderMiniPlayer();
       renderNowPlaying();
+      syncWakeLockWithPlayback();
       updateMediaSession();
     }
   });
@@ -193,6 +200,204 @@ function bindNowPlayingControls() {
     artContainer.title = 'Toca para ver u ocultar letras sincronizadas';
     artContainer.addEventListener('click', toggleLyricsView);
   }
+
+  // Acción en 1 toque: Crear Smart Mix del artista que está sonando
+  const btnQuickMix = document.getElementById('npBtnQuickMix');
+  if (btnQuickMix) {
+    btnQuickMix.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const track = state.player.current_track;
+      if (!track || isLiveStreamTrack(track) || !track.artist) return;
+      notifyListeners('trigger_artist_mix', track.artist);
+    });
+  }
+
+  // Tap en nombre del artista: abrir ficha del artista en Biblioteca
+  const npArtist = document.getElementById('npArtist');
+  if (npArtist) {
+    npArtist.addEventListener('click', () => {
+      const track = state.player.current_track;
+      if (!track || isLiveStreamTrack(track) || !track.artist) return;
+      closeNowPlaying();
+      notifyListeners('navigate_to_artist', track.artist);
+    });
+  }
+}
+
+// bindNowPlayingSleepControls conecta el popover rápido del temporizador de apagado dentro de Now Playing.
+function bindNowPlayingSleepControls() {
+  const wrapper = document.getElementById('npSleepWrapper');
+  const btnSleep = document.getElementById('npBtnSleep');
+  const popover = document.getElementById('npSleepPopover');
+  if (!wrapper || !btnSleep || !popover) return;
+
+  btnSleep.addEventListener('click', (e) => {
+    e.stopPropagation();
+    popover.classList.toggle('hidden');
+  });
+
+  popover.querySelectorAll('.np-sleep-opt').forEach((opt) => {
+    opt.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      popover.classList.add('hidden');
+      try {
+        if (opt.dataset.sleepMode === 'track_end') {
+          const updated = await api.setSleepAfterTrack();
+          if (updated) Object.assign(state.player, updated);
+          showToast('La música se pausará al terminar esta canción');
+        } else {
+          const mins = parseInt(opt.dataset.minutes, 10);
+          const updated = await api.setSleepTimer(mins);
+          if (updated) Object.assign(state.player, updated);
+          showToast(mins > 0 ? `Apagado programado en ${mins} minutos` : 'Temporizador cancelado');
+        }
+        lastSleepSyncAt = Date.now();
+        renderSleepTimerUI();
+      } catch (err) {
+        showToast(err.message || 'No se pudo programar el temporizador');
+      }
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!wrapper.contains(e.target)) {
+      popover.classList.add('hidden');
+    }
+  });
+}
+
+// initWakeLock configura el modo atril para tablet (Screen Wake Lock API) manteniendo la pantalla activa al reproducir.
+function initWakeLock() {
+  const checkbox = document.getElementById('settingWakeLock');
+  const statusEl = document.getElementById('wakeLockStatusText');
+  if (!checkbox) return;
+
+  checkbox.checked = wakeLockEnabled;
+  if (!('wakeLock' in navigator)) {
+    if (statusEl) {
+      statusEl.textContent = 'Requiere HTTPS y navegador compatible para bloquear el reposo de pantalla.';
+    }
+    checkbox.addEventListener('change', () => {
+      wakeLockEnabled = checkbox.checked;
+      localStorage.setItem('aurabox_wake_lock', wakeLockEnabled ? 'true' : 'false');
+      if (wakeLockEnabled) {
+        showToast('Modo Atril guardado (requiere acceso por HTTPS para activarse)');
+      }
+    });
+    return;
+  }
+
+  checkbox.addEventListener('change', () => {
+    wakeLockEnabled = checkbox.checked;
+    localStorage.setItem('aurabox_wake_lock', wakeLockEnabled ? 'true' : 'false');
+    syncWakeLockWithPlayback();
+    showToast(wakeLockEnabled ? 'Modo Atril en Tablet activado' : 'Modo Atril en Tablet desactivado');
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      syncWakeLockWithPlayback();
+    }
+  });
+
+  syncWakeLockWithPlayback();
+}
+
+// syncWakeLockWithPlayback adquiere o libera el bloqueo de pantalla según el estado de reproducción y visibilidad.
+async function syncWakeLockWithPlayback() {
+  const statusEl = document.getElementById('wakeLockStatusText');
+  if (!('wakeLock' in navigator)) return;
+
+  const shouldHold = wakeLockEnabled && state.player.status === 'play' && document.visibilityState === 'visible';
+  if (shouldHold) {
+    if (!wakeLockSentinel) {
+      try {
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', () => {
+          wakeLockSentinel = null;
+        });
+        if (statusEl) {
+          statusEl.textContent = 'Activo: pantalla encendida mientras suena música.';
+        }
+      } catch (_) {
+        if (statusEl) {
+          statusEl.textContent = 'En espera: se activará al interactuar o usar HTTPS.';
+        }
+      }
+    }
+  } else {
+    if (wakeLockSentinel) {
+      try {
+        await wakeLockSentinel.release();
+      } catch (_) {
+        // Ignorar errores al liberar sentinel ya expirado
+      }
+      wakeLockSentinel = null;
+    }
+    if (statusEl) {
+      statusEl.textContent = wakeLockEnabled
+        ? 'Preparado: mantendrá la pantalla encendida durante la reproducción.'
+        : 'Evita que la pantalla se apague mientras suena música.';
+    }
+  }
+}
+
+// renderSleepTimerUI actualiza el distintivo del temporizador en Now Playing y en Ajustes.
+export function renderSleepTimerUI() {
+  const btnSleep = document.getElementById('npBtnSleep');
+  const badge = document.getElementById('npSleepBadge');
+  const settingsStatus = document.getElementById('settingsSleepStatus');
+
+  const mode = state.player.sleep_timer_mode || '';
+  const sec = Math.max(0, Math.floor(Number(state.player.sleep_timer_sec || 0)));
+
+  if (mode === 'track_end') {
+    btnSleep?.classList.add('active');
+    if (badge) {
+      badge.textContent = 'Fin pista';
+      badge.classList.remove('hidden');
+    }
+    if (settingsStatus) {
+      settingsStatus.textContent = 'Activo: se pausará al terminar la canción actual';
+    }
+  } else if (sec > 0) {
+    const label = formatTime(sec);
+    btnSleep?.classList.add('active');
+    if (badge) {
+      badge.textContent = label;
+      badge.classList.remove('hidden');
+    }
+    if (settingsStatus) {
+      settingsStatus.textContent = `Activo: apagado automático en ${label}`;
+    }
+  } else {
+    btnSleep?.classList.remove('active');
+    if (badge) {
+      badge.textContent = '';
+      badge.classList.add('hidden');
+    }
+    if (settingsStatus) {
+      settingsStatus.textContent = 'Temporizador inactivo';
+    }
+  }
+}
+
+// syncSettingsAudioControls mantiene sincronizados Crossfade y ReplayGain en Ajustes entre dispositivos.
+function syncSettingsAudioControls() {
+  const cfSlider = document.getElementById('settingCrossfade');
+  const cfLabel = document.getElementById('labelCrossfade');
+  const cf = Number(state.player.crossfade || 0);
+  if (cfSlider && document.activeElement !== cfSlider) {
+    cfSlider.value = cf;
+  }
+  if (cfLabel) {
+    cfLabel.textContent = `${cf}s`;
+  }
+
+  const rg = (state.player.replay_gain || 'auto').toLowerCase();
+  document.querySelectorAll('#replayGainSelector .rg-opt').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.rg === rg);
+  });
 }
 
 // optimisticTogglePlay ofrece retroalimentación visual inmediata (<100ms) antes de respuesta del servidor.
@@ -301,15 +506,24 @@ export function renderNowPlaying() {
     labelMaxVol.textContent = `${maxLimit}%`;
   }
 
-  // Actualizar insignia de salida de audio activa en cabecera
+  // Actualizar insignia de salida de audio activa en cabecera y ajustes audio/sleep
   const outBadge = document.getElementById('headerActiveOutput');
   if (outBadge) {
     outBadge.textContent = state.player.active_output || 'Audio';
   }
+  syncSettingsAudioControls();
+  renderSleepTimerUI();
+
+  const btnQuickMix = document.getElementById('npBtnQuickMix');
+  const npArtistEl = document.getElementById('npArtist');
 
   if (!track) {
     document.getElementById('npTitle').textContent = 'AuraBox Hi-Fi';
-    document.getElementById('npArtist').textContent = 'Sin reproducción activa • Elige un álbum o carpeta';
+    if (npArtistEl) {
+      npArtistEl.textContent = 'Sin reproducción activa • Elige un álbum o carpeta';
+      npArtistEl.classList.remove('clickable');
+    }
+    if (btnQuickMix) btnQuickMix.style.display = 'none';
     document.getElementById('npCover').src = '/assets/default-cover.svg';
     const badge = document.getElementById('npHifiBadge');
     if (badge) badge.textContent = 'En Espera';
@@ -334,9 +548,15 @@ export function renderNowPlaying() {
   const isLive = isLiveStreamTrack(track);
 
   document.getElementById('npTitle').textContent = track.title || 'Canción';
-  document.getElementById('npArtist').textContent = isLive
-    ? formatLiveSubtitle(track, state.player.stream_title, true)
-    : (track.artist || 'Artista');
+  if (npArtistEl) {
+    npArtistEl.textContent = isLive
+      ? formatLiveSubtitle(track, state.player.stream_title, true)
+      : (track.artist || 'Artista');
+    npArtistEl.classList.toggle('clickable', !isLive && Boolean(track.artist));
+  }
+  if (btnQuickMix) {
+    btnQuickMix.style.display = (!isLive && track.artist) ? 'flex' : 'none';
+  }
 
   const coverSrc = sanitizeCoverURL(track.cover_url);
   const npCover = document.getElementById('npCover');
@@ -446,6 +666,17 @@ export function tickProgress() {
       } else {
         durationLabel.textContent = '0:00';
       }
+    }
+  }
+
+  // Actualizar cuenta atrás visual suave cuando el temporizador por minutos está activo
+  if (state.player.sleep_timer_mode === 'minutes' && state.player.sleep_timer_sec > 0 && lastSleepSyncAt > 0) {
+    const nowMs = Date.now();
+    if (nowMs - lastSleepSyncAt >= 1000) {
+      const dec = Math.floor((nowMs - lastSleepSyncAt) / 1000);
+      lastSleepSyncAt += dec * 1000;
+      state.player.sleep_timer_sec = Math.max(0, state.player.sleep_timer_sec - dec);
+      renderSleepTimerUI();
     }
   }
 }

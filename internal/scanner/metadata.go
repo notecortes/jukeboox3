@@ -656,3 +656,266 @@ func cleanString(s string) string {
 		return r == 0 || unicode.IsControl(r) || unicode.IsSpace(r)
 	})
 }
+
+const defaultMaxEmbeddedCoverBytes = 2 << 20 // 2 MB máximo para carátulas embebidas
+
+// detectEmbeddedImageExt deduce la extensión canónica de imagen verificando sus bytes mágicos.
+func detectEmbeddedImageExt(data []byte) (string, bool) {
+	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		return ".jpg", true
+	}
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return ".png", true
+	}
+	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
+		return ".webp", true
+	}
+	if len(data) >= 4 && bytes.Equal(data[:4], []byte("GIF8")) {
+		return ".gif", true
+	}
+	if len(data) >= 2 && data[0] == 'B' && data[1] == 'M' {
+		return ".bmp", true
+	}
+	return "", false
+}
+
+// skipEncodedNull avanza sobre una cadena terminada en 0x00 (ASCII/UTF-8) o 0x00 0x00 (UTF-16) y devuelve el índice posterior.
+func skipEncodedNull(data []byte, start int, encoding byte) (int, bool) {
+	if encoding == 1 || encoding == 2 {
+		for i := start; i+1 < len(data); i += 2 {
+			if data[i] == 0 && data[i+1] == 0 {
+				return i + 2, true
+			}
+		}
+		return len(data), false
+	}
+	idx := bytes.IndexByte(data[start:], 0)
+	if idx < 0 {
+		return len(data), false
+	}
+	return start + idx + 1, true
+}
+
+// parseID3PicturePayload extrae tipo de imagen y bytes binarios desde un frame ID3v2 APIC o PIC.
+func parseID3PicturePayload(frameID string, body []byte) (byte, []byte, string) {
+	if len(body) < 6 {
+		return 0, nil, ""
+	}
+	encoding := body[0]
+	pos := 1
+	var picType byte
+
+	if frameID == "PIC" {
+		if len(body) < 6 {
+			return 0, nil, ""
+		}
+		pos += 3 // Formato 3 bytes (JPG / PNG)
+		picType = body[pos]
+		pos++
+	} else {
+		nextPos, ok := skipEncodedNull(body, pos, 0)
+		if !ok || nextPos >= len(body) {
+			return 0, nil, ""
+		}
+		pos = nextPos
+		picType = body[pos]
+		pos++
+	}
+
+	if pos >= len(body) {
+		return 0, nil, ""
+	}
+	imgOffset, ok := skipEncodedNull(body, pos, encoding)
+	if !ok || imgOffset >= len(body) {
+		return 0, nil, ""
+	}
+	imgBytes := body[imgOffset:]
+	ext, valid := detectEmbeddedImageExt(imgBytes)
+	if !valid {
+		return 0, nil, ""
+	}
+	return picType, imgBytes, ext
+}
+
+// parseFLACPicturePayload decodifica un bloque METADATA_BLOCK_PICTURE de FLAC y valida sus bytes mágicos.
+func parseFLACPicturePayload(block []byte, maxBytes int) (byte, []byte, string) {
+	if len(block) < 32 {
+		return 0, nil, ""
+	}
+	picType := byte(binary.BigEndian.Uint32(block[0:4]))
+	pos := 4
+	mimeLen := int(binary.BigEndian.Uint32(block[pos : pos+4]))
+	pos += 4
+	if mimeLen < 0 || pos+mimeLen+4 > len(block) {
+		return 0, nil, ""
+	}
+	pos += mimeLen
+	descLen := int(binary.BigEndian.Uint32(block[pos : pos+4]))
+	pos += 4
+	if descLen < 0 || pos+descLen+20 > len(block) {
+		return 0, nil, ""
+	}
+	pos += descLen
+	pos += 16 // width, height, color depth, indexed colors
+	if pos+4 > len(block) {
+		return 0, nil, ""
+	}
+	dataLen := int(binary.BigEndian.Uint32(block[pos : pos+4]))
+	pos += 4
+	if dataLen <= 0 || dataLen > maxBytes || pos+dataLen > len(block) {
+		return 0, nil, ""
+	}
+	imgBytes := block[pos : pos+dataLen]
+	ext, valid := detectEmbeddedImageExt(imgBytes)
+	if !valid {
+		return 0, nil, ""
+	}
+	return picType, imgBytes, ext
+}
+
+// extractFLACEmbeddedCover busca el bloque PICTURE (tipo 6) en un archivo FLAC acotado a maxBytes.
+func extractFLACEmbeddedCover(r io.ReadSeeker, maxBytes int) ([]byte, string) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(r, header); err != nil || string(header) != "fLaC" {
+		return nil, ""
+	}
+
+	var fallbackImg []byte
+	var fallbackExt string
+	blockHdr := make([]byte, 4)
+
+	for {
+		if _, err := io.ReadFull(r, blockHdr); err != nil {
+			break
+		}
+		isLast := (blockHdr[0] & 0x80) != 0
+		blockType := blockHdr[0] & 0x7F
+		length := int(blockHdr[1])<<16 | int(blockHdr[2])<<8 | int(blockHdr[3])
+
+		if blockType == 6 && length > 32 && length <= maxBytes+4096 {
+			blockData := make([]byte, length)
+			if _, err := io.ReadFull(r, blockData); err != nil {
+				break
+			}
+			picType, img, ext := parseFLACPicturePayload(blockData, maxBytes)
+			if len(img) > 0 {
+				if picType == 3 {
+					return img, ext
+				}
+				if len(fallbackImg) == 0 {
+					fallbackImg = img
+					fallbackExt = ext
+				}
+			}
+		} else {
+			if _, err := r.Seek(int64(length), io.SeekCurrent); err != nil {
+				break
+			}
+		}
+		if isLast {
+			break
+		}
+	}
+	return fallbackImg, fallbackExt
+}
+
+// extractID3EmbeddedCover busca frames APIC/PIC en cabeceras ID3v2 respetando un límite máximo de lectura.
+func extractID3EmbeddedCover(r io.ReadSeeker, maxBytes int) ([]byte, string) {
+	header := make([]byte, 10)
+	if _, err := io.ReadFull(r, header); err != nil || string(header[:3]) != "ID3" {
+		return nil, ""
+	}
+	version := header[3]
+	flags := header[5]
+	tagSize := syncSafeInt(header[6:10])
+	if version < 2 || version > 4 || tagSize <= 0 || tagSize > 20*1024*1024 {
+		return nil, ""
+	}
+
+	extSkip := 0
+	if (version == 3 || version == 4) && (flags&0x40) != 0 && tagSize > 4 {
+		extHdr := make([]byte, 4)
+		if _, err := io.ReadFull(r, extHdr); err == nil {
+			if version == 4 {
+				extSize := syncSafeInt(extHdr)
+				if extSize > 4 && extSize <= tagSize {
+					_, _ = r.Seek(int64(extSize-4), io.SeekCurrent)
+					extSkip = extSize
+				}
+			} else {
+				extSize := int(binary.BigEndian.Uint32(extHdr))
+				if extSize >= 0 && extSize+4 <= tagSize {
+					_, _ = r.Seek(int64(extSize), io.SeekCurrent)
+					extSkip = extSize + 4
+				}
+			}
+		}
+	}
+
+	remaining := tagSize - extSkip
+	hdrLen := 10
+	if version == 2 {
+		hdrLen = 6
+	}
+	frameHdr := make([]byte, hdrLen)
+	pos := 0
+	var fallbackImg []byte
+	var fallbackExt string
+
+	for pos+hdrLen <= remaining {
+		if _, err := io.ReadFull(r, frameHdr); err != nil {
+			break
+		}
+		pos += hdrLen
+		if frameHdr[0] == 0 {
+			break
+		}
+		frameID, frameSize := parseID3FrameHeader(frameHdr, version)
+		if !isValidFrameID(frameID) || frameSize <= 0 || int64(pos)+int64(frameSize) > int64(remaining) {
+			break
+		}
+		if (frameID == "APIC" || frameID == "PIC") && frameSize <= maxBytes+4096 {
+			body := make([]byte, frameSize)
+			if _, err := io.ReadFull(r, body); err != nil {
+				break
+			}
+			picType, img, ext := parseID3PicturePayload(frameID, body)
+			if len(img) > 0 && len(img) <= maxBytes {
+				if picType == 3 {
+					return img, ext
+				}
+				if len(fallbackImg) == 0 {
+					fallbackImg = img
+					fallbackExt = ext
+				}
+			}
+		} else {
+			if _, err := r.Seek(int64(frameSize), io.SeekCurrent); err != nil {
+				break
+			}
+		}
+		pos += frameSize
+	}
+	return fallbackImg, fallbackExt
+}
+
+// ExtractEmbeddedCover extrae una carátula embebida (ID3v2 APIC o FLAC PICTURE) acotada en bytes y validada por bytes mágicos.
+func ExtractEmbeddedCover(filePath string, maxBytes int) ([]byte, string) {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxEmbeddedCoverBytes
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, ""
+	}
+	defer f.Close()
+
+	ext := strings.ToLower(filePath)
+	if strings.HasSuffix(ext, ".flac") {
+		return extractFLACEmbeddedCover(f, maxBytes)
+	}
+	if strings.HasSuffix(ext, ".mp3") {
+		return extractID3EmbeddedCover(f, maxBytes)
+	}
+	return nil, ""
+}

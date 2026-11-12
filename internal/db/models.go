@@ -38,6 +38,15 @@ type Album struct {
 	TrackCount    int     `json:"track_count"`
 	TotalDuration float64 `json:"total_duration"`
 	Source        string  `json:"source"`
+	AddedSeq      int64   `json:"added_seq,omitempty"`
+}
+
+// ThemeOption representa un género o década disponible para generar mixes temáticos offline.
+type ThemeOption struct {
+	Type       string `json:"type"`
+	Value      string `json:"value"`
+	Label      string `json:"label"`
+	TrackCount int    `json:"track_count"`
 }
 
 // Artist representa a un músico o banda en la biblioteca de AuraBox.

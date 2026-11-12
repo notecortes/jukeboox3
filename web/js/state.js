@@ -22,6 +22,7 @@ export const state = {
     audio_outputs: [],
     active_output: 'Jack 3.5mm Analógico',
     sleep_timer_sec: 0,
+    sleep_timer_mode: '',
     stream_title: '',
     last_error: ''
   },
@@ -35,6 +36,7 @@ export const state = {
     recentTracks: [],
     albums: [],
     artists: [],
+    themes: [],
     selectedAlbum: null,
     currentFolder: null
   },
@@ -43,6 +45,7 @@ export const state = {
   ui: {
     activeTab: 'library',
     activeSubTab: 'albums',
+    detailView: null,
     isNowPlayingOpen: false,
     isLyricsViewOpen: false,
     contextMenuTarget: null,

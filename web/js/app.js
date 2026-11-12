@@ -217,8 +217,9 @@ function connectSSE() {
   };
 }
 
-// initDockNavigation gestiona la conmutación ergonómica entre las 5 secciones principales.
-function initDockNavigation() {
+// activateDockTab cambia a la pestaña indicada actualizando el DOM y opcionalmente el historial del navegador.
+function activateDockTab(targetTab, options = {}) {
+  const { pushHistory = true } = options;
   const dockItems = document.querySelectorAll('.dock-item');
   const views = {
     library: document.getElementById('viewLibrary'),
@@ -227,21 +228,29 @@ function initDockNavigation() {
     queue: document.getElementById('viewQueue'),
     settings: document.getElementById('viewSettings')
   };
+  if (!views[targetTab]) return;
+
+  dockItems.forEach((i) => i.classList.toggle('active', i.dataset.tab === targetTab));
+  Object.keys(views).forEach((vKey) => {
+    if (views[vKey]) {
+      views[vKey].classList.toggle('active', vKey === targetTab);
+    }
+  });
+
+  state.ui.activeTab = targetTab;
+  if (pushHistory) {
+    window.history.pushState({ tab: targetTab }, '', `#${targetTab}`);
+  }
+  notifyListeners('tab_changed', targetTab);
+}
+
+// initDockNavigation gestiona la conmutación ergonómica entre las 5 secciones principales.
+function initDockNavigation() {
+  const dockItems = document.querySelectorAll('.dock-item');
 
   dockItems.forEach((item) => {
     item.addEventListener('click', () => {
-      const targetTab = item.dataset.tab;
-      dockItems.forEach((i) => i.classList.remove('active'));
-      item.classList.add('active');
-
-      Object.keys(views).forEach((vKey) => {
-        if (views[vKey]) {
-          views[vKey].classList.toggle('active', vKey === targetTab);
-        }
-      });
-
-      state.ui.activeTab = targetTab;
-      window.history.pushState({ tab: targetTab }, '', `#${targetTab}`);
+      activateDockTab(item.dataset.tab, { pushHistory: true });
     });
   });
 }
@@ -260,9 +269,14 @@ function initHistoryHandling() {
       }
     }
 
+    // Si hay una vista de detalle abierta (álbum o artista), volver a la lista anterior preservando scroll
+    if (state.ui.detailView && (!e.state || !e.state.detail || e.state.detail !== state.ui.detailView.type)) {
+      notifyListeners('navigate_back_detail', e.state || null);
+      return;
+    }
+
     if (e.state && e.state.tab) {
-      const dockBtn = document.querySelector(`.dock-item[data-tab="${e.state.tab}"]`);
-      if (dockBtn) dockBtn.click();
+      activateDockTab(e.state.tab, { pushHistory: false });
     }
   });
 }
@@ -492,7 +506,7 @@ function initWebStreamPlayer() {
 // registerServiceWorker instala el Service Worker y fuerza la actualización inmediata.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js?v=18').then((reg) => {
+    navigator.serviceWorker.register('/sw.js?v=19').then((reg) => {
       reg.update();
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);

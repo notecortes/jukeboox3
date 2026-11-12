@@ -605,6 +605,10 @@ func (ls *LibraryScanner) parseTrackMetadata(filePath, rootPath, sourceName stri
 		albumArtist = artist
 	}
 
+	if coverURL == "" {
+		coverURL = ls.findOrCacheEmbeddedCover(dir, album, filePath)
+	}
+
 	return &db.Track{
 		Path:        filePath,
 		Filename:    filename,
@@ -800,10 +804,11 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 	ls.cacheMu.RUnlock()
 
 	preferredNames := []string{
-		"cover.jpg", "cover.jpeg", "cover.png",
-		"folder.jpg", "folder.jpeg", "folder.png",
-		"front.jpg", "front.jpeg", "front.png",
-		"artwork.jpg", "artwork.png",
+		"cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
+		"folder.jpg", "folder.jpeg", "folder.png", "folder.webp",
+		"front.jpg", "front.jpeg", "front.png", "front.webp",
+		"album.jpg", "album.jpeg", "album.png", "album.webp",
+		"artwork.jpg", "artwork.jpeg", "artwork.png",
 	}
 
 	result := ""
@@ -815,26 +820,51 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 				filesByLower[strings.ToLower(name)] = name
 			}
 		}
+
+		tryCacheImage := func(actualName string) string {
+			candPath := filepath.Join(dir, actualName)
+			candInfo, statErr := os.Lstat(candPath)
+			if statErr != nil || !candInfo.Mode().IsRegular() || candInfo.Size() <= 0 || candInfo.Size() > maxCoverFileBytes {
+				return ""
+			}
+			hash := md5.Sum([]byte(dir))
+			hashStr := hex.EncodeToString(hash[:])
+			ext := strings.ToLower(filepath.Ext(actualName))
+			destName := hashStr + ext
+			destPath := filepath.Join(ls.coversDir, destName)
+
+			if _, err := os.Stat(destPath); os.IsNotExist(err) {
+				if copyErr := copyFile(candPath, destPath); copyErr != nil {
+					return ""
+				}
+			}
+			return fmt.Sprintf("/api/covers/%s", destName)
+		}
+
 		for _, pref := range preferredNames {
 			if actualName, ok := filesByLower[pref]; ok {
-				candPath := filepath.Join(dir, actualName)
-				candInfo, statErr := os.Lstat(candPath)
-				if statErr != nil || !candInfo.Mode().IsRegular() || candInfo.Size() <= 0 || candInfo.Size() > maxCoverFileBytes {
-					continue
+				if cachedURL := tryCacheImage(actualName); cachedURL != "" {
+					result = cachedURL
+					break
 				}
-				hash := md5.Sum([]byte(dir))
-				hashStr := hex.EncodeToString(hash[:])
-				ext := strings.ToLower(filepath.Ext(actualName))
-				destName := hashStr + ext
-				destPath := filepath.Join(ls.coversDir, destName)
+			}
+		}
 
-				if _, err := os.Stat(destPath); os.IsNotExist(err) {
-					if copyErr := copyFile(candPath, destPath); copyErr != nil {
-						continue
-					}
+		// Fallback inteligente: si no hay nombre canónico (cover/folder/front), aprovechar cualquier imagen válida en la carpeta
+		if result == "" {
+			var otherImages []string
+			for lowerName, actualName := range filesByLower {
+				ext := filepath.Ext(lowerName)
+				if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
+					otherImages = append(otherImages, actualName)
 				}
-				result = fmt.Sprintf("/api/covers/%s", destName)
-				break
+			}
+			sort.Strings(otherImages)
+			for _, imgName := range otherImages {
+				if cachedURL := tryCacheImage(imgName); cachedURL != "" {
+					result = cachedURL
+					break
+				}
 			}
 		}
 	}
@@ -844,6 +874,78 @@ func (ls *LibraryScanner) findOrCacheCover(dir string) string {
 		clear(ls.coverCache)
 	}
 	ls.coverCache[dir] = result
+	ls.cacheMu.Unlock()
+
+	return result
+}
+
+// findOrCacheEmbeddedCover extrae y cachea la carátula incrustada en etiquetas cuando la carpeta carece de archivos de imagen.
+func (ls *LibraryScanner) findOrCacheEmbeddedCover(dir, album, filePath string) string {
+	extLower := strings.ToLower(filepath.Ext(filePath))
+	if extLower != ".mp3" && extLower != ".flac" {
+		return ""
+	}
+
+	normAlbum := strings.ToLower(strings.TrimSpace(album))
+	cacheKey := "emb:" + dir + "\x00" + normAlbum
+	if normAlbum == "" || normAlbum == "sencillos" || normAlbum == "colección" {
+		cacheKey = "emb-file:" + filePath
+	}
+
+	ls.cacheMu.RLock()
+	if cached, ok := ls.coverCache[cacheKey]; ok {
+		ls.cacheMu.RUnlock()
+		return cached
+	}
+	ls.cacheMu.RUnlock()
+
+	ls.coverCopyMu.Lock()
+	defer ls.coverCopyMu.Unlock()
+
+	ls.cacheMu.RLock()
+	if cached, ok := ls.coverCache[cacheKey]; ok {
+		ls.cacheMu.RUnlock()
+		return cached
+	}
+	ls.cacheMu.RUnlock()
+
+	hash := md5.Sum([]byte(cacheKey))
+	hashStr := hex.EncodeToString(hash[:])
+	result := ""
+
+	// Reutilizar si ya se extrajo en un escaneo previo sin reabrir el audio por red
+	for _, candidateExt := range []string{".jpg", ".png", ".webp", ".gif", ".bmp"} {
+		destName := hashStr + candidateExt
+		destPath := filepath.Join(ls.coversDir, destName)
+		if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
+			result = fmt.Sprintf("/api/covers/%s", destName)
+			break
+		}
+	}
+
+	if result == "" {
+		imgBytes, imgExt := ExtractEmbeddedCover(filePath, defaultMaxEmbeddedCoverBytes)
+		if len(imgBytes) > 0 && imgExt != "" {
+			if err := os.MkdirAll(ls.coversDir, 0755); err == nil {
+				destName := hashStr + imgExt
+				destPath := filepath.Join(ls.coversDir, destName)
+				tmpDst := destPath + ".tmp"
+				if writeErr := os.WriteFile(tmpDst, imgBytes, 0644); writeErr == nil {
+					if renErr := os.Rename(tmpDst, destPath); renErr == nil {
+						result = fmt.Sprintf("/api/covers/%s", destName)
+					} else {
+						_ = os.Remove(tmpDst)
+					}
+				}
+			}
+		}
+	}
+
+	ls.cacheMu.Lock()
+	if len(ls.coverCache) >= maxCoverCacheEntries {
+		clear(ls.coverCache)
+	}
+	ls.coverCache[cacheKey] = result
 	ls.cacheMu.Unlock()
 
 	return result

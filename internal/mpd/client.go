@@ -52,6 +52,7 @@ type PlayerState struct {
 	AudioOutputs   []OutputInfo `json:"audio_outputs"`
 	ActiveOutput   string       `json:"active_output"`
 	SleepTimerSec  int          `json:"sleep_timer_sec"`
+	SleepTimerMode string       `json:"sleep_timer_mode,omitempty"`
 	StreamTitle    string       `json:"stream_title,omitempty"`
 	LastError      string       `json:"last_error,omitempty"`
 }
@@ -86,6 +87,8 @@ type Client struct {
 	lastTrackSkipAt   time.Time
 	lastEmptyResyncAt time.Time
 	sleepEndsAt       time.Time
+	sleepTrackIdx     int
+	sleepTrackPath    string
 	reconnectCh       chan struct{}
 	persistCh         chan func()
 	stopCh            chan struct{}
@@ -125,9 +128,10 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		eventsHub:   hub,
 		database:    database,
 		queue:       make([]db.Track, 0),
-		reconnectCh: make(chan struct{}, 1),
-		persistCh:   make(chan func(), 256),
-		stopCh:      make(chan struct{}),
+		reconnectCh:   make(chan struct{}, 1),
+		persistCh:     make(chan func(), 256),
+		stopCh:        make(chan struct{}),
+		sleepTrackIdx: -1,
 		state: PlayerState{
 			Status:         "stop",
 			CurrentIndex:   -1,
@@ -1136,6 +1140,7 @@ func (c *Client) syncStatusFromMPD() bool {
 	var skipCtrlNano int64
 	var skipNextIdx int
 	var prevLastErr string
+	triggerTrackEndPause := false
 
 	c.mu.Lock()
 	if c.lastControlNano.Load() > startedAt {
@@ -1161,6 +1166,17 @@ func (c *Client) syncStatusFromMPD() bool {
 	}
 
 	if songIdx >= 0 && songIdx < len(c.queue) && (songIdx != c.state.CurrentIndex || c.state.CurrentTrack == nil) {
+		if c.state.SleepTimerMode == "track_end" && c.sleepTrackIdx >= 0 && songIdx != c.sleepTrackIdx {
+			c.state.SleepTimerMode = ""
+			c.state.SleepTimerSec = 0
+			c.sleepEndsAt = time.Time{}
+			c.sleepTrackIdx = -1
+			c.sleepTrackPath = ""
+			stateChanged = true
+			if mpdState == "play" {
+				triggerTrackEndPause = true
+			}
+		}
 		trackCopy := c.queue[songIdx]
 		c.state.CurrentIndex = songIdx
 		c.state.CurrentTrack = &trackCopy
@@ -1300,6 +1316,15 @@ func (c *Client) syncStatusFromMPD() bool {
 			needTrackSkip = true
 		}
 	}
+
+	if c.state.SleepTimerMode == "track_end" && prevStatus == "play" && mpdState == "stop" && mpdErr == "" && !needEmptyResync {
+		c.state.SleepTimerMode = ""
+		c.state.SleepTimerSec = 0
+		c.sleepEndsAt = time.Time{}
+		c.sleepTrackIdx = -1
+		c.sleepTrackPath = ""
+		stateChanged = true
+	}
 	c.mu.Unlock()
 
 	if mpdErr != "" && mpdErr != prevLastErr {
@@ -1326,6 +1351,11 @@ func (c *Client) syncStatusFromMPD() bool {
 
 	if clampVolTarget >= 0 {
 		_, _ = c.sendRawCommand(fmt.Sprintf("setvol %d\n", clampVolTarget))
+	}
+
+	if triggerTrackEndPause {
+		c.Pause()
+		return true
 	}
 
 	if trackChanged || stateChanged {
@@ -1363,13 +1393,43 @@ func (c *Client) progressTicker() {
 		} else {
 			c.mu.Lock()
 			advanceNext := false
+			offlineTrackEndPause := false
 			if c.state.Status == "play" && c.state.CurrentTrack != nil {
 				c.state.ElapsedTime += 1.0
 				if c.state.Duration > 0 && c.state.ElapsedTime >= c.state.Duration {
-					advanceNext = true
+					if c.state.SleepTimerMode == "track_end" {
+						c.state.SleepTimerMode = ""
+						c.state.SleepTimerSec = 0
+						c.sleepEndsAt = time.Time{}
+						c.sleepTrackIdx = -1
+						c.sleepTrackPath = ""
+						c.state.ElapsedTime = 0
+						if c.state.CurrentIndex+1 < len(c.queue) {
+							c.state.CurrentIndex++
+							trCopy := c.queue[c.state.CurrentIndex]
+							c.state.CurrentTrack = &trCopy
+							c.state.Duration = trCopy.Duration
+							c.state.Status = "pause"
+						} else if c.state.Repeat && len(c.queue) > 0 {
+							c.state.CurrentIndex = 0
+							trCopy := c.queue[0]
+							c.state.CurrentTrack = &trCopy
+							c.state.Duration = trCopy.Duration
+							c.state.Status = "pause"
+						} else {
+							c.state.Status = "stop"
+						}
+						offlineTrackEndPause = true
+					} else {
+						advanceNext = true
+					}
 				}
 			}
 			c.mu.Unlock()
+			if offlineTrackEndPause {
+				c.broadcastState()
+				continue
+			}
 			if advanceNext {
 				c.Next()
 				continue
@@ -1383,12 +1443,15 @@ func (c *Client) progressTicker() {
 			rem := int(time.Until(c.sleepEndsAt).Seconds())
 			if rem <= 0 {
 				c.state.SleepTimerSec = 0
+				c.state.SleepTimerMode = ""
 				c.sleepEndsAt = time.Time{}
+				c.sleepTrackIdx = -1
+				c.sleepTrackPath = ""
 				triggerSleepPause = true
 			} else {
 				c.state.SleepTimerSec = rem
 			}
-		} else {
+		} else if c.state.SleepTimerMode != "track_end" {
 			c.state.SleepTimerSec = 0
 		}
 		isPlaying := (c.state.Status == "play")
@@ -1521,6 +1584,10 @@ func (c *Client) PlayIndex(index int) {
 	c.state.StreamTitle = ""
 	c.radioRetryCount = 0
 	c.trackSkipCount = 0
+	if c.state.SleepTimerMode == "track_end" {
+		c.sleepTrackIdx = index
+		c.sleepTrackPath = trackCopy.Path
+	}
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1643,6 +1710,12 @@ func (c *Client) Next() {
 			c.state.LastError = ""
 			c.radioRetryCount = 0
 			c.trackSkipCount = 0
+			if c.state.SleepTimerMode == "track_end" {
+				c.state.SleepTimerMode = ""
+				c.state.SleepTimerSec = 0
+				c.sleepTrackIdx = -1
+				c.sleepTrackPath = ""
+			}
 			c.markControlUpdate()
 			c.mu.Unlock()
 			if c.isConnected() {
@@ -1665,6 +1738,10 @@ func (c *Client) Next() {
 	c.state.StreamTitle = ""
 	c.radioRetryCount = 0
 	c.trackSkipCount = 0
+	if c.state.SleepTimerMode == "track_end" {
+		c.sleepTrackIdx = nextIdx
+		c.sleepTrackPath = trackCopy.Path
+	}
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1723,6 +1800,10 @@ func (c *Client) Prev() {
 	c.state.StreamTitle = ""
 	c.radioRetryCount = 0
 	c.trackSkipCount = 0
+	if c.state.SleepTimerMode == "track_end" {
+		c.sleepTrackIdx = prevIdx
+		c.sleepTrackPath = trackCopy.Path
+	}
 	trackID := trackCopy.ID
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -1869,6 +1950,12 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 	c.state.StreamTitle = ""
 	c.radioRetryCount = 0
 	c.trackSkipCount = 0
+	if c.state.SleepTimerMode == "track_end" {
+		c.state.SleepTimerMode = ""
+		c.state.SleepTimerSec = 0
+		c.sleepTrackIdx = -1
+		c.sleepTrackPath = ""
+	}
 	if autoPlay {
 		c.state.Status = "play"
 	} else {
@@ -2491,6 +2578,9 @@ func (c *Client) MoveInQueue(from, to int) {
 	} else if from > c.state.CurrentIndex && to <= c.state.CurrentIndex {
 		c.state.CurrentIndex++
 	}
+	if c.state.SleepTimerMode == "track_end" {
+		c.sleepTrackIdx = c.state.CurrentIndex
+	}
 	c.markControlUpdate()
 	c.mu.Unlock()
 
@@ -2556,8 +2646,17 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.LastError = ""
 		c.radioRetryCount = 0
 		c.trackSkipCount = 0
+		if c.state.SleepTimerMode == "track_end" {
+			c.state.SleepTimerMode = ""
+			c.state.SleepTimerSec = 0
+			c.sleepTrackIdx = -1
+			c.sleepTrackPath = ""
+		}
 	} else if index < c.state.CurrentIndex {
 		c.state.CurrentIndex--
+		if c.state.SleepTimerMode == "track_end" {
+			c.sleepTrackIdx = c.state.CurrentIndex
+		}
 	} else if index == c.state.CurrentIndex {
 		if c.state.CurrentIndex >= len(c.queue) {
 			c.state.CurrentIndex = len(c.queue) - 1
@@ -2568,6 +2667,10 @@ func (c *Client) RemoveFromQueue(index int) {
 		c.state.ElapsedTime = 0
 		c.state.StreamTitle = ""
 		c.state.LastError = ""
+		if c.state.SleepTimerMode == "track_end" {
+			c.sleepTrackIdx = c.state.CurrentIndex
+			c.sleepTrackPath = trackCopy.Path
+		}
 	}
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -2627,6 +2730,12 @@ func (c *Client) ClearQueue() {
 	c.state.LastError = ""
 	c.radioRetryCount = 0
 	c.trackSkipCount = 0
+	if c.state.SleepTimerMode == "track_end" {
+		c.state.SleepTimerMode = ""
+		c.state.SleepTimerSec = 0
+		c.sleepTrackIdx = -1
+		c.sleepTrackPath = ""
+	}
 	c.mpdQueueSynced.Store(false)
 	c.markControlUpdate()
 	c.mu.Unlock()
@@ -3068,6 +3177,9 @@ func (c *Client) StartSleepTimer(minutes int) {
 	if minutes <= 0 {
 		c.sleepEndsAt = time.Time{}
 		c.state.SleepTimerSec = 0
+		c.state.SleepTimerMode = ""
+		c.sleepTrackIdx = -1
+		c.sleepTrackPath = ""
 		c.mu.Unlock()
 		c.broadcastState()
 		return
@@ -3075,9 +3187,30 @@ func (c *Client) StartSleepTimer(minutes int) {
 
 	c.sleepEndsAt = time.Now().Add(time.Duration(minutes) * time.Minute)
 	c.state.SleepTimerSec = minutes * 60
+	c.state.SleepTimerMode = "minutes"
+	c.sleepTrackIdx = -1
+	c.sleepTrackPath = ""
 	c.mu.Unlock()
 
 	c.broadcastState()
+}
+
+// StartSleepAfterTrack programa la pausa automática al terminar exactamente la canción actualmente en reproducción.
+func (c *Client) StartSleepAfterTrack() error {
+	c.mu.Lock()
+	if len(c.queue) == 0 || c.state.CurrentIndex < 0 || c.state.CurrentTrack == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("no hay ninguna canción en reproducción")
+	}
+	c.sleepEndsAt = time.Time{}
+	c.state.SleepTimerSec = 0
+	c.state.SleepTimerMode = "track_end"
+	c.sleepTrackIdx = c.state.CurrentIndex
+	c.sleepTrackPath = c.state.CurrentTrack.Path
+	c.mu.Unlock()
+
+	c.broadcastState()
+	return nil
 }
 
 // CancelSleepTimer desactiva el temporizador de apagado.

@@ -16,8 +16,8 @@
 
   <!-- Hojas de estilo CSS modulares -->
   <link rel="stylesheet" href="/css/app.css?v=12"/>
-  <link rel="stylesheet" href="/css/player.css?v=13"/>
-  <link rel="stylesheet" href="/css/views.css?v=12"/>
+  <link rel="stylesheet" href="/css/player.css?v=14"/>
+  <link rel="stylesheet" href="/css/views.css?v=13"/>
 </head>
 <body>
   <div id="app">
@@ -108,6 +108,13 @@
               </div>
             </div>
 
+            <div style="margin-top:12px;">
+              <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">Por Género o Década (100% Offline):</span>
+              <div class="mix-chips-wrapper" id="mixThemeChips">
+                <!-- Chips temáticos inyectados dinámicamente -->
+              </div>
+            </div>
+
             <button type="button" id="btnGenerateMix" class="btn-secondary" style="width:100%; height:46px; margin-top:14px; background:var(--accent-gradient); border:none; color:#ffffff; font-size:0.95rem; font-weight:700; justify-content:center; box-shadow:0 4px 16px var(--accent-glow);">
               ⚡ Crear y Remezclar Smart Mix
             </button>
@@ -180,8 +187,34 @@
             </div>
 
             <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
-              <div style="font-size:0.85rem; font-weight:600; margin-bottom:4px;">Normalización de Volumen ReplayGain</div>
-              <p style="font-size:0.75rem; color:var(--text-muted);">Modo pista / álbum automático activado en MPD.</p>
+              <div style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:600; margin-bottom:4px;">
+                <span>Crossfade Inteligente</span>
+                <span id="labelCrossfade">2s</span>
+              </div>
+              <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:8px;">Transición suave entre pistas consecutivas (0s = Gapless puro).</p>
+              <input type="range" id="settingCrossfade" min="0" max="15" value="2" style="width:100%; accent-color:var(--accent);"/>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+              <div style="font-size:0.85rem; font-weight:600; margin-bottom:4px;">Normalización de Volumen (ReplayGain)</div>
+              <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:8px;">Equilibra diferencias de volumen entre álbumes y pistas en MPD.</p>
+              <div class="rg-segmented" id="replayGainSelector" role="group" aria-label="Modo ReplayGain">
+                <button type="button" class="rg-opt active" data-rg="auto">Auto</button>
+                <button type="button" class="rg-opt" data-rg="track">Pista</button>
+                <button type="button" class="rg-opt" data-rg="album">Álbum</button>
+                <button type="button" class="rg-opt" data-rg="off">Off</button>
+              </div>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div style="min-width:0;">
+                <div style="font-size:0.85rem; font-weight:600;">Modo Atril en Tablet (Mantener Pantalla)</div>
+                <p id="wakeLockStatusText" style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Evita que la pantalla se apague mientras suena música.</p>
+              </div>
+              <label class="toggle-switch" title="Mantener pantalla encendida durante reproducción">
+                <input type="checkbox" id="settingWakeLock"/>
+                <span class="toggle-slider"></span>
+              </label>
             </div>
           </div>
         </div>
@@ -190,15 +223,21 @@
         <div class="settings-section">
           <div class="settings-section-title">Temporizador de Apagado (Sleep Timer)</div>
           <div class="settings-card">
-            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
-              <button class="btn-secondary btn-sleep-timer" data-minutes="15">15 min</button>
-              <button class="btn-secondary btn-sleep-timer" data-minutes="30">30 min</button>
-              <button class="btn-secondary btn-sleep-timer" data-minutes="45">45 min</button>
-              <button class="btn-secondary btn-sleep-timer" data-minutes="60">60 min</button>
+            <div id="settingsSleepStatus" style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:10px; font-weight:600;">
+              Temporizador inactivo
             </div>
-            <div style="margin-top:8px;">
-              <button class="btn-secondary btn-sleep-timer" data-minutes="0" style="width:100%; justify-content:center; color:var(--color-danger);">
-                Cancelar Temporizador
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+              <button type="button" class="btn-secondary btn-sleep-timer" data-minutes="15">15 min</button>
+              <button type="button" class="btn-secondary btn-sleep-timer" data-minutes="30">30 min</button>
+              <button type="button" class="btn-secondary btn-sleep-timer" data-minutes="45">45 min</button>
+              <button type="button" class="btn-secondary btn-sleep-timer" data-minutes="60">60 min</button>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button type="button" class="btn-secondary btn-sleep-timer" data-sleep-mode="track_end" style="flex:1; justify-content:center;">
+                🎵 Al terminar esta pista
+              </button>
+              <button type="button" class="btn-secondary btn-sleep-timer" data-minutes="0" style="justify-content:center; color:var(--color-danger);">
+                Cancelar
               </button>
             </div>
           </div>
@@ -438,14 +477,31 @@
             <button type="button" class="badge-format" id="npBadgeLyrics" style="cursor:pointer; background:rgba(99,102,241,0.25); border:1px solid var(--accent); color:var(--accent-light); font-weight:700;">🎤 Letras</button>
           </div>
 
-          <button class="np-header-btn" id="npBtnLyrics" title="Ver Letras (LRCLIB)">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          </button>
+          <div class="np-header-actions">
+            <div class="np-sleep-wrapper" id="npSleepWrapper">
+              <button type="button" class="np-header-btn np-sleep-btn" id="npBtnSleep" title="Temporizador de apagado">
+                <span aria-hidden="true">🌙</span>
+                <span class="np-sleep-badge hidden" id="npSleepBadge"></span>
+              </button>
+              <div class="np-sleep-popover hidden" id="npSleepPopover">
+                <div class="np-sleep-popover-title">Apagar música</div>
+                <button type="button" class="np-sleep-opt" data-minutes="15">15 min</button>
+                <button type="button" class="np-sleep-opt" data-minutes="30">30 min</button>
+                <button type="button" class="np-sleep-opt" data-minutes="45">45 min</button>
+                <button type="button" class="np-sleep-opt" data-minutes="60">60 min</button>
+                <button type="button" class="np-sleep-opt" data-sleep-mode="track_end">Al terminar pista</button>
+                <button type="button" class="np-sleep-opt danger" data-minutes="0">Cancelar</button>
+              </div>
+            </div>
+            <button class="np-header-btn" id="npBtnLyrics" title="Ver Letras (LRCLIB)">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Carátula Dominante -->
@@ -460,13 +516,18 @@
         <div class="np-meta-row">
           <div class="np-track-details">
             <div id="npTitle" class="np-track-title">Canción</div>
-            <div id="npArtist" class="np-track-artist">Artista</div>
+            <div id="npArtist" class="np-track-artist np-artist-link" title="Ver discografía del artista">Artista</div>
           </div>
-          <button id="npBtnFav" class="btn-favorite" title="Marcar Favorito">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-            </svg>
-          </button>
+          <div class="np-meta-actions">
+            <button type="button" id="npBtnQuickMix" class="btn-np-quickmix" title="Crear Smart Mix de este artista">
+              ⚡
+            </button>
+            <button id="npBtnFav" class="btn-favorite" title="Marcar Favorito">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Barra de Progreso y Tiempo -->
@@ -560,7 +621,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=18"></script>
+  <script type="module" src="/js/app.js?v=19"></script>
 </body>
 </html>
 

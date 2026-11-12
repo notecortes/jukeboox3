@@ -450,4 +450,94 @@ func TestAlbumsRequireMoreThanFiveTracks(t *testing.T) {
 	}
 }
 
+// TestUXLibraryQueriesAndThemes valida consultas de álbumes sin filtro, discografía por artista, historial, top y temas offline.
+func TestUXLibraryQueriesAndThemes(t *testing.T) {
+	d := newTestDB(t)
+
+	batch := []*Track{
+		{Path: "/music/local/A/EP/01.flac", Filename: "01.flac", Title: "A1", Artist: "Alpha", Album: "Alpha EP", Genre: "Synthpop", Year: 1984, Duration: 210, TrackNumber: 1, Format: "FLAC", Source: "local"},
+		{Path: "/music/local/A/EP/02.flac", Filename: "02.flac", Title: "A2", Artist: "Alpha", Album: "Alpha EP", Genre: "Synthpop", Year: 1984, Duration: 220, TrackNumber: 2, Format: "FLAC", Source: "local"},
+		{Path: "/music/local/B/LP/01.flac", Filename: "01.flac", Title: "B1", Artist: "Beta", Album: "Beta LP", Genre: "Post-Punk", Year: 1982, Duration: 190, TrackNumber: 1, Format: "FLAC", Source: "local"},
+		{Path: "/music/local/B/LP/02.flac", Filename: "02.flac", Title: "B2", Artist: "Beta", Album: "Beta LP", Genre: "Post-Punk", Year: 1982, Duration: 195, TrackNumber: 2, Format: "FLAC", Source: "local"},
+		{Path: "/music/local/C/LP/01.flac", Filename: "01.flac", Title: "C1", Artist: "Alpha", Album: "Alpha Return", Genre: "Synthpop", Year: 1994, Duration: 200, TrackNumber: 1, Format: "FLAC", Source: "local"},
+		{Path: "/music/local/C/LP/02.flac", Filename: "02.flac", Title: "C2", Artist: "Alpha", Album: "Alpha Return", Genre: "Indie", Year: 1994, Duration: 205, TrackNumber: 2, Format: "FLAC", Source: "local"},
+	}
+	if err := d.BatchUpsertTracks(batch); err != nil {
+		t.Fatalf("BatchUpsertTracks falló: %v", err)
+	}
+
+	// GetAlbumsFiltered(0) incluye EPs/singles mientras GetAlbums() mantiene >5
+	allAlbums, err := d.GetAlbumsFiltered(0)
+	if err != nil || len(allAlbums) != 3 {
+		t.Fatalf("GetAlbumsFiltered(0) debía devolver 3 álbumes, obtuvo %d (err=%v)", len(allAlbums), err)
+	}
+	if allAlbums[0].AddedSeq <= 0 {
+		t.Fatalf("se esperaba AddedSeq > 0 en álbum, obtuvo %d", allAlbums[0].AddedSeq)
+	}
+	if lpAlbums, err := d.GetAlbums(); err != nil || len(lpAlbums) != 0 {
+		t.Fatalf("GetAlbums() debía filtrar álbumes <=5 pistas, obtuvo %d (err=%v)", len(lpAlbums), err)
+	}
+
+	// Discografía de Alpha ordenada por año descendente (1994 antes que 1984)
+	alphaAlbums, err := d.GetAlbumsByArtist("Alpha")
+	if err != nil || len(alphaAlbums) != 2 {
+		t.Fatalf("GetAlbumsByArtist('Alpha') esperaba 2 álbumes, obtuvo %d (err=%v)", len(alphaAlbums), err)
+	}
+	if alphaAlbums[0].Title != "Alpha Return" || alphaAlbums[1].Title != "Alpha EP" {
+		t.Fatalf("orden inesperado de discografía: %+v", alphaAlbums)
+	}
+
+	// Historial reciente y top reproducidas
+	allTracks, _ := d.GetAllTracks()
+	var tA1, tB1 Track
+	for _, tr := range allTracks {
+		if tr.Title == "A1" {
+			tA1 = tr
+		} else if tr.Title == "B1" {
+			tB1 = tr
+		}
+	}
+	_ = d.RecordPlayback(tA1.ID)
+	_ = d.RecordPlayback(tB1.ID)
+	_ = d.RecordPlayback(tB1.ID)
+
+	recentPlayed, err := d.GetRecentlyPlayedTracks(10)
+	if err != nil || len(recentPlayed) != 2 || recentPlayed[0].ID != tB1.ID {
+		t.Fatalf("GetRecentlyPlayedTracks inesperado: %+v (err=%v)", recentPlayed, err)
+	}
+	mostPlayed, err := d.GetMostPlayedTracks(10)
+	if err != nil || len(mostPlayed) != 2 || mostPlayed[0].ID != tB1.ID || mostPlayed[0].PlayCount != 2 {
+		t.Fatalf("GetMostPlayedTracks inesperado: %+v (err=%v)", mostPlayed, err)
+	}
+
+	// Temas offline (géneros + décadas)
+	themes, err := d.GetLibraryThemes()
+	if err != nil || len(themes) == 0 {
+		t.Fatalf("GetLibraryThemes falló: len=%d err=%v", len(themes), err)
+	}
+	hasSynthpop := false
+	has80s := false
+	for _, th := range themes {
+		if th.Type == "genre" && th.Value == "Synthpop" && th.TrackCount == 3 {
+			hasSynthpop = true
+		}
+		if th.Type == "decade" && th.Value == "1980" && th.Label == "80s" && th.TrackCount == 4 {
+			has80s = true
+		}
+	}
+	if !hasSynthpop || !has80s {
+		t.Fatalf("temas esperados Synthpop y 80s no encontrados en %+v", themes)
+	}
+
+	synthTracks, err := d.GetTracksByGenre("synthpop", 20)
+	if err != nil || len(synthTracks) != 3 {
+		t.Fatalf("GetTracksByGenre('synthpop') esperaba 3 pistas, obtuvo %d (err=%v)", len(synthTracks), err)
+	}
+	eightiesTracks, err := d.GetTracksByDecade(1980, 20)
+	if err != nil || len(eightiesTracks) != 4 {
+		t.Fatalf("GetTracksByDecade(1980) esperaba 4 pistas, obtuvo %d (err=%v)", len(eightiesTracks), err)
+	}
+}
+
+
 

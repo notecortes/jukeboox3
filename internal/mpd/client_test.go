@@ -1141,3 +1141,64 @@ func TestMixSkipsBrokenTracksOnStartAndNext(t *testing.T) {
 		cur.Status, cur.LastError, cur.CurrentTrack, c.GetQueue())
 }
 
+// TestSleepAfterTrackPausesOnTrackAdvance verifica que StartSleepAfterTrack detiene la reproducción justo al cambiar de pista y permite cancelación.
+func TestSleepAfterTrackPausesOnTrackAdvance(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "sleep_track_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	// Sin cola activa debe devolver error limpio
+	if err := c.StartSleepAfterTrack(); err == nil {
+		t.Fatalf("StartSleepAfterTrack con cola vacía debía devolver error")
+	}
+
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/local/01.flac", Title: "Primera", Artist: "Alpha", Duration: 180},
+		{ID: 2, Path: "/music/local/02.flac", Title: "Segunda", Artist: "Beta", Duration: 200},
+	}
+	c.ReplaceQueue(tracks, true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.mpdQueueSynced.Load() && c.syncedVersion.Load() == c.queueVersion.Load() {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	if err := c.StartSleepAfterTrack(); err != nil {
+		t.Fatalf("StartSleepAfterTrack falló: %v", err)
+	}
+	if st := c.GetState(); st.SleepTimerMode != "track_end" {
+		t.Fatalf("SleepTimerMode esperado 'track_end', obtenido %q", st.SleepTimerMode)
+	}
+
+	// Cancelar limpia el modo
+	c.CancelSleepTimer()
+	if st := c.GetState(); st.SleepTimerMode != "" {
+		t.Fatalf("CancelSleepTimer debía limpiar SleepTimerMode, obtuvo %q", st.SleepTimerMode)
+	}
+
+	// Re-armar y simular transición natural de MPD a song=1
+	if err := c.StartSleepAfterTrack(); err != nil {
+		t.Fatalf("StartSleepAfterTrack (2) falló: %v", err)
+	}
+
+	srv.mu.Lock()
+	srv.song = 1
+	srv.state = "play"
+	srv.mu.Unlock()
+	time.Sleep(5 * time.Millisecond)
+	c.syncStatusFromMPD()
+
+	st := c.GetState()
+	if st.Status != "pause" || st.SleepTimerMode != "" || st.CurrentIndex != 1 {
+		t.Fatalf("tras cambiar de pista debía pausar y limpiar sleep timer: status=%q mode=%q idx=%d", st.Status, st.SleepTimerMode, st.CurrentIndex)
+	}
+}
+
+

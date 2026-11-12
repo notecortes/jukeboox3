@@ -105,6 +105,11 @@ export function setSleepTimer(minutes) {
   return requestHelper(`/player/sleeptimer?minutes=${encodeURIComponent(minutes)}`, { method: 'POST' });
 }
 
+// setSleepAfterTrack programa la pausa automática justo al finalizar la pista actual.
+export function setSleepAfterTrack() {
+  return requestHelper('/player/sleeptimer?mode=track_end', { method: 'POST' });
+}
+
 // getQueue obtiene la cola de reproducción actual.
 export function getQueue() {
   return requestHelper('/queue');
@@ -148,14 +153,15 @@ export function getLibraryTracks() {
   return requestHelper('/library/tracks');
 }
 
-// getLibraryRecent consulta las canciones añadidas recientemente.
-export function getLibraryRecent(limit = 30) {
-  return requestHelper(`/library/recent?limit=${encodeURIComponent(limit)}`);
+// getLibraryRecent consulta las canciones recientes, escuchadas o más reproducidas según el modo indicado.
+export function getLibraryRecent(limit = 30, mode = 'added') {
+  return requestHelper(`/library/recent?limit=${encodeURIComponent(limit)}&mode=${encodeURIComponent(mode)}`);
 }
 
-// getLibraryAlbums obtiene el catálogo de álbumes discográficos.
-export function getLibraryAlbums() {
-  return requestHelper('/library/albums');
+// getLibraryAlbums obtiene el catálogo de álbumes discográficos (por defecto LPs > 5 temas).
+export function getLibraryAlbums(includeAll = false) {
+  const query = includeAll ? '?include_all=true' : '';
+  return requestHelper(`/library/albums${query}`);
 }
 
 // getLibraryAlbumDetail obtiene pistas y datos detallados de un álbum por su ID.
@@ -166,6 +172,11 @@ export function getLibraryAlbumDetail(id) {
 // getLibraryArtists obtiene los artistas de la colección con conteo de temas.
 export function getLibraryArtists() {
   return requestHelper('/library/artists');
+}
+
+// getLibraryArtistDetail obtiene discografía y pistas completas de un artista por nombre.
+export function getLibraryArtistDetail(artistName) {
+  return requestHelper(`/library/artist?name=${encodeURIComponent(artistName)}`);
 }
 
 // getLibraryArtistTracks obtiene todas las pistas de un artista por nombre.
@@ -247,6 +258,24 @@ export function generateSmartMix(artist, count = 20, playNow = true) {
   return requestHelper('/smartmix', {
     method: 'POST',
     body: JSON.stringify({ artist, count, play_now: playNow })
+  });
+}
+
+// getSmartMixThemes obtiene los géneros y décadas locales para mixes temáticos 100% offline.
+export function getSmartMixThemes() {
+  return requestHelper('/smartmix/themes');
+}
+
+// generateThemeMix genera una sesión Smart Mix offline por género o década.
+export function generateThemeMix(themeType, themeValue, count = 30, playNow = true) {
+  return requestHelper('/smartmix', {
+    method: 'POST',
+    body: JSON.stringify({
+      theme_type: themeType,
+      theme_value: themeValue,
+      count,
+      play_now: playNow
+    })
   });
 }
 

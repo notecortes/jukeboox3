@@ -317,6 +317,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/library/albums", requireMethod(s.handleLibraryAlbums, http.MethodGet))
 	mux.HandleFunc("/api/library/album", requireMethod(s.handleLibraryAlbumDetail, http.MethodGet))
 	mux.HandleFunc("/api/library/artists", requireMethod(s.handleLibraryArtists, http.MethodGet))
+	mux.HandleFunc("/api/library/artist", requireMethod(s.handleLibraryArtistDetail, http.MethodGet))
 	mux.HandleFunc("/api/library/artist/tracks", requireMethod(s.handleLibraryArtistTracks, http.MethodGet))
 	mux.HandleFunc("/api/library/folders", requireMethod(s.handleLibraryFolders, http.MethodGet))
 	mux.HandleFunc("/api/library/scan", requireMethod(s.handleLibraryScan, http.MethodPost))
@@ -327,6 +328,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// 7. API de Smart Mix
 	mux.HandleFunc("/api/smartmix", requireMethod(s.handleSmartMix, http.MethodPost))
+	mux.HandleFunc("/api/smartmix/themes", requireMethod(s.handleSmartMixThemes, http.MethodGet))
 
 	// 8. API de Letras LRCLIB
 	mux.HandleFunc("/api/lyrics", requireMethod(s.handleLyrics, http.MethodGet))
@@ -757,8 +759,17 @@ func (s *Server) handleAudioConfig(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
 
-// handleSleepTimer programa el temporizador de apagado.
+// handleSleepTimer programa el temporizador de apagado por minutos o al finalizar la canción actual.
 func (s *Server) handleSleepTimer(w http.ResponseWriter, r *http.Request) {
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	if mode == "track_end" {
+		if err := s.player.StartSleepAfterTrack(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jsonResponse(w, http.StatusOK, s.player.GetState())
+		return
+	}
 	minStr := r.URL.Query().Get("minutes")
 	min, _ := strconv.Atoi(minStr)
 	s.player.StartSleepTimer(min)
@@ -960,7 +971,7 @@ func (s *Server) handleLibraryTracks(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, tracks)
 }
 
-// handleLibraryRecent devuelve las canciones más recientemente indexadas.
+// handleLibraryRecent devuelve pistas recientes (añadidas, escuchadas o más reproducidas según ?mode=added|played|top).
 func (s *Server) handleLibraryRecent(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit, _ := strconv.Atoi(limitStr)
@@ -969,18 +980,35 @@ func (s *Server) handleLibraryRecent(w http.ResponseWriter, r *http.Request) {
 	} else if limit > 200 {
 		limit = 200
 	}
-	tracks, err := s.database.GetRecentTracks(limit)
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	var tracks []db.Track
+	var err error
+	switch mode {
+	case "played":
+		tracks, err = s.database.GetRecentlyPlayedTracks(limit)
+	case "top":
+		tracks, err = s.database.GetMostPlayedTracks(limit)
+	default:
+		tracks, err = s.database.GetRecentTracks(limit)
+	}
 	if err != nil {
-		log.Printf("[DB] Error listando recientes: %v", err)
+		log.Printf("[DB] Error listando recientes (mode=%q): %v", mode, err)
 		http.Error(w, "error al consultar pistas recientes", http.StatusInternalServerError)
 		return
 	}
 	jsonResponse(w, http.StatusOK, tracks)
 }
 
-// handleLibraryAlbums devuelve todos los álbumes.
+// handleLibraryAlbums devuelve los álbumes (> 5 pistas por defecto, o todos si ?include_all=true).
 func (s *Server) handleLibraryAlbums(w http.ResponseWriter, r *http.Request) {
-	albums, err := s.database.GetAlbums()
+	includeAll := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_all")), "true") || r.URL.Query().Get("include_all") == "1"
+	var albums []db.Album
+	var err error
+	if includeAll {
+		albums, err = s.database.GetAlbumsFiltered(0)
+	} else {
+		albums, err = s.database.GetAlbums()
+	}
 	if err != nil {
 		log.Printf("[DB] Error listando álbumes: %v", err)
 		http.Error(w, "error al consultar álbumes", http.StatusInternalServerError)
@@ -1017,6 +1045,36 @@ func (s *Server) handleLibraryArtists(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, artists)
+}
+
+// handleLibraryArtistDetail devuelve la discografía y las canciones completas de un artista.
+func (s *Server) handleLibraryArtistDetail(w http.ResponseWriter, r *http.Request) {
+	artist := strings.TrimSpace(r.URL.Query().Get("name"))
+	if artist == "" {
+		http.Error(w, "parámetro name requerido", http.StatusBadRequest)
+		return
+	}
+	albums, err := s.database.GetAlbumsByArtist(artist)
+	if err != nil {
+		log.Printf("[DB] Error listando álbumes de artista: %v", err)
+		http.Error(w, "error al consultar discografía del artista", http.StatusInternalServerError)
+		return
+	}
+	tracks, err := s.database.GetTracksByArtist(artist)
+	if err != nil {
+		log.Printf("[DB] Error listando pistas de artista: %v", err)
+		http.Error(w, "error al consultar pistas del artista", http.StatusInternalServerError)
+		return
+	}
+	if len(albums) == 0 && len(tracks) == 0 {
+		http.Error(w, "artista no encontrado", http.StatusNotFound)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"artist": artist,
+		"albums": albums,
+		"tracks": tracks,
+	})
 }
 
 // handleLibraryArtistTracks devuelve las canciones de un artista.
@@ -1258,20 +1316,59 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSmartMix genera una sesión Smart Mix de un artista y opcionalmente inicia su reproducción.
+// handleSmartMixThemes devuelve los géneros y décadas disponibles localmente para crear mixes temáticos offline.
+func (s *Server) handleSmartMixThemes(w http.ResponseWriter, r *http.Request) {
+	themes, err := s.database.GetLibraryThemes()
+	if err != nil {
+		log.Printf("[SmartMix] Error consultando temas offline: %v", err)
+		http.Error(w, "error al consultar géneros y décadas", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, themes)
+}
+
+// handleSmartMix genera una sesión Smart Mix (por artista o temático por género/década) y opcionalmente inicia su reproducción.
 func (s *Server) handleSmartMix(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		Artist  string `json:"artist"`
-		Count   int    `json:"count"`
-		PlayNow bool   `json:"play_now"`
+		Artist     string `json:"artist"`
+		ThemeType  string `json:"theme_type"`
+		ThemeValue string `json:"theme_value"`
+		Count      int    `json:"count"`
+		PlayNow    bool   `json:"play_now"`
 	}
 	if err := decodeJSONBody(w, r, &payload); err != nil {
 		http.Error(w, "json inválido", http.StatusBadRequest)
 		return
 	}
 
+	if payload.ThemeType != "" && payload.ThemeValue != "" {
+		if payload.Count <= 0 {
+			payload.Count = 30
+		} else if payload.Count > 120 {
+			payload.Count = 120
+		}
+		mixTracks, label, err := s.smartmix.GenerateThemeMix(payload.ThemeType, payload.ThemeValue, payload.Count)
+		if err != nil {
+			log.Printf("[SmartMix] Error generando mix temático (%s=%q): %v", payload.ThemeType, payload.ThemeValue, err)
+			http.Error(w, "no se pudo generar el Smart Mix temático", http.StatusNotFound)
+			return
+		}
+		if payload.PlayNow && len(mixTracks) > 0 {
+			s.player.ReplaceQueue(mixTracks, true)
+		}
+		jsonResponse(w, http.StatusOK, map[string]interface{}{
+			"seed_artist":     label,
+			"theme_type":      payload.ThemeType,
+			"theme_value":     payload.ThemeValue,
+			"similar_artists": []string{},
+			"tracks":          mixTracks,
+			"count":           len(mixTracks),
+		})
+		return
+	}
+
 	if payload.Artist == "" {
-		http.Error(w, "campo artist es obligatorio", http.StatusBadRequest)
+		http.Error(w, "campo artist o theme_type/theme_value obligatorio", http.StatusBadRequest)
 		return
 	}
 	if payload.Count <= 0 {

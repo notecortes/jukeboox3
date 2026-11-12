@@ -207,6 +207,7 @@
 }
 
 .np-header {
+  position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: center;
@@ -229,6 +230,92 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.np-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.np-sleep-wrapper {
+  position: relative;
+}
+
+.np-sleep-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 1rem;
+  border-radius: var(--radius-full);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.np-sleep-btn.active {
+  background: rgba(99, 102, 241, 0.22);
+  color: var(--accent-light);
+}
+
+.np-sleep-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent-light);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-sleep-badge.hidden,
+.np-sleep-popover.hidden {
+  display: none;
+}
+
+.np-sleep-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 175px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 19, 32, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 30;
+}
+
+.np-sleep-popover-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 2px 6px;
+}
+
+.np-sleep-opt {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-sleep-opt:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: var(--accent);
+}
+
+.np-sleep-opt.danger {
+  color: var(--color-danger);
+  border-color: rgba(239, 68, 68, 0.25);
 }
 
 /* Carátula dominante adaptativa a cualquier proporción y altura de pantalla */
@@ -326,6 +413,55 @@
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 2px;
+}
+
+.np-artist-link.clickable {
+  cursor: pointer;
+  display: inline-block;
+  max-width: 100%;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(255, 255, 255, 0.28);
+  text-underline-offset: 4px;
+}
+
+.np-artist-link.clickable:hover {
+  color: var(--accent-light);
+}
+
+.np-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-np-quickmix {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: var(--accent-light);
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.btn-np-quickmix:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.btn-np-quickmix:active {
+  transform: scale(0.92);
+}
+
+.btn-np-quickmix.hidden {
+  display: none;
 }
 
 .btn-favorite {

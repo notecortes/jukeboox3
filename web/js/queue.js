@@ -28,11 +28,21 @@ export function initQueue() {
     });
   }
 
-  subscribe((event) => {
+  subscribe((event, payload) => {
     if (event === 'queue_updated' || event === 'player_updated') {
       renderQueueList();
+    } else if (event === 'tab_changed' && payload === 'queue') {
+      requestAnimationFrame(() => scrollActiveQueueTrackIntoView());
     }
   });
+}
+
+// scrollActiveQueueTrackIntoView centra suavemente la canción en curso al abrir la pestaña Cola.
+function scrollActiveQueueTrackIntoView() {
+  const activeItem = document.querySelector('#queueList .queue-item.active');
+  if (activeItem) {
+    activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 // renderQueueList dibuja las canciones encoladas con indicadores de tiempo y manejadores de arrastre.
@@ -42,18 +52,34 @@ export function renderQueueList() {
   if (!container) return;
 
   const queue = state.queue || [];
+  const curIdx = Number.isInteger(state.player.current_index) ? state.player.current_index : -1;
   if (totalCountEl) {
     let totalDur = 0;
+    let remainingDur = 0;
     let liveCount = 0;
-    queue.forEach((t) => {
-      if (isLiveStreamTrack(t) && (!t.duration || t.duration <= 0)) {
+    queue.forEach((t, idx) => {
+      const isLiveZero = isLiveStreamTrack(t) && (!t.duration || t.duration <= 0);
+      if (isLiveZero) {
         liveCount += 1;
       } else {
-        totalDur += (t.duration || 0);
+        const d = Number(t.duration || 0);
+        totalDur += d;
+        if (curIdx >= 0 && idx >= curIdx) {
+          remainingDur += d;
+        }
       }
     });
+    if (curIdx >= 0 && curIdx < queue.length) {
+      const curTrack = queue[curIdx];
+      const curDur = Number(curTrack?.duration || 0);
+      if (curDur > 0) {
+        remainingDur = Math.max(0, remainingDur - Math.min(curDur, Math.floor(state.player.elapsed_time || 0)));
+      }
+    }
     if (queue.length > 0 && liveCount === queue.length) {
       totalCountEl.textContent = `${queue.length} radio${queue.length > 1 ? 's' : ''} en vivo`;
+    } else if (curIdx >= 0 && curIdx < queue.length && totalDur > 0) {
+      totalCountEl.textContent = `${queue.length} temas • Total ${formatTime(totalDur)} • Restante ${formatTime(remainingDur)}`;
     } else {
       totalCountEl.textContent = `${queue.length} temas • ${formatTime(totalDur)}`;
     }

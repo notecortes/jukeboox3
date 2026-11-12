@@ -19,6 +19,7 @@ import (
 	"aurabox/internal/events"
 	"aurabox/internal/mpd"
 	"aurabox/internal/scanner"
+	"aurabox/internal/smartmix"
 	"aurabox/internal/tlsutil"
 )
 
@@ -488,4 +489,164 @@ func TestHTTPHardeningMethodsCORSCompressionAndPathSafety(t *testing.T) {
 		t.Fatalf("nas_pass no debe almacenarse en texto plano en SQLite, obtuvo %q", storedPass)
 	}
 }
+
+// TestUXEndpointsAndFeatures verifica los nuevos endpoints HTTP para detalle de artista, inclusión de EPs, recientes por modo, sleep tras pista y mixes temáticos.
+func TestUXEndpointsAndFeatures(t *testing.T) {
+	tmpDir := t.TempDir()
+	database, err := db.InitDB(filepath.Join(tmpDir, "ux_endpoints.db"))
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	var tracks []*db.Track
+	for i := 1; i <= 6; i++ {
+		tracks = append(tracks, &db.Track{
+			Path:        filepath.Join(tmpDir, "LP", "t"+strconv.Itoa(i)+".flac"),
+			Filename:    "t" + strconv.Itoa(i) + ".flac",
+			Title:       "LP Song " + strconv.Itoa(i),
+			Artist:      "Depeche Mode",
+			Album:       "Violator",
+			Genre:       "Synthpop",
+			Year:        1990,
+			Duration:    240,
+			TrackNumber: i,
+			Format:      "FLAC",
+			Source:      "local",
+		})
+	}
+	tracks = append(tracks,
+		&db.Track{
+			Path:        filepath.Join(tmpDir, "EP", "ep1.flac"),
+			Filename:    "ep1.flac",
+			Title:       "EP Song 1",
+			Artist:      "Depeche Mode",
+			Album:       "Single EP",
+			Genre:       "Synthpop",
+			Year:        1991,
+			Duration:    200,
+			TrackNumber: 1,
+			Format:      "FLAC",
+			Source:      "local",
+		},
+		&db.Track{
+			Path:        filepath.Join(tmpDir, "Other", "no1.flac"),
+			Filename:    "no1.flac",
+			Title:       "Blue Monday",
+			Artist:      "New Order",
+			Album:       "Power",
+			Genre:       "Synthpop",
+			Year:        1983,
+			Duration:    280,
+			TrackNumber: 1,
+			Format:      "FLAC",
+			Source:      "local",
+		},
+	)
+	if err := database.BatchUpsertTracks(tracks); err != nil {
+		t.Fatalf("BatchUpsertTracks falló: %v", err)
+	}
+
+	allSaved, _ := database.GetAllTracks()
+	var blueID int64
+	for _, tr := range allSaved {
+		if tr.Title == "Blue Monday" {
+			blueID = tr.ID
+			break
+		}
+	}
+	_ = database.RecordPlayback(blueID)
+	_ = database.RecordPlayback(blueID)
+
+	hub := events.NewHub()
+	player := mpd.NewClient(filepath.Join(tmpDir, "missing.sock"), "127.0.0.1", "0", hub, database)
+	t.Cleanup(player.Close)
+
+	srv := &Server{
+		database:  database,
+		eventsHub: hub,
+		player:    player,
+		smartmix:  smartmix.NewSmartMixService(database),
+	}
+
+	mux := http.NewServeMux()
+	srv.registerRoutes(mux)
+
+	// 1. /api/library/albums vs ?include_all=true
+	recAlbDefault := httptest.NewRecorder()
+	mux.ServeHTTP(recAlbDefault, httptest.NewRequest(http.MethodGet, "/api/library/albums", nil))
+	var albDefault []db.Album
+	if err := json.Unmarshal(recAlbDefault.Body.Bytes(), &albDefault); err != nil || len(albDefault) != 1 {
+		t.Fatalf("GET /api/library/albums debía devolver 1 LP (>5), obtuvo %d (err=%v)", len(albDefault), err)
+	}
+
+	recAlbAll := httptest.NewRecorder()
+	mux.ServeHTTP(recAlbAll, httptest.NewRequest(http.MethodGet, "/api/library/albums?include_all=true", nil))
+	var albAll []db.Album
+	if err := json.Unmarshal(recAlbAll.Body.Bytes(), &albAll); err != nil || len(albAll) != 3 {
+		t.Fatalf("GET /api/library/albums?include_all=true debía devolver 3 álbumes, obtuvo %d (err=%v)", len(albAll), err)
+	}
+
+	// 2. /api/library/recent?mode=played y ?mode=top
+	for _, mode := range []string{"played", "top"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/library/recent?mode="+mode, nil))
+		var list []db.Track
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || len(list) != 1 || list[0].ID != blueID {
+			t.Fatalf("GET /api/library/recent?mode=%s inesperado: len=%d err=%v", mode, len(list), err)
+		}
+	}
+
+	// 3. /api/library/artist?name=Depeche+Mode
+	recArt := httptest.NewRecorder()
+	mux.ServeHTTP(recArt, httptest.NewRequest(http.MethodGet, "/api/library/artist?name=Depeche+Mode", nil))
+	if recArt.Code != http.StatusOK {
+		t.Fatalf("GET /api/library/artist devolvió %d: %s", recArt.Code, recArt.Body.String())
+	}
+	var artDetail struct {
+		Artist string     `json:"artist"`
+		Albums []db.Album `json:"albums"`
+		Tracks []db.Track `json:"tracks"`
+	}
+	if err := json.Unmarshal(recArt.Body.Bytes(), &artDetail); err != nil || len(artDetail.Albums) != 2 || len(artDetail.Tracks) != 7 {
+		t.Fatalf("detalle artista inesperado: albums=%d tracks=%d err=%v", len(artDetail.Albums), len(artDetail.Tracks), err)
+	}
+
+	// 4. /api/smartmix/themes y POST /api/smartmix temático
+	recThemes := httptest.NewRecorder()
+	mux.ServeHTTP(recThemes, httptest.NewRequest(http.MethodGet, "/api/smartmix/themes", nil))
+	var themes []db.ThemeOption
+	if err := json.Unmarshal(recThemes.Body.Bytes(), &themes); err != nil || len(themes) == 0 {
+		t.Fatalf("GET /api/smartmix/themes inesperado: len=%d err=%v", len(themes), err)
+	}
+
+	recMix := httptest.NewRecorder()
+	reqMix := httptest.NewRequest(http.MethodPost, "/api/smartmix", bytes.NewBufferString(`{"theme_type":"genre","theme_value":"Synthpop","count":10,"play_now":false}`))
+	reqMix.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(recMix, reqMix)
+	if recMix.Code != http.StatusOK {
+		t.Fatalf("POST /api/smartmix temático devolvió %d: %s", recMix.Code, recMix.Body.String())
+	}
+	var mixResp struct {
+		SeedArtist string     `json:"seed_artist"`
+		Tracks     []db.Track `json:"tracks"`
+		Count      int        `json:"count"`
+	}
+	if err := json.Unmarshal(recMix.Body.Bytes(), &mixResp); err != nil || mixResp.Count != 8 {
+		t.Fatalf("respuesta Smart Mix temático inesperada: count=%d err=%v", mixResp.Count, err)
+	}
+
+	// 5. /api/player/sleeptimer?mode=track_end
+	player.ReplaceQueue([]db.Track{allSaved[0]}, false)
+	recSleep := httptest.NewRecorder()
+	mux.ServeHTTP(recSleep, httptest.NewRequest(http.MethodPost, "/api/player/sleeptimer?mode=track_end", nil))
+	if recSleep.Code != http.StatusOK {
+		t.Fatalf("POST /api/player/sleeptimer?mode=track_end devolvió %d: %s", recSleep.Code, recSleep.Body.String())
+	}
+	var stResp mpd.PlayerState
+	if err := json.Unmarshal(recSleep.Body.Bytes(), &stResp); err != nil || stResp.SleepTimerMode != "track_end" {
+		t.Fatalf("SleepTimerMode esperado 'track_end', obtenido %+v (err=%v)", stResp, err)
+	}
+}
+
 

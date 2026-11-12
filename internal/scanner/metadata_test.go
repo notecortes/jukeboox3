@@ -198,3 +198,85 @@ func TestParseTrackMetadataFolderHeuristics(t *testing.T) {
 	}
 }
 
+// buildFLACPictureBlock construye un bloque FLAC METADATA_BLOCK_PICTURE con firma válida.
+func buildFLACPictureBlock(picType uint32, mime string, imgBytes []byte) []byte {
+	var buf bytes.Buffer
+	_ = binary.Write(&buf, binary.BigEndian, picType)
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(mime)))
+	buf.WriteString(mime)
+	_ = binary.Write(&buf, binary.BigEndian, uint32(0)) // description len
+	_ = binary.Write(&buf, binary.BigEndian, uint32(300))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(300))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(24))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(0))
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(imgBytes)))
+	buf.Write(imgBytes)
+	return buf.Bytes()
+}
+
+// TestExtractEmbeddedCoverID3AndFLAC verifica la extracción acotada y validación mágica de carátulas ID3 APIC y FLAC PICTURE.
+func TestExtractEmbeddedCoverID3AndFLAC(t *testing.T) {
+	fakeJPEG := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xFF, 0xD9}
+	fakePNG := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D}
+
+	// 1. MP3 con APIC Back Cover (tipo 4) seguido de APIC Front Cover (tipo 3)
+	var apicBack bytes.Buffer
+	apicBack.WriteString("image/png\x00")
+	apicBack.WriteByte(0x04)
+	apicBack.WriteString("back\x00")
+	apicBack.Write(fakePNG)
+
+	var apicFront bytes.Buffer
+	apicFront.WriteByte(0x03) // UTF-8
+	apicFront.WriteString("image/jpeg\x00")
+	apicFront.WriteByte(0x03) // Front Cover
+	apicFront.WriteString("front\x00")
+	apicFront.Write(fakeJPEG)
+
+	var frames bytes.Buffer
+	frames.Write(buildID3v23Frame("APIC", append([]byte{0x00}, apicBack.Bytes()...)))
+	frames.Write(buildID3v23Frame("APIC", apicFront.Bytes()))
+	tagBytes := frames.Bytes()
+	ss := encodeSynchsafe(len(tagBytes))
+
+	var mp3Buf bytes.Buffer
+	mp3Buf.WriteString("ID3")
+	mp3Buf.Write([]byte{0x03, 0x00, 0x00})
+	mp3Buf.Write(ss[:])
+	mp3Buf.Write(tagBytes)
+
+	mp3Path := filepath.Join(t.TempDir(), "apic.mp3")
+	if err := os.WriteFile(mp3Path, mp3Buf.Bytes(), 0644); err != nil {
+		t.Fatalf("WriteFile mp3 falló: %v", err)
+	}
+
+	gotBytes, gotExt := ExtractEmbeddedCover(mp3Path, 1024*1024)
+	if gotExt != ".jpg" || !bytes.Equal(gotBytes, fakeJPEG) {
+		t.Fatalf("extracción APIC MP3 esperaba Front Cover JPEG, obtuvo ext=%q len=%d", gotExt, len(gotBytes))
+	}
+
+	// Respetar límite estricto de bytes
+	if oversize, _ := ExtractEmbeddedCover(mp3Path, 4); len(oversize) != 0 {
+		t.Fatalf("ExtractEmbeddedCover debía ignorar imágenes por encima de maxBytes")
+	}
+
+	// 2. FLAC con bloque PICTURE PNG
+	picBlock := buildFLACPictureBlock(3, "image/png", fakePNG)
+	var flacBuf bytes.Buffer
+	flacBuf.WriteString("fLaC")
+	pLen := len(picBlock)
+	flacBuf.Write([]byte{0x86, byte(pLen >> 16), byte(pLen >> 8), byte(pLen)})
+	flacBuf.Write(picBlock)
+
+	flacPath := filepath.Join(t.TempDir(), "pic.flac")
+	if err := os.WriteFile(flacPath, flacBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("WriteFile flac falló: %v", err)
+	}
+
+	gotFlacBytes, gotFlacExt := ExtractEmbeddedCover(flacPath, 1024*1024)
+	if gotFlacExt != ".png" || !bytes.Equal(gotFlacBytes, fakePNG) {
+		t.Fatalf("extracción PICTURE FLAC esperaba PNG, obtuvo ext=%q len=%d", gotFlacExt, len(gotFlacBytes))
+	}
+}
+
+
