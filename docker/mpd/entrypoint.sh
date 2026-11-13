@@ -147,7 +147,22 @@ EOF
     HAS_PULSE=0
     if [ -S /tmp/pulse-socket ]; then
         HAS_PULSE=1
-        cat << 'EOF' >> "$CONF_OUT"
+        PULSE_NAME="Altavoces del Sistema (PipeWire / PulseAudio)"
+        PULSE_DSP=$(read_dsp_preset "$PULSE_NAME")
+        if [ "$PULSE_DSP" != "flat" ] && command -v sox >/dev/null 2>&1; then
+            cat << EOF >> "$CONF_OUT"
+audio_output {
+    type        "pipe"
+    name        "${PULSE_NAME}"
+    command     "/usr/local/bin/aurabox-dsp-pipe 'pulse' '${PULSE_DSP}'"
+    format      "48000:32:2"
+    mixer_type  "software"
+    enabled     "yes"
+}
+
+EOF
+        else
+            cat << 'EOF' >> "$CONF_OUT"
 audio_output {
     type        "pulse"
     name        "Altavoces del Sistema (PipeWire / PulseAudio)"
@@ -157,6 +172,7 @@ audio_output {
 }
 
 EOF
+        fi
     fi
 
     RAW_APLAY=$(LC_ALL=C aplay -l 2>&1 || true)

@@ -83,6 +83,7 @@ type RadioStation struct {
 	Bitrate     string `json:"bitrate"`
 	Format      string `json:"format"`
 	IsDefault   bool   `json:"is_default"`
+	Favorite    bool   `json:"favorite"`
 }
 
 // AppSetting almacena pares clave-valor de configuración persistente.

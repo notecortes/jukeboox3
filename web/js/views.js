@@ -3,11 +3,11 @@
 // Album Grids, Artists, Search, Smart Mix Generator & Settings
 // =====================================================================
 
-import * as api from './api.js?v=21';
-import { state, subscribe, notifyListeners, updatePlayerState } from './state.js?v=21';
-import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js?v=21';
-import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders } from './player.js?v=21';
-import { openNowPlaying } from './gestures.js?v=21';
+import * as api from './api.js';
+import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
+import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
+import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders } from './player.js';
+import { openNowPlaying } from './gestures.js';
 
 // debounce retrasa la ejecución de una función para no sobrecargar el hilo UI con entradas continuas.
 function debounce(fn, wait = 150) {
@@ -1534,19 +1534,38 @@ function bindSearch() {
   });
 }
 
-// renderSearchResults muestra canciones, álbumes y artistas coincidentes con la búsqueda.
+// renderSearchResults muestra canciones, álbumes, artistas y emisoras coincidentes con la búsqueda.
 function renderSearchResults(container, data) {
   container.innerHTML = '';
 
-  if (data.tracks?.length === 0 && data.albums?.length === 0 && data.artists?.length === 0) {
+  const hasTracks = (data.tracks?.length || 0) > 0;
+  const hasAlbums = (data.albums?.length || 0) > 0;
+  const hasArtists = (data.artists?.length || 0) > 0;
+  const hasRadios = (data.radios?.length || 0) > 0;
+
+  if (!hasTracks && !hasAlbums && !hasArtists && !hasRadios) {
     container.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted);">Sin resultados para esta búsqueda</div>';
     return;
   }
 
-  // Pistas coincidentes
-  if (data.tracks?.length > 0) {
+  // Emisoras de radio coincidentes
+  if (hasRadios) {
     const header = document.createElement('h3');
     header.className = 'settings-section-title';
+    header.textContent = `Emisoras de Radio (${data.radios.length})`;
+    container.appendChild(header);
+
+    const grid = document.createElement('div');
+    grid.className = 'radios-grid';
+    renderRadiosChunked(grid, data.radios, container);
+    container.appendChild(grid);
+  }
+
+  // Pistas coincidentes
+  if (hasTracks) {
+    const header = document.createElement('h3');
+    header.className = 'settings-section-title';
+    header.style.marginTop = hasRadios ? '22px' : '0';
     header.textContent = 'Canciones';
     container.appendChild(header);
 
@@ -1562,7 +1581,7 @@ function renderSearchResults(container, data) {
   }
 
   // Álbumes coincidentes
-  if (data.albums?.length > 0) {
+  if (hasAlbums) {
     const header = document.createElement('h3');
     header.className = 'settings-section-title';
     header.style.marginTop = '18px';
@@ -1590,7 +1609,7 @@ function renderSearchResults(container, data) {
   }
 
   // Artistas coincidentes
-  if (data.artists?.length > 0) {
+  if (hasArtists) {
     const header = document.createElement('h3');
     header.className = 'settings-section-title';
     header.style.marginTop = '18px';
@@ -1998,9 +2017,9 @@ async function handleDeleteCustomRadio(radio, container) {
   }
 }
 
-// renderRadiosView dibuja el catálogo completo de emisoras web con filtro de España, buscador y alta personalizada.
-async function renderRadiosView(container) {
-  if (!hasLoadedRadios) {
+// renderRadiosView dibuja el catálogo completo de emisoras web con filtro de favoritos, España, buscador y alta personalizada.
+async function renderRadiosView(container, forceRefresh = false) {
+  if (!hasLoadedRadios || forceRefresh || !cachedRadios || cachedRadios.length === 0) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando catálogo de radios web...</div>';
     try {
       cachedRadios = (await api.getRadios()) || [];
@@ -2009,15 +2028,24 @@ async function renderRadiosView(container) {
       container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar emisoras de radio</div>';
       return;
     }
+  } else {
+    // Sincronización en segundo plano para refrescar cambios si se añadieron emisoras en otra sesión
+    api.getRadios().then((radios) => {
+      if (Array.isArray(radios) && radios.length > 0) {
+        cachedRadios = radios;
+      }
+    }).catch(() => {});
   }
 
-  // Filtros rápidos incluyendo emisoras españolas verificadas
-  const popularGenres = ['Todos', '🇪🇸 España', 'Rock', 'Alternative', 'Pop', 'Jazz', 'Classical', 'Electronic', 'Flamenco', 'News', 'Talk', 'Ambient', 'Blues', 'Folk', 'World'];
+  // Filtros rápidos incluyendo emisoras favoritas y emisoras españolas verificadas
+  const popularGenres = ['Todos', '❤️ Favoritas', '🇪🇸 España', 'Rock', 'Alternative', 'Pop', 'Jazz', 'Classical', 'Electronic', 'Flamenco', 'News', 'Talk', 'Ambient', 'Blues', 'Folk', 'World'];
 
   // Filtrado reactivo
   const q = radioFilterQuery.trim().toLowerCase();
   let filtered = cachedRadios;
-  if (radioGenreFilter === '🇪🇸 España') {
+  if (radioGenreFilter === '❤️ Favoritas') {
+    filtered = filtered.filter((r) => r.favorite);
+  } else if (radioGenreFilter === '🇪🇸 España') {
     filtered = filtered.filter(isSpanishRadio);
   } else if (radioGenreFilter !== 'Todos') {
     filtered = filtered.filter((r) => (r.genre && r.genre.toLowerCase().includes(radioGenreFilter.toLowerCase())));
@@ -2040,6 +2068,9 @@ async function renderRadiosView(container) {
       <div class="radios-toolbar">
         <input type="text" id="radioFilterInput" placeholder="Buscar emisora, género o país..." value="${escapeHtml(radioFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:0;"/>
         <span class="badge-format" id="radioCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem; white-space:nowrap;">${filtered.length} radios</span>
+        <button type="button" id="btnRefreshRadios" class="btn-secondary" title="Actualizar catálogo de radios" style="height:38px; width:38px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:var(--radius-full); font-size:0.9rem;">
+          🔄
+        </button>
         <button type="button" id="btnToggleAddRadio" class="btn-secondary" style="height:38px; padding:0 12px; font-size:0.8rem; border-radius:var(--radius-full); font-weight:700; white-space:nowrap;">
           + Añadir
         </button>
@@ -2096,6 +2127,18 @@ async function renderRadiosView(container) {
 
     filterInput?.addEventListener('input', (e) => {
       debouncedRadioFilter(e.target.value);
+    });
+
+    document.getElementById('btnRefreshRadios')?.addEventListener('click', async () => {
+      showToast('Actualizando emisoras...');
+      try {
+        cachedRadios = (await api.getRadios()) || [];
+        hasLoadedRadios = true;
+        renderRadiosView(container);
+        showToast(`${cachedRadios.length} emisoras sincronizadas`);
+      } catch (err) {
+        showToast('Error al refrescar radios');
+      }
     });
 
     document.getElementById('btnToggleAddRadio')?.addEventListener('click', () => {
@@ -2157,16 +2200,25 @@ function renderRadiosChunked(container, radios, viewContainer) {
       const formatText = radio.format || 'STREAM';
       const spanishBadge = isSpanishRadio(radio) ? '<span class="radio-badge-country">🇪🇸 España</span>' : '';
       const customBadge = (!radio.is_default) ? '<span class="radio-badge-genre">★ Propia</span>' : '';
+      const favBadge = radio.favorite ? '<span class="radio-badge-genre" style="background:rgba(239,68,68,0.15); color:#ef4444; border-color:rgba(239,68,68,0.3);">❤️ Fav</span>' : '';
       const deleteBtn = (!radio.is_default && radio.id > 0)
         ? '<button type="button" class="radio-delete-btn" title="Eliminar emisora personalizada">🗑️</button>'
         : '';
+      const favBtn = radio.id > 0
+        ? `<button type="button" class="radio-fav-btn ${radio.favorite ? 'active' : ''}" title="${radio.favorite ? 'Quitar de favoritas' : 'Añadir a favoritas'}">${radio.favorite ? '❤️' : '🤍'}</button>`
+        : '';
+
+      const logoHtml = radio.logo_url
+        ? `<img class="radio-card-logo-img" src="${escapeHtml(radio.logo_url)}" alt="${escapeHtml(radio.name)}" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.textContent='📻';" />`
+        : '📻';
 
       card.innerHTML = `
-        <div class="radio-card-icon">📻</div>
+        <div class="radio-card-icon">${logoHtml}</div>
         <div class="radio-card-info">
           <div class="radio-card-title">${escapeHtml(radio.name)}</div>
           <div class="radio-card-sub">${escapeHtml(subText)}</div>
           <div class="radio-card-badges">
+            ${favBadge}
             ${spanishBadge}
             ${customBadge}
             ${radio.genre ? `<span class="radio-badge-genre">${escapeHtml(radio.genre.split(',')[0].trim())}</span>` : ''}
@@ -2174,10 +2226,53 @@ function renderRadiosChunked(container, radios, viewContainer) {
           </div>
         </div>
         <div class="radio-card-actions">
+          ${favBtn}
           ${deleteBtn}
           <button type="button" class="radio-play-btn" title="Reproducir">▶</button>
         </div>
       `;
+
+      const favBtnEl = card.querySelector('.radio-fav-btn');
+      if (favBtnEl) {
+        favBtnEl.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const prevFav = !!radio.favorite;
+          const nextFav = !prevFav;
+          radio.favorite = nextFav;
+          favBtnEl.classList.toggle('active', nextFav);
+          favBtnEl.textContent = nextFav ? '❤️' : '🤍';
+          favBtnEl.title = nextFav ? 'Quitar de favoritas' : 'Añadir a favoritas';
+          showToast(nextFav ? `❤️ Añadida a favoritas: ${radio.name}` : `🤍 Quitada de favoritas: ${radio.name}`);
+
+          // Sincronizar en cachedRadios
+          const matchedCached = cachedRadios.find((r) => r.id === radio.id);
+          if (matchedCached) {
+            matchedCached.favorite = nextFav;
+          }
+
+          try {
+            const res = await api.toggleRadioFavorite(radio.id);
+            if (res && typeof res.favorite === 'boolean') {
+              radio.favorite = res.favorite;
+              if (matchedCached) matchedCached.favorite = res.favorite;
+              favBtnEl.classList.toggle('active', res.favorite);
+              favBtnEl.textContent = res.favorite ? '❤️' : '🤍';
+            }
+          } catch (err) {
+            radio.favorite = prevFav;
+            if (matchedCached) matchedCached.favorite = prevFav;
+            favBtnEl.classList.toggle('active', prevFav);
+            favBtnEl.textContent = prevFav ? '❤️' : '🤍';
+            showToast(`Error al marcar favorita: ${err.message}`);
+          }
+
+          // Si estamos filtrando activamente por Favoritas, re-renderizar para actualizar la lista
+          if (radioGenreFilter === '❤️ Favoritas' && viewContainer) {
+            renderRadiosView(viewContainer);
+          }
+        });
+      }
 
       const delBtnEl = card.querySelector('.radio-delete-btn');
       if (delBtnEl) {
@@ -2188,7 +2283,7 @@ function renderRadiosChunked(container, radios, viewContainer) {
       }
 
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.radio-delete-btn')) return;
+        if (e.target.closest('.radio-delete-btn') || e.target.closest('.radio-fav-btn')) return;
         e.preventDefault();
         tuneRadioStation(radio);
       });

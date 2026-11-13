@@ -3,14 +3,15 @@
 // Multi-Device Real-Time Synchronization (<50ms) & PWA Bootstrap
 // =====================================================================
 
-import * as api from './api.js?v=21';
-import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js?v=21';
-import { installImageFallbackListener } from './sanitize.js?v=21';
-import { initPlayer, showToast } from './player.js?v=21';
-import { initGestures } from './gestures.js?v=21';
-import { initQueue } from './queue.js?v=21';
-import { initLyrics } from './lyrics.js?v=21';
-import { initViews } from './views.js?v=21';
+import * as api from './api.js';
+import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js';
+import { installImageFallbackListener } from './sanitize.js';
+import { initPlayer, showToast } from './player.js';
+import { initGestures } from './gestures.js';
+import { initQueue } from './queue.js';
+import { initLyrics } from './lyrics.js';
+import { initViews } from './views.js';
+import { initVisualizer, setVisualizerAudible, syncVisualizerState, ensureAudioContextRunning } from './visualizer.js';
 
 let syncRetryTimer = null;
 let activeEventSource = null;
@@ -28,12 +29,14 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('[AuraBox] Iniciando sistema de audio audiófilo...');
 
   installImageFallbackListener();
+  initThemeToggle();
   initDockNavigation();
   initPlayer();
   initGestures();
   initQueue();
   initLyrics();
   initViews();
+  initVisualizer();
   initWebStreamPlayer();
   initKeyboardShortcuts();
   initHistoryHandling();
@@ -255,6 +258,71 @@ function initDockNavigation() {
   });
 }
 
+// applyTheme aplica el tema ('dark' o 'light'), actualiza los botones de cabecera y ajustes, y persiste la preferencia.
+function applyTheme(theme, notify = false) {
+  const normalized = (theme === 'light') ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', normalized);
+  try {
+    localStorage.setItem('aurabox_theme', normalized);
+  } catch (err) {
+    console.warn('[Theme] No se pudo guardar preferencia en localStorage:', err);
+  }
+
+  // Actualizar meta theme-color para la barra del navegador
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) {
+    metaTheme.setAttribute('content', normalized === 'light' ? '#f8fafc' : '#090a0f');
+  }
+
+  // Actualizar icono en el botón de la cabecera (muestra el objetivo al pulsar)
+  const iconSpan = document.getElementById('themeToggleIcon');
+  if (iconSpan) {
+    iconSpan.textContent = normalized === 'light' ? '🌙' : '☀️';
+  }
+  const btnToggle = document.getElementById('btnThemeToggle');
+  if (btnToggle) {
+    btnToggle.title = normalized === 'light'
+      ? 'Cambiar a Modo Oscuro (Obsidian Acoustic OLED)'
+      : 'Cambiar a Modo Claro (Brushed Studio Hardware)';
+  }
+
+  // Sincronizar tarjetas en Ajustes si están presentes
+  const optDark = document.getElementById('themeOptDark');
+  const optLight = document.getElementById('themeOptLight');
+  if (optDark) optDark.classList.toggle('active', normalized === 'dark');
+  if (optLight) optLight.classList.toggle('active', normalized === 'light');
+
+  if (notify) {
+    const label = normalized === 'light' ? 'Modo Claro (Brushed Studio)' : 'Modo Oscuro (Obsidian Acoustic)';
+    showToast(`Tema activo: ${label}`);
+  }
+}
+
+// initThemeToggle inicializa la detección y los escuchadores del conmutador de tema claro/oscuro.
+function initThemeToggle() {
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(currentTheme, false);
+
+  const btnToggle = document.getElementById('btnThemeToggle');
+  if (btnToggle) {
+    btnToggle.addEventListener('click', () => {
+      const active = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = (active === 'light') ? 'dark' : 'light';
+      applyTheme(next, true);
+    });
+  }
+
+  const optDark = document.getElementById('themeOptDark');
+  if (optDark) {
+    optDark.addEventListener('click', () => applyTheme('dark', true));
+  }
+
+  const optLight = document.getElementById('themeOptLight');
+  if (optLight) {
+    optLight.addEventListener('click', () => applyTheme('light', true));
+  }
+}
+
 // initHistoryHandling evita que el botón atrás de Android / iOS cierre la PWA accidentalmente.
 function initHistoryHandling() {
   window.addEventListener('popstate', (e) => {
@@ -281,9 +349,23 @@ function initHistoryHandling() {
   });
 }
 
-// initKeyboardShortcuts habilita controles desde teclado físico / mandos multimedia.
+// initKeyboardShortcuts habilita controles desde teclado físico / mandos multimedia y atajo Cmd+K.
 function initKeyboardShortcuts() {
   window.addEventListener('keydown', (e) => {
+    // Atajo universal Cmd+K / Ctrl+K para abrir buscador omnibox
+    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      activateDockTab('search');
+      setTimeout(() => {
+        const input = document.getElementById('searchInput');
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 50);
+      return;
+    }
+
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
     switch (e.code) {
@@ -356,15 +438,17 @@ function updateWebStreamUI(mode, labelOverride = '') {
 function stopWebAudioStream() {
   const audio = document.getElementById('webAudioPlayer');
   streamDesired = false;
+  setVisualizerAudible(false);
   streamRetryAttempt = 0;
   clearStreamTimers();
 
-  if (audio) {
+  if (audio && !state.ui.isNowPlayingOpen) {
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
   }
   updateWebStreamUI('idle');
+  syncVisualizerState();
 }
 
 // scheduleWebStreamReconnect programa un reintento escalonado tras un corte temporal del stream web.
@@ -418,6 +502,8 @@ function connectWebAudioStream() {
 
   clearStreamTimers();
   streamDesired = true;
+  setVisualizerAudible(true);
+  ensureAudioContextRunning();
   updateWebStreamUI('connecting');
 
   audio.src = `/api/stream?_t=${Date.now()}`;
@@ -495,6 +581,7 @@ function initWebStreamPlayer() {
   });
 
   btn.addEventListener('click', () => {
+    ensureAudioContextRunning();
     if (streamDesired) {
       stopWebAudioStream();
     } else {
@@ -503,19 +590,22 @@ function initWebStreamPlayer() {
   });
 }
 
-// registerServiceWorker instala el Service Worker, fuerza actualización y recarga si hay nueva versión activa.
+// registerServiceWorker instala el Service Worker de forma segura sin recargas en bucle ni cortes de SSE.
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    let refreshing = false;
-    const hadController = Boolean(navigator.serviceWorker.controller);
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!hadController || refreshing) return;
-      refreshing = true;
-      window.location.reload();
-    });
+    // Si existieran registros obsoletos con query string '?v=', desregistrarlos ordenadamente
+    navigator.serviceWorker.getRegistrations().then((regs) => {
+      regs.forEach((reg) => {
+        const scriptURL = reg.active?.scriptURL || reg.waiting?.scriptURL || reg.installing?.scriptURL || '';
+        if (scriptURL.includes('?v=')) {
+          reg.unregister();
+        }
+      });
+    }).catch(() => {});
 
-    navigator.serviceWorker.register('/sw.js?v=21').then((reg) => {
-      reg.update();
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // Comprobar actualización silenciosa en segundo plano sin interrumpir reproducción
+      reg.update().catch(() => {});
     }).catch((err) => {
       console.warn('[PWA] Service Worker no registrado:', err);
     });

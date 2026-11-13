@@ -111,6 +111,8 @@ func InitDB(dbPath string) (*DB, error) {
 		log.Printf("[DB] Advertencia al sembrar radios: %v", err)
 	}
 
+	go db.syncMissingTrackCoversFromAlbums()
+
 	return db, nil
 }
 
@@ -214,6 +216,8 @@ func (d *DB) createSchema() error {
 	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN broadcaster TEXT DEFAULT ''`)
 	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN country TEXT DEFAULT ''`)
 	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN format TEXT DEFAULT 'MP3'`)
+	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN favorite INTEGER DEFAULT 0`)
+	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_radio_stations_favorite ON radio_stations(favorite)`)
 
 	return nil
 }
@@ -799,6 +803,14 @@ func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
 		return nil, nil, err
 	}
 
+	if a.CoverURL == "" {
+		var albCover string
+		_ = rDB.QueryRow(`SELECT cover_url FROM albums WHERE title = ? COLLATE NOCASE AND cover_url != '' LIMIT 1`, albumTitle).Scan(&albCover)
+		if albCover != "" {
+			a.CoverURL = albCover
+		}
+	}
+
 	// 3. Obtener TODAS las pistas de este álbum, ordenadas por track_number y nombre de archivo
 	rows, err := rDB.Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
@@ -828,6 +840,9 @@ func (d *DB) GetAlbumByID(id int64) (*Album, []Track, error) {
 			return nil, nil, err
 		}
 		t.Favorite = (fav == 1)
+		if t.CoverURL == "" && a.CoverURL != "" {
+			t.CoverURL = a.CoverURL
+		}
 		totalDur += t.Duration
 		tracks = append(tracks, t)
 	}
@@ -869,7 +884,9 @@ func (d *DB) GetTracksByArtist(artistName string) ([]Track, error) {
 	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
-		       source, cover_url, favorite, play_count, bpm, created_at
+		       source,
+		       COALESCE(NULLIF(cover_url, ''), (SELECT a.cover_url FROM albums a WHERE a.title = tracks.album COLLATE NOCASE AND a.cover_url != '' LIMIT 1), '') as cover_url,
+		       favorite, play_count, bpm, created_at
 		FROM tracks
 		WHERE artist = ? COLLATE NOCASE
 		ORDER BY year DESC, album ASC, track_number ASC
@@ -911,7 +928,9 @@ func (d *DB) GetTracksByPathPrefix(folderPath string) ([]Track, error) {
 	rows, err := d.reader().Query(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
-		       source, cover_url, favorite, play_count, bpm, created_at
+		       source,
+		       COALESCE(NULLIF(cover_url, ''), (SELECT a.cover_url FROM albums a WHERE a.title = tracks.album COLLATE NOCASE AND a.cover_url != '' LIMIT 1), '') as cover_url,
+		       favorite, play_count, bpm, created_at
 		FROM tracks
 		WHERE path = ? OR path LIKE ? ESCAPE '\'
 		ORDER BY path ASC, track_number ASC
@@ -945,7 +964,9 @@ func (d *DB) GetTrackByPath(filePath string) (*Track, error) {
 	row := d.reader().QueryRow(`
 		SELECT id, path, filename, title, artist, album, album_artist, genre,
 		       year, duration, track_number, bitrate, sample_rate, format,
-		       source, cover_url, favorite, play_count, bpm, created_at
+		       source,
+		       COALESCE(NULLIF(cover_url, ''), (SELECT a.cover_url FROM albums a WHERE a.title = tracks.album COLLATE NOCASE AND a.cover_url != '' LIMIT 1), '') as cover_url,
+		       favorite, play_count, bpm, created_at
 		FROM tracks
 		WHERE path = ?
 		LIMIT 1
@@ -993,7 +1014,9 @@ func (d *DB) GetTracksByIDs(ids []int64) ([]Track, error) {
 		query := fmt.Sprintf(`
 			SELECT id, path, filename, title, artist, album, album_artist, genre,
 			       year, duration, track_number, bitrate, sample_rate, format,
-			       source, cover_url, favorite, play_count, bpm, created_at
+			       source,
+			       COALESCE(NULLIF(cover_url, ''), (SELECT a.cover_url FROM albums a WHERE a.title = tracks.album COLLATE NOCASE AND a.cover_url != '' LIMIT 1), '') as cover_url,
+			       favorite, play_count, bpm, created_at
 			FROM tracks
 			WHERE id IN (%s)
 		`, strings.Join(placeholders, ","))
@@ -1356,9 +1379,9 @@ func (d *DB) SetSetting(key, value string) error {
 	return err
 }
 
-// GetRadios devuelve la lista de emisoras de radio web guardadas.
+// GetRadios devuelve la lista de emisoras de radio web guardadas, priorizando favoritas.
 func (d *DB) GetRadios() ([]RadioStation, error) {
-	rows, err := d.reader().Query("SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default FROM radio_stations ORDER BY name COLLATE NOCASE ASC")
+	rows, err := d.reader().Query("SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default, COALESCE(favorite, 0) FROM radio_stations ORDER BY favorite DESC, name COLLATE NOCASE ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -1368,8 +1391,10 @@ func (d *DB) GetRadios() ([]RadioStation, error) {
 	for rows.Next() {
 		var r RadioStation
 		var def int
-		if err := rows.Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def); err == nil {
+		var fav int
+		if err := rows.Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def, &fav); err == nil {
 			r.IsDefault = (def == 1)
+			r.Favorite = (fav == 1)
 			list = append(list, r)
 		}
 	}
@@ -1380,17 +1405,108 @@ func (d *DB) GetRadios() ([]RadioStation, error) {
 func (d *DB) GetRadioByStreamURL(streamURL string) (*RadioStation, error) {
 	var r RadioStation
 	var def int
+	var fav int
 	err := d.reader().QueryRow(`
-		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default
+		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default, COALESCE(favorite, 0)
 		FROM radio_stations
 		WHERE stream_url = ?
 		LIMIT 1
-	`, streamURL).Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def)
+	`, streamURL).Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def, &fav)
 	if err != nil {
 		return nil, err
 	}
 	r.IsDefault = (def == 1)
+	r.Favorite = (fav == 1)
 	return &r, nil
+}
+
+// GetRadioByID busca una emisora registrada en la base de datos por su identificador numérico.
+func (d *DB) GetRadioByID(id int) (*RadioStation, error) {
+	var r RadioStation
+	var def int
+	var fav int
+	err := d.reader().QueryRow(`
+		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default, COALESCE(favorite, 0)
+		FROM radio_stations
+		WHERE id = ?
+		LIMIT 1
+	`, id).Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def, &fav)
+	if err != nil {
+		return nil, err
+	}
+	r.IsDefault = (def == 1)
+	r.Favorite = (fav == 1)
+	return &r, nil
+}
+
+// ToggleRadioFavorite alterna el estado de favorita de una emisora en SQLite.
+func (d *DB) ToggleRadioFavorite(id int64) (bool, error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var currentFav int
+	err := d.conn.QueryRow("SELECT COALESCE(favorite, 0) FROM radio_stations WHERE id = ?", id).Scan(&currentFav)
+	if err != nil {
+		return false, err
+	}
+	newFav := 1
+	if currentFav == 1 {
+		newFav = 0
+	}
+	_, err = d.conn.Exec("UPDATE radio_stations SET favorite = ? WHERE id = ?", newFav, id)
+	if err != nil {
+		return false, err
+	}
+	return newFav == 1, nil
+}
+
+// SetRadioFavorite asigna explícitamente el estado de favorita de una emisora en SQLite.
+func (d *DB) SetRadioFavorite(id int64, fav bool) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	favInt := 0
+	if fav {
+		favInt = 1
+	}
+	_, err := d.conn.Exec("UPDATE radio_stations SET favorite = ? WHERE id = ?", favInt, id)
+	return err
+}
+
+// SearchRadios busca emisoras cuyo nombre, género, cadena o país coincidan con la búsqueda.
+func (d *DB) SearchRadios(query string) ([]RadioStation, error) {
+	clean := strings.TrimSpace(query)
+	if clean == "" {
+		return []RadioStation{}, nil
+	}
+	pattern := "%" + escapeLikePattern(clean) + "%"
+	rows, err := d.reader().Query(`
+		SELECT id, name, stream_url, COALESCE(logo_url, ''), COALESCE(genre, 'General'), COALESCE(broadcaster, ''), COALESCE(country, ''), COALESCE(bitrate, '128'), COALESCE(format, 'MP3'), is_default, COALESCE(favorite, 0)
+		FROM radio_stations
+		WHERE name LIKE ? ESCAPE '\'
+		   OR genre LIKE ? ESCAPE '\'
+		   OR broadcaster LIKE ? ESCAPE '\'
+		   OR country LIKE ? ESCAPE '\'
+		ORDER BY favorite DESC, name COLLATE NOCASE ASC
+		LIMIT 20
+	`, pattern, pattern, pattern, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]RadioStation, 0)
+	for rows.Next() {
+		var r RadioStation
+		var def int
+		var fav int
+		if err := rows.Scan(&r.ID, &r.Name, &r.StreamURL, &r.LogoURL, &r.Genre, &r.Broadcaster, &r.Country, &r.Bitrate, &r.Format, &def, &fav); err == nil {
+			r.IsDefault = (def == 1)
+			r.Favorite = (fav == 1)
+			list = append(list, r)
+		}
+	}
+	return list, nil
 }
 
 // AddRadio inserta o actualiza una emisora personalizada (.mp3, .aac, .m3u, .pls o .m3u8) en SQLite.
@@ -1820,6 +1936,54 @@ func (d *DB) UpdateAlbumCover(albumTitle, coverURL string) error {
 	}
 	_, _ = d.conn.Exec(`UPDATE albums SET cover_url = ? WHERE title = ? COLLATE NOCASE`, cleanCover, cleanAlbum)
 	return nil
+}
+
+// GetAlbumCoverByTitle devuelve la URL de carátula para un álbum consultando tanto albums como tracks.
+func (d *DB) GetAlbumCoverByTitle(albumTitle string) string {
+	clean := strings.TrimSpace(albumTitle)
+	if clean == "" {
+		return ""
+	}
+	var cover string
+	_ = d.reader().QueryRow(`
+		SELECT cover_url FROM albums WHERE title = ? COLLATE NOCASE AND cover_url != '' LIMIT 1
+	`, clean).Scan(&cover)
+	if cover == "" {
+		_ = d.reader().QueryRow(`
+			SELECT cover_url FROM tracks WHERE album = ? COLLATE NOCASE AND cover_url != '' LIMIT 1
+		`, clean).Scan(&cover)
+	}
+	return cover
+}
+
+// syncMissingTrackCoversFromAlbums propaga en segundo plano las carátulas conocidas de álbumes a sus pistas huérfanas sin carátula.
+func (d *DB) syncMissingTrackCoversFromAlbums() {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	res, err := d.conn.Exec(`
+		UPDATE tracks
+		SET cover_url = (
+			SELECT a.cover_url
+			FROM albums a
+			WHERE a.title = tracks.album COLLATE NOCASE
+			  AND a.cover_url != ''
+			  AND a.cover_url IS NOT NULL
+			LIMIT 1
+		)
+		WHERE (cover_url = '' OR cover_url IS NULL)
+		  AND album != ''
+		  AND EXISTS (
+			SELECT 1 FROM albums a
+			WHERE a.title = tracks.album COLLATE NOCASE
+			  AND a.cover_url != ''
+			  AND a.cover_url IS NOT NULL
+		  )
+	`)
+	if err == nil {
+		if aff, _ := res.RowsAffected(); aff > 0 {
+			log.Printf("[DB] Sincronizadas %d pistas huérfanas con la carátula de su álbum", aff)
+		}
+	}
 }
 
 // Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.

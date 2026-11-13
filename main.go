@@ -354,6 +354,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stream", requireMethod(s.handleAudioStream, http.MethodGet, http.MethodHead))
 	mux.HandleFunc("/api/radios", requireMethod(s.handleRadios, http.MethodGet, http.MethodPost, http.MethodDelete))
 	mux.HandleFunc("/api/radios/play", requireMethod(s.handleRadioPlay, http.MethodPost))
+	mux.HandleFunc("/api/radios/favorite", requireMethod(s.handleRadioFavorite, http.MethodPost))
 	mux.HandleFunc("/api/settings", requireMethod(s.handleSettings, http.MethodGet, http.MethodPost))
 	mux.HandleFunc("/api/settings/nas", requireMethod(s.handleNASConfig, http.MethodGet, http.MethodPost))
 	mux.HandleFunc("/api/security/status", requireMethod(s.handleSecurityStatus, http.MethodGet))
@@ -1154,6 +1155,10 @@ func (s *Server) handleLibraryAlbumCoverFetch(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if s.player != nil {
+		s.player.UpdateCurrentTrackCoverIfAlbumMatches(album.Title, coverURL)
+	}
+
 	if s.eventsHub != nil {
 		s.eventsHub.Broadcast("library_updated", map[string]interface{}{
 			"scanning": false,
@@ -1497,7 +1502,7 @@ func (s *Server) handlePlayFavorites(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSearch busca en tiempo real pistas, álbumes y artistas.
+// handleSearch busca en tiempo real pistas, álbumes, artistas y emisoras de radio.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if strings.TrimSpace(q) == "" {
@@ -1505,6 +1510,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			"tracks":  []db.Track{},
 			"albums":  []db.Album{},
 			"artists": []db.Artist{},
+			"radios":  []db.RadioStation{},
 		})
 		return
 	}
@@ -1514,10 +1520,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error al ejecutar búsqueda", http.StatusInternalServerError)
 		return
 	}
+	radios, _ := s.database.SearchRadios(q)
+	if radios == nil {
+		radios = []db.RadioStation{}
+	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"tracks":  tracks,
 		"albums":  albums,
 		"artists": artists,
+		"radios":  radios,
 	})
 }
 
@@ -1742,6 +1753,40 @@ func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRadioFavorite conmuta el estado de favorita de una emisora web en SQLite.
+func (s *Server) handleRadioFavorite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		_ = decodeJSONBody(w, r, &body)
+	}
+	if body.ID <= 0 {
+		if idStr := r.URL.Query().Get("id"); idStr != "" {
+			if idVal, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+				body.ID = idVal
+			}
+		}
+	}
+	if body.ID <= 0 {
+		http.Error(w, "parámetro id de radio inválido", http.StatusBadRequest)
+		return
+	}
+
+	newFav, err := s.database.ToggleRadioFavorite(body.ID)
+	if err != nil {
+		log.Printf("[Radio] Error alternando favorito para radio %d: %v", body.ID, err)
+		http.Error(w, "error al actualizar favorita", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"id":       body.ID,
+		"favorite": newFav,
+		"status":   "ok",
+	})
+}
+
 // handleRadioPlay valida/resuelve el flujo web de radio y comienza su reproducción inmediata.
 func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1750,6 +1795,7 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
+		ID          int    `json:"id"`
 		Name        string `json:"name"`
 		StreamURL   string `json:"stream_url"`
 		URL         string `json:"url"`
@@ -1768,6 +1814,32 @@ func (s *Server) handleRadioPlay(w http.ResponseWriter, r *http.Request) {
 	rawURL := strings.TrimSpace(payload.StreamURL)
 	if rawURL == "" {
 		rawURL = strings.TrimSpace(payload.URL)
+	}
+	if rawURL == "" && payload.ID > 0 && s.database != nil {
+		if station, err := s.database.GetRadioByID(payload.ID); err == nil && station != nil {
+			rawURL = station.StreamURL
+			if payload.Name == "" {
+				payload.Name = station.Name
+			}
+			if payload.LogoURL == "" {
+				payload.LogoURL = station.LogoURL
+			}
+			if payload.Genre == "" {
+				payload.Genre = station.Genre
+			}
+			if payload.Broadcaster == "" {
+				payload.Broadcaster = station.Broadcaster
+			}
+			if payload.Country == "" {
+				payload.Country = station.Country
+			}
+			if payload.Bitrate == "" {
+				payload.Bitrate = station.Bitrate
+			}
+			if payload.Format == "" {
+				payload.Format = station.Format
+			}
+		}
 	}
 
 	resolvedURLs, err := mpd.ResolveStreamURLs(rawURL)

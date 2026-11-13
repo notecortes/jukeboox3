@@ -3,9 +3,9 @@
 // Real-Time Time Tracking & One-Tap Seeking
 // =====================================================================
 
-import * as api from './api.js?v=21';
-import { state, subscribe } from './state.js?v=21';
-import { isLiveStreamTrack } from './player.js?v=21';
+import * as api from './api.js';
+import { state, subscribe } from './state.js';
+import { isLiveStreamTrack } from './player.js';
 
 // initLyrics inicializa la sincronización de letras LRCLIB con el reproductor.
 export function initLyrics() {

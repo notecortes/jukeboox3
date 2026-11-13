@@ -10,6 +10,16 @@
     "format": "MP3"
   },
   {
+    "id": 1050,
+    "name": "1000 HITS 80s España",
+    "url": "http://c2.auracast.net:8048/stream",
+    "genre": "80s, Pop, Rock",
+    "broadcaster": "1000 HITS",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 2,
     "name": "2BOB Radio 104.7 FM",
     "url": "http://playerservices.streamtheworld.com/api/livestream-redirect/2BOB.mp3",
@@ -80,6 +90,16 @@
     "format": "AAC"
   },
   {
+    "id": 9,
+    "name": "Absolut music XL",
+    "url": "https://absolut-musicxl.live-sm.absolutradio.de/absolut-musicxl/stream/mp3",
+    "genre": "Pop, New Releases, Oldies, Rock, Pop",
+    "broadcaster": "Absolut",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 10,
     "name": "Absolut Relax",
     "url": "https://edge12.live-sm.absolutradio.de/absolut-relax/stream/mp3",
@@ -90,12 +110,57 @@
     "format": "MP3"
   },
   {
-    "id": 9,
-    "name": "Absolut music XL",
-    "url": "https://absolut-musicxl.live-sm.absolutradio.de/absolut-musicxl/stream/mp3",
-    "genre": "Pop, New Releases, Oldies, Rock, Pop",
-    "broadcaster": "Absolut",
-    "country": "Germany",
+    "id": 2004,
+    "name": "Activa FM",
+    "url": "https://stream.emisorasmusicales.net/listen/activa_fm/activafm.mp3",
+    "logo_url": "https://www.emisorasmusicales.net/wp-content/uploads/2020/05/activa.svg",
+    "genre": "Dance, Pop, Top 40",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2006,
+    "name": "Activa FM - Alicante",
+    "url": "https://stream.emisorasmusicales.net/listen/activa_fm/activafm-alicante.mp3",
+    "logo_url": "https://www.emisorasmusicales.net/wp-content/uploads/2020/05/activa.svg",
+    "genre": "Dance, Pop, Top 40",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2007,
+    "name": "Activa FM - Benidorm",
+    "url": "https://stream.emisorasmusicales.net/listen/activa_fm/activafm-marina-baja-benidorm.mp3",
+    "logo_url": "https://www.emisorasmusicales.net/wp-content/uploads/2020/05/activa.svg",
+    "genre": "Dance, Pop, Top 40",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2008,
+    "name": "Activa FM - Marina Alta",
+    "url": "https://stream.emisorasmusicales.net/listen/activa_fm/activafm-marina-alta-norte.mp3",
+    "logo_url": "https://www.emisorasmusicales.net/wp-content/uploads/2020/05/activa.svg",
+    "genre": "Dance, Pop, Top 40",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2005,
+    "name": "Activa FM - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/activa_fm/activafm-valencia.mp3",
+    "logo_url": "https://www.emisorasmusicales.net/wp-content/uploads/2020/05/activa.svg",
+    "genre": "Dance, Pop, Top 40",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
     "bitrate": "128",
     "format": "MP3"
   },
@@ -126,6 +191,16 @@
     "genre": "Classical, Jazz, Folk, World Music",
     "broadcaster": "ArtSound FM",
     "country": "Australia",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 14,
+    "name": "Bayern 2",
+    "url": "https://dispatcher.rndfnk.com/br/br2/live/mp3/mid",
+    "genre": "Eclectic",
+    "broadcaster": "Bayern Radio",
+    "country": "Germany",
     "bitrate": "128",
     "format": "MP3"
   },
@@ -280,6 +355,28 @@
     "format": "AAC-LC"
   },
   {
+    "id": 2018,
+    "name": "Bikini FM",
+    "url": "https://stream.emisorasmusicales.net/listen/bikini_fm/bikinifm.mp3",
+    "logo_url": "https://stream.emisorasmusicales.net/static/uploads/bikini_fm/album_art.1782121996.jpg",
+    "genre": "Dance 90s, Eurodance, Remember",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2019,
+    "name": "Bikini FM - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/bikini_fm/bikinifm-valencia.mp3",
+    "logo_url": "https://stream.emisorasmusicales.net/static/uploads/bikini_fm/album_art.1782121996.jpg",
+    "genre": "Dance 90s, Eurodance, Remember",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 30,
     "name": "BR-Klassik",
     "url": "https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high",
@@ -287,16 +384,6 @@
     "broadcaster": "Bayern Radio",
     "country": "Germany",
     "bitrate": "192",
-    "format": "MP3"
-  },
-  {
-    "id": 14,
-    "name": "Bayern 2",
-    "url": "https://dispatcher.rndfnk.com/br/br2/live/mp3/mid",
-    "genre": "Eclectic",
-    "broadcaster": "Bayern Radio",
-    "country": "Germany",
-    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -320,6 +407,116 @@
     "format": "MP3"
   },
   {
+    "id": 1015,
+    "name": "Cadena 100",
+    "url": "https://cadena100-streamers-mp3.flumotion.com/cope/cadena100.mp3",
+    "genre": "Pop, Rock, Hits",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1012,
+    "name": "Cadena Dial",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENADIAL.mp3",
+    "genre": "Pop, Español, Hits",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1007,
+    "name": "Cadena SER",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENASER.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1049,
+    "name": "Cafe Mambo Ibiza Radio",
+    "url": "https://streamer.radio.co/sd7b28e5f3/listen",
+    "genre": "Electronic, Ambient, House",
+    "broadcaster": "Cafe Mambo",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 1032,
+    "name": "Canal Fiesta Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/cfr.mp3",
+    "genre": "Pop, Español",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1034,
+    "name": "Canal Flamenco Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/flamenco.mp3",
+    "genre": "Flamenco, Folk, World",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1031,
+    "name": "Canal Sur Radio",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/csr.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1033,
+    "name": "Canal Sur Radio Música",
+    "url": "https://rtva-live-radio.flumotion.com/rtva/csm.mp3",
+    "genre": "Pop, Culture, Español",
+    "broadcaster": "RTVA",
+    "country": "Spain",
+    "bitrate": "320",
+    "format": "MP3"
+  },
+  {
+    "id": 1029,
+    "name": "Catalunya Informació",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyainformacioHD.mp3",
+    "genre": "News, Talk",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1028,
+    "name": "Catalunya Música",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyamusicaHD.mp3",
+    "genre": "Classical, Jazz",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1027,
+    "name": "Catalunya Ràdio",
+    "url": "https://shoutcast.ccma.cat/ccma/catalunyaradioHD.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 33,
     "name": "CDNX",
     "url": "http://msmn7.co:8018/stream",
@@ -340,6 +537,37 @@
     "format": "MP3"
   },
   {
+    "id": 2021,
+    "name": "Comboi FM",
+    "url": "https://stream.emisorasmusicales.net/listen/comboi/comboi.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2024/04/29155408/LOGO-DEF.-COMBOI-scaled.jpg",
+    "genre": "Música en Valencià, Festiva, Pop-Rock",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1014,
+    "name": "COPE Nacional",
+    "url": "https://net1-cope-rrcast.flumotion.com/cope/net1.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1048,
+    "name": "Costa Del Mar - Smooth Jazz",
+    "url": "https://radio4.cdm-radio.com:18024/stream-mp3-Smooth",
+    "genre": "Jazz, Smooth Jazz, Ambient",
+    "broadcaster": "Costa Del Mar",
+    "country": "Spain",
+    "bitrate": "96",
+    "format": "MP3"
+  },
+  {
     "id": 35,
     "name": "Czech Radio Classical",
     "url": "https://rozhlas.stream/ddur_mp3_256.mp3",
@@ -347,6 +575,26 @@
     "broadcaster": "ČRo D-Dur",
     "country": "Czech Republic",
     "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 36,
+    "name": "Dandelion Radio",
+    "url": "http://stream.dandelionradio.com:9414",
+    "genre": "Alternative",
+    "broadcaster": "Dandelion Radio",
+    "country": "United Kingdom",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 37,
+    "name": "Davide of MIMIC",
+    "url": "https://streaming04.liveboxstream.uk/proxy/davideof?mp=/stream",
+    "genre": "Classical",
+    "broadcaster": "Davide of MIMIC Radio",
+    "country": "United Kingdom",
+    "bitrate": "320",
     "format": "MP3"
   },
   {
@@ -420,23 +668,23 @@
     "format": "AAC"
   },
   {
-    "id": 36,
-    "name": "Dandelion Radio",
-    "url": "http://stream.dandelionradio.com:9414",
-    "genre": "Alternative",
-    "broadcaster": "Dandelion Radio",
-    "country": "United Kingdom",
+    "id": 1044,
+    "name": "EITB Gaztea",
+    "url": "http://mp3-eitb.stream.flumotion.com/eitb/gaztea.mp3",
+    "genre": "Pop, Rock, Indie",
+    "broadcaster": "EITB",
+    "country": "Spain",
     "bitrate": "128",
     "format": "MP3"
   },
   {
-    "id": 37,
-    "name": "Davide of MIMIC",
-    "url": "https://streaming04.liveboxstream.uk/proxy/davideof?mp=/stream",
-    "genre": "Classical",
-    "broadcaster": "Davide of MIMIC Radio",
-    "country": "United Kingdom",
-    "bitrate": "320",
+    "id": 1043,
+    "name": "EITB Radio Euskadi",
+    "url": "http://mp3-eitb.stream.flumotion.com/eitb/radioeuskadi.mp3",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "EITB",
+    "country": "Spain",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -448,6 +696,47 @@
     "country": "Luxembourg",
     "bitrate": "256",
     "format": "MP3"
+  },
+  {
+    "id": 2020,
+    "name": "Esencia FM",
+    "url": "https://stream.emisorasmusicales.net/listen/esencia_fm/esenciafm.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102603/esenciafm.svg",
+    "genre": "Pop Español, Baladas",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1023,
+    "name": "esRadio",
+    "url": "https://libertaddigital-radio-live1.flumotion.com/libertaddigital/ld-live1-med.aac",
+    "genre": "News, Talk",
+    "broadcaster": "Libertad Digital",
+    "country": "Spain",
+    "bitrate": "96",
+    "format": "AAC"
+  },
+  {
+    "id": 1019,
+    "name": "Europa FM",
+    "url": "https://atres-live.europafm.com/live/europafm/master.m3u8",
+    "genre": "Pop, Dance, Hits",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1035,
+    "name": "Flaix FM",
+    "url": "https://stream.flaixfm.cat/icecast",
+    "genre": "Electronic, Dance, EDM",
+    "broadcaster": "Grup Flaix",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
   },
   {
     "id": 46,
@@ -800,6 +1089,27 @@
     "format": "MP3"
   },
   {
+    "id": 81,
+    "name": "frequence3 (FLAC)",
+    "url": "http://hd.stream.frequence3.net/frequence3.flac",
+    "genre": "Pop, Top 40, Chart",
+    "broadcaster": "Frequence3 Association",
+    "country": "France",
+    "bitrate": "900",
+    "format": "FLAC"
+  },
+  {
+    "id": 2022,
+    "name": "Gold FM",
+    "url": "https://stream.emisorasmusicales.net/listen/gold_fm/goldfm.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/17111707/gold-1000x1000_Mesa-de-trabajo-1.png",
+    "genre": "Oldies, 70s, 80s, Pop Clásico",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 82,
     "name": "Hi On Line - Classical",
     "url": "http://mediaserv30.live-streams.nl:8088/live",
@@ -890,14 +1200,44 @@
     "format": "MP3"
   },
   {
-    "id": 96,
-    "name": "JB Radio2 (320K)",
-    "url": "https://mediacp.jb-radio.net:8001/aac",
-    "genre": "Alternative, Rock, Eclectic",
-    "broadcaster": "JB Radio",
-    "country": "Canada",
-    "bitrate": "320",
-    "format": "AAC"
+    "id": 1022,
+    "name": "Hit FM España",
+    "url": "https://hitfm.kissfmradio.cires21.com/hitfm.mp3",
+    "genre": "Pop, Dance, Top 40",
+    "broadcaster": "Grupo Kiss Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1037,
+    "name": "Ibiza Global Radio",
+    "url": "http://ibizaglobalradio.streaming-pro.com:8024/",
+    "genre": "Electronic, House, Deep House",
+    "broadcaster": "Ibiza Global",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1038,
+    "name": "Ibiza Sonica Radio",
+    "url": "https://ibizasonica.streaming-pro.com:8000/ibizasonica",
+    "genre": "Electronic, House, Chillout",
+    "broadcaster": "Ibiza Sonica",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1030,
+    "name": "iCat",
+    "url": "https://shoutcast.ccma.cat/ccma/icatHD.mp3",
+    "genre": "Alternative, Indie, Electronic",
+    "broadcaster": "CCMA / 3Cat",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
   },
   {
     "id": 91,
@@ -940,6 +1280,16 @@
     "format": "MP3"
   },
   {
+    "id": 1047,
+    "name": "Jazz Radio Spain",
+    "url": "https://stream.tunerplay.com/radio/8020/jazzradiospain.mp3",
+    "genre": "Jazz, Smooth Jazz",
+    "broadcaster": "Jazz Radio Spain",
+    "country": "Spain",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
     "id": 95,
     "name": "Jazz24",
     "url": "https://knkx-live-a.edge.audiocdn.com/6285_256k",
@@ -948,6 +1298,26 @@
     "country": "United States",
     "bitrate": "256",
     "format": "AAC"
+  },
+  {
+    "id": 96,
+    "name": "JB Radio2 (320K)",
+    "url": "https://mediacp.jb-radio.net:8001/aac",
+    "genre": "Alternative, Rock, Eclectic",
+    "broadcaster": "JB Radio",
+    "country": "Canada",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 97,
+    "name": "Kanal K",
+    "url": "https://play.kanalk.ch/kanalk/mp3-192/",
+    "genre": "Alternative",
+    "broadcaster": "Regionalradio Aargaudio AG",
+    "country": "Switzerland",
+    "bitrate": "192",
+    "format": "MP3"
   },
   {
     "id": 98,
@@ -980,6 +1350,16 @@
     "format": "AAC-LC"
   },
   {
+    "id": 1021,
+    "name": "Kiss FM España",
+    "url": "https://bbkissfm.kissfmradio.cires21.com/bbkissfm.mp3",
+    "genre": "Pop, 80s, 90s, Classic Hits",
+    "broadcaster": "Grupo Kiss Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 102,
     "name": "KMHD Portland FM 89.1 -  Jazz",
     "url": "http://stream1.opb.org/kmhd.mp3",
@@ -1010,13 +1390,91 @@
     "format": "AAC"
   },
   {
-    "id": 97,
-    "name": "Kanal K",
-    "url": "https://play.kanalk.ch/kanalk/mp3-192/",
-    "genre": "Alternative",
-    "broadcaster": "Regionalradio Aargaudio AG",
-    "country": "Switzerland",
-    "bitrate": "192",
+    "id": 2012,
+    "name": "La Flamenca",
+    "url": "https://stream.emisorasmusicales.net/listen/la_flamenca/laflamenca.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102601/la-flamenca-.svg",
+    "genre": "Flamenco, Copla, Español",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2013,
+    "name": "La Flamenca - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/la_flamenca/laflamenca-valencia.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102601/la-flamenca-.svg",
+    "genre": "Flamenco, Copla, Español",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2001,
+    "name": "La Indie",
+    "url": "https://stream.emisorasmusicales.net/listen/la_indie/laindie.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/04/04135806/LaIndie-5.svg",
+    "genre": "Indie, Alternative, Pop-Rock",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2002,
+    "name": "La Indie - Madrid",
+    "url": "https://stream.emisorasmusicales.net/listen/la_indie/laindie-madrid.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/04/04135806/LaIndie-5.svg",
+    "genre": "Indie, Alternative, Pop-Rock",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2003,
+    "name": "La Indie - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/la_indie/laindie-valencia.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/04/04135806/LaIndie-5.svg",
+    "genre": "Indie, Alternative, Pop-Rock",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2009,
+    "name": "La Mega",
+    "url": "https://stream.emisorasmusicales.net/listen/la_mega/lamega.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102600/la-mega.svg",
+    "genre": "EDM, Dance, Electro",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2011,
+    "name": "La Mega - Alicante",
+    "url": "https://stream.emisorasmusicales.net/listen/la_mega/lamega-levante.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102600/la-mega.svg",
+    "genre": "EDM, Dance, Electro",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2010,
+    "name": "La Mega - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/la_mega/lamega-valencia.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/23102600/la-mega.svg",
+    "genre": "EDM, Dance, Electro",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -1050,13 +1508,83 @@
     "format": "MP3"
   },
   {
-    "id": 109,
-    "name": "MDR Klassik",
-    "url": "http://mdr-284350-0.cast.mdr.de/mdr/284350/0/aac/high/stream.aac",
-    "genre": "Classical",
-    "broadcaster": "Mitteldeutscher Rundfunk",
-    "country": "Germany",
-    "bitrate": "256",
+    "id": 1039,
+    "name": "Loca FM",
+    "url": "http://s3.we4stream.com:8045/live",
+    "genre": "Electronic, Dance, House",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "160",
+    "format": "MP3"
+  },
+  {
+    "id": 1040,
+    "name": "Loca FM 80s",
+    "url": "http://s02.fjperezdj.com:8075/live",
+    "genre": "80s, Pop, Rock",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1042,
+    "name": "Loca FM Deep Techno",
+    "url": "http://s02.fjperezdj.com:8066/live",
+    "genre": "Electronic, Techno",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1041,
+    "name": "Loca FM Urban",
+    "url": "http://locafm02.we4stream.com:8015/live",
+    "genre": "Urban, Hip Hop",
+    "broadcaster": "Loca FM",
+    "country": "Spain",
+    "bitrate": "160",
+    "format": "MP3"
+  },
+  {
+    "id": 1008,
+    "name": "LOS40",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40.mp3",
+    "genre": "Pop, Hits, Top 40",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1009,
+    "name": "LOS40 Classic",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_CLASSIC.mp3",
+    "genre": "Classic Hits, Rock, Pop, 80s, 90s",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1010,
+    "name": "LOS40 Dance",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_DANCE.mp3",
+    "genre": "Dance, Electronic, House",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1011,
+    "name": "LOS40 Urban",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_URBAN.mp3",
+    "genre": "Urban, Hip Hop, Pop",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -1070,6 +1598,36 @@
     "format": "MP3"
   },
   {
+    "id": 109,
+    "name": "MDR Klassik",
+    "url": "http://mdr-284350-0.cast.mdr.de/mdr/284350/0/aac/high/stream.aac",
+    "genre": "Classical",
+    "broadcaster": "Mitteldeutscher Rundfunk",
+    "country": "Germany",
+    "bitrate": "256",
+    "format": "MP3"
+  },
+  {
+    "id": 1017,
+    "name": "MegaStarFM",
+    "url": "https://megastar-cope-rrcast.flumotion.com/cope/megastar.mp3",
+    "genre": "Pop, Dance, Top 40",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1020,
+    "name": "Melodía FM",
+    "url": "https://atres-live.melodia-fm.com/live/melodiafm/master.m3u8",
+    "genre": "Pop, Classic Hits, 80s, 90s",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
     "id": 110,
     "name": "Morow - Retro Progressive Rock",
     "url": "http://stream.fr.morow.com:8080/morow_hi.aacp",
@@ -1080,6 +1638,28 @@
     "format": "AAC"
   },
   {
+    "id": 2016,
+    "name": "Motiva",
+    "url": "https://stream.guadigo.es/listen/motiva/motiva.mp3",
+    "logo_url": "https://motivafm.com/wp-content/uploads/2021/06/motiva.svg",
+    "genre": "Reggaeton, Urbano, Perreo",
+    "broadcaster": "Motiva FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2017,
+    "name": "Motiva - Valencia",
+    "url": "https://stream.guadigo.es/listen/motiva/motiva-valencia",
+    "logo_url": "https://motivafm.com/wp-content/uploads/2021/06/motiva.svg",
+    "genre": "Reggaeton, Urbano, Perreo",
+    "broadcaster": "Motiva FM",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
     "id": 111,
     "name": "Musiq 3",
     "url": "https://radios.rtbf.be/musiq3-128.aac",
@@ -1087,6 +1667,58 @@
     "broadcaster": "RTBF",
     "country": "Belgium",
     "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 2014,
+    "name": "Muy Buena",
+    "url": "https://stream.emisorasmusicales.net/listen/muybuena/muybuena.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/27120547/NUEVO-LOGO-MB-2.png",
+    "genre": "Latino, Reggaeton, Pop Urbano",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 2015,
+    "name": "Muy Buena - Valencia",
+    "url": "https://stream.emisorasmusicales.net/listen/muybuena/muybuena-valencia.mp3",
+    "logo_url": "https://media.emisorasmusicales.net/wp-content/uploads/2020/03/27120547/NUEVO-LOGO-MB-2.png",
+    "genre": "Latino, Reggaeton, Pop Urbano",
+    "broadcaster": "Emisoras Musicales",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 112,
+    "name": "Naim Classical",
+    "url": "http://mscp3.live-streams.nl:8250/class-high.aac",
+    "genre": "Classical",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 113,
+    "name": "Naim Jazz",
+    "url": "http://mscp3.live-streams.nl:8340/jazz-high.aac",
+    "genre": "Jazz",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
+    "format": "AAC"
+  },
+  {
+    "id": 114,
+    "name": "Naim Radio",
+    "url": "http://mscp3.live-streams.nl:8360/high.aac",
+    "genre": "Eclectic",
+    "broadcaster": "Naim",
+    "country": "United Kingdom",
+    "bitrate": "320",
     "format": "AAC"
   },
   {
@@ -1160,36 +1792,6 @@
     "format": "MP3"
   },
   {
-    "id": 112,
-    "name": "Naim Classical",
-    "url": "http://mscp3.live-streams.nl:8250/class-high.aac",
-    "genre": "Classical",
-    "broadcaster": "Naim",
-    "country": "United Kingdom",
-    "bitrate": "320",
-    "format": "AAC"
-  },
-  {
-    "id": 113,
-    "name": "Naim Jazz",
-    "url": "http://mscp3.live-streams.nl:8340/jazz-high.aac",
-    "genre": "Jazz",
-    "broadcaster": "Naim",
-    "country": "United Kingdom",
-    "bitrate": "320",
-    "format": "AAC"
-  },
-  {
-    "id": 114,
-    "name": "Naim Radio",
-    "url": "http://mscp3.live-streams.nl:8360/high.aac",
-    "genre": "Eclectic",
-    "broadcaster": "Naim",
-    "country": "United Kingdom",
-    "bitrate": "320",
-    "format": "AAC"
-  },
-  {
     "id": 122,
     "name": "Omroep Zeeland",
     "url": "https://d3isaxd2t6q8zm.cloudfront.net/icecast/omroepzeeland/omroepzeeland_radio",
@@ -1198,6 +1800,16 @@
     "country": "Netherlands",
     "bitrate": "128",
     "format": "MP3"
+  },
+  {
+    "id": 1018,
+    "name": "Onda Cero",
+    "url": "https://atres-live.ondacero.es/live/ondacero/master.m3u8",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Atresmedia",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
   },
   {
     "id": 123,
@@ -1250,16 +1862,6 @@
     "format": "AAC"
   },
   {
-    "id": 129,
-    "name": "PRM - Prog Rock & Metal",
-    "url": "http://shoutcastunlimited.com:8512",
-    "genre": "Progressive Rock, Metal",
-    "broadcaster": "Will Mangold",
-    "country": "United States",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
     "id": 128,
     "name": "Positivly Baroque",
     "url": "http://play2.organlive.com:7002/320",
@@ -1270,92 +1872,32 @@
     "format": "MP3"
   },
   {
-    "id": 149,
-    "name": "RCO Live",
-    "url": "https://ice.cr1.streamzilla.xlcdn.com:8000/sz=RCOLiveWebradio=mp3-192",
-    "genre": "Classical",
-    "broadcaster": "RCO",
-    "country": "Netherlands",
-    "bitrate": "192",
-    "format": "MP3"
-  },
-  {
-    "id": 152,
-    "name": "RSI - Rete Due",
-    "url": "http://stream.srg-ssr.ch/m/retedue/mp3_128",
-    "genre": "Classical, Music, Culture",
-    "broadcaster": "RSI",
-    "country": "Switzerland",
+    "id": 129,
+    "name": "PRM - Prog Rock & Metal",
+    "url": "http://shoutcastunlimited.com:8512",
+    "genre": "Progressive Rock, Metal",
+    "broadcaster": "Will Mangold",
+    "country": "United States",
     "bitrate": "128",
     "format": "MP3"
   },
   {
-    "id": 153,
-    "name": "RSI - Rete Tre",
-    "url": "http://stream.srg-ssr.ch/m/retetre/mp3_128",
-    "genre": "Alternative, Pop",
-    "broadcaster": "RSI",
-    "country": "Switzerland",
+    "id": 1025,
+    "name": "RAC1",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC_1.mp3",
+    "genre": "News, Talk, Sports",
+    "broadcaster": "Grupo Godó",
+    "country": "Spain",
     "bitrate": "128",
     "format": "MP3"
   },
   {
-    "id": 154,
-    "name": "RSI - Rete Uno",
-    "url": "http://stream.srg-ssr.ch/m/reteuno/mp3_128",
-    "genre": "News, Entertainment, News",
-    "broadcaster": "RSI",
-    "country": "Switzerland",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 155,
-    "name": "RTR Radio",
-    "url": "http://stream.srg-ssr.ch/m/rr/mp3_128",
-    "genre": "Pop",
-    "broadcaster": "SRG",
-    "country": "Switzerland",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 156,
-    "name": "RTS - Couleur 3",
-    "url": "http://stream.srg-ssr.ch/m/couleur3/mp3_128",
-    "genre": "Eclectic",
-    "broadcaster": "SRG",
-    "country": "Switzerland",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 157,
-    "name": "RTS - Espace 2",
-    "url": "http://stream.srg-ssr.ch/m/espace-2/mp3_128",
-    "genre": "Classical",
-    "broadcaster": "SRG",
-    "country": "Switzerland",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 158,
-    "name": "RTS - La Premiere",
-    "url": "http://stream.srg-ssr.ch/m/la-1ere/mp3_128",
-    "genre": "Pop",
-    "broadcaster": "SRG",
-    "country": "Switzerland",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 159,
-    "name": "RTS - option musique",
-    "url": "http://stream.srg-ssr.ch/m/option-musique/mp3_128",
-    "genre": "Alternative, Indie",
-    "broadcaster": "SRG",
-    "country": "Switzerland",
+    "id": 1026,
+    "name": "RAC105",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC105.mp3",
+    "genre": "Pop, Hits",
+    "broadcaster": "Grupo Godó",
+    "country": "Spain",
     "bitrate": "128",
     "format": "MP3"
   },
@@ -1387,6 +1929,36 @@
     "broadcaster": "ORF",
     "country": "Austria",
     "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 1045,
+    "name": "Radio Galega",
+    "url": "https://crtvg-radiogalega-hls.flumotion.cloud/playlist.m3u8",
+    "genre": "News, Talk, Culture",
+    "broadcaster": "CRTVG",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 1046,
+    "name": "Radio Galega Música",
+    "url": "https://crtvg-radiogalega-musica-hls.flumotion.cloud/playlist.m3u8",
+    "genre": "Pop, Rock, Folk",
+    "broadcaster": "CRTVG",
+    "country": "Spain",
+    "bitrate": "192",
+    "format": "AAC"
+  },
+  {
+    "id": 1024,
+    "name": "Radio Marca Nacional",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOMARCA_NACIONAL_SC",
+    "genre": "Sports, Talk",
+    "broadcaster": "Unidad Editorial",
+    "country": "Spain",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -1550,6 +2122,26 @@
     "format": "AAC"
   },
   {
+    "id": 1013,
+    "name": "Radiolé",
+    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOLE.mp3",
+    "genre": "Flamenco, Folk, World, Español",
+    "broadcaster": "PRISA Radio",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 149,
+    "name": "RCO Live",
+    "url": "https://ice.cr1.streamzilla.xlcdn.com:8000/sz=RCOLiveWebradio=mp3-192",
+    "genre": "Classical",
+    "broadcaster": "RCO",
+    "country": "Netherlands",
+    "bitrate": "192",
+    "format": "MP3"
+  },
+  {
     "id": 150,
     "name": "Resonance Radio 104.4 FM",
     "url": "http://stream.resonance.fm/resonance",
@@ -1557,6 +2149,76 @@
     "broadcaster": "Resonance Radio",
     "country": "United Kingdom",
     "bitrate": "192",
+    "format": "MP3"
+  },
+  {
+    "id": 1003,
+    "name": "RNE Radio 3",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r3_main.m3u8",
+    "genre": "Alternative, Indie, Rock, Electronic",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1005,
+    "name": "RNE Radio 5 Todo Noticias",
+    "url": "https://dispatcher.rndfnk.com/crtve/rne5/main/mp3/high",
+    "genre": "News, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1002,
+    "name": "RNE Radio Clásica",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r2_main.m3u8",
+    "genre": "Classical",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1006,
+    "name": "RNE Radio Exterior de España",
+    "url": "https://dispatcher.rndfnk.com/crtve/rneree/main/mp3/high",
+    "genre": "News, World, Culture",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1001,
+    "name": "RNE Radio Nacional",
+    "url": "https://dispatcher.rndfnk.com/crtve/rne1/main/mp3/high",
+    "genre": "General, News, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1004,
+    "name": "RNE Ràdio 4",
+    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r4_main.m3u8",
+    "genre": "General, Culture, Talk",
+    "broadcaster": "RNE",
+    "country": "Spain",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 1016,
+    "name": "Rock FM España",
+    "url": "https://rockfm-cope-rrcast.flumotion.com/cope/rockfm.mp3",
+    "genre": "Rock, Classic Rock",
+    "broadcaster": "Ábside Media",
+    "country": "Spain",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
@@ -1570,22 +2232,92 @@
     "format": "MP3"
   },
   {
-    "id": 203,
-    "name": "SUB.FM - Where Bass Matters",
-    "url": "http://subfm.radioca.st/Sub.FM",
-    "genre": "Dub, Dubstep, Garage, Grime, Deep House, Techno, Juke, Jungle Trap",
-    "broadcaster": "SUB.FM",
-    "country": "United Kingdom",
-    "bitrate": "192",
+    "id": 152,
+    "name": "RSI - Rete Due",
+    "url": "http://stream.srg-ssr.ch/m/retedue/mp3_128",
+    "genre": "Classical, Music, Culture",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
     "format": "MP3"
   },
   {
-    "id": 205,
-    "name": "SWR 2",
-    "url": "https://liveradio.swr.de/sw331ch/swr2/play.aac",
-    "genre": "Classical, Jazz",
-    "broadcaster": "Südwestdeutscher Rundfunk",
-    "country": "Germany",
+    "id": 153,
+    "name": "RSI - Rete Tre",
+    "url": "http://stream.srg-ssr.ch/m/retetre/mp3_128",
+    "genre": "Alternative, Pop",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 154,
+    "name": "RSI - Rete Uno",
+    "url": "http://stream.srg-ssr.ch/m/reteuno/mp3_128",
+    "genre": "News, Entertainment, News",
+    "broadcaster": "RSI",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 155,
+    "name": "RTR Radio",
+    "url": "http://stream.srg-ssr.ch/m/rr/mp3_128",
+    "genre": "Pop",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 156,
+    "name": "RTS - Couleur 3",
+    "url": "http://stream.srg-ssr.ch/m/couleur3/mp3_128",
+    "genre": "Eclectic",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 157,
+    "name": "RTS - Espace 2",
+    "url": "http://stream.srg-ssr.ch/m/espace-2/mp3_128",
+    "genre": "Classical",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 158,
+    "name": "RTS - La Premiere",
+    "url": "http://stream.srg-ssr.ch/m/la-1ere/mp3_128",
+    "genre": "Pop",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 159,
+    "name": "RTS - option musique",
+    "url": "http://stream.srg-ssr.ch/m/option-musique/mp3_128",
+    "genre": "Alternative, Indie",
+    "broadcaster": "SRG",
+    "country": "Switzerland",
+    "bitrate": "128",
+    "format": "MP3"
+  },
+  {
+    "id": 1036,
+    "name": "Ràdio Flaixbac",
+    "url": "https://stream.flaixbac.cat/icecast",
+    "genre": "Pop, Dance, Hits",
+    "broadcaster": "Grup Flaix",
+    "country": "Spain",
     "bitrate": "128",
     "format": "AAC"
   },
@@ -1670,6 +2402,16 @@
     "format": "AAC"
   },
   {
+    "id": 168,
+    "name": "Soma FM - cliqhop idm",
+    "url": "http://ice1.somafm.com/cliqhop-128-aac",
+    "genre": "Electronica, Beats With Clicks and Bleeps",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
     "id": 169,
     "name": "Soma FM - Covers",
     "url": "http://ice1.somafm.com/covers-128-mp3",
@@ -1680,20 +2422,20 @@
     "format": "MP3"
   },
   {
-    "id": 171,
-    "name": "Soma FM - DEF CON Radio",
-    "url": "http://ice1.somafm.com/defcon-128-aac",
-    "genre": "Electronica, DEF CON Conference Music",
+    "id": 170,
+    "name": "Soma FM - Deep Space One",
+    "url": "http://ice1.somafm.com/deepspaceone-128-aac",
+    "genre": "Electronica, Ambient, Experimental, Space Music",
     "broadcaster": "Soma FM",
     "country": "United States",
     "bitrate": "128",
     "format": "AAC"
   },
   {
-    "id": 170,
-    "name": "Soma FM - Deep Space One",
-    "url": "http://ice1.somafm.com/deepspaceone-128-aac",
-    "genre": "Electronica, Ambient, Experimental, Space Music",
+    "id": 171,
+    "name": "Soma FM - DEF CON Radio",
+    "url": "http://ice1.somafm.com/defcon-128-aac",
+    "genre": "Electronica, DEF CON Conference Music",
     "broadcaster": "Soma FM",
     "country": "United States",
     "bitrate": "128",
@@ -1850,20 +2592,20 @@
     "format": "AAC"
   },
   {
-    "id": 188,
-    "name": "Soma FM - PopTron",
-    "url": "http://ice1.somafm.com/poptron-128-aac",
-    "genre": "Pop, Electro-Pop, indie Dance Rock",
+    "id": 187,
+    "name": "Soma FM - n5MD Radio",
+    "url": "https://ice6.somafm.com/n5md-128-aac",
+    "genre": "Electronica, Ambient, NASA Radio Traffic",
     "broadcaster": "Soma FM",
     "country": "United States",
     "bitrate": "128",
     "format": "AAC"
   },
   {
-    "id": 191,
-    "name": "Soma FM - SF 10-33",
-    "url": "http://ice1.somafm.com/sf1033-128-aac",
-    "genre": "Electronica, Ambient, San Francisco Public Safety Radio Traffic",
+    "id": 188,
+    "name": "Soma FM - PopTron",
+    "url": "http://ice1.somafm.com/poptron-128-aac",
+    "genre": "Pop, Electro-Pop, indie Dance Rock",
     "broadcaster": "Soma FM",
     "country": "United States",
     "bitrate": "128",
@@ -1884,6 +2626,16 @@
     "name": "Soma FM - Seven Inch Soul",
     "url": "http://ice1.somafm.com/7soul-128-aac",
     "genre": "Soul, Vintage Soul From Vinyl 45 RPM Records",
+    "broadcaster": "Soma FM",
+    "country": "United States",
+    "bitrate": "128",
+    "format": "AAC"
+  },
+  {
+    "id": 191,
+    "name": "Soma FM - SF 10-33",
+    "url": "http://ice1.somafm.com/sf1033-128-aac",
+    "genre": "Electronica, Ambient, San Francisco Public Safety Radio Traffic",
     "broadcaster": "Soma FM",
     "country": "United States",
     "bitrate": "128",
@@ -2000,24 +2752,14 @@
     "format": "AAC"
   },
   {
-    "id": 168,
-    "name": "Soma FM - cliqhop idm",
-    "url": "http://ice1.somafm.com/cliqhop-128-aac",
-    "genre": "Electronica, Beats With Clicks and Bleeps",
-    "broadcaster": "Soma FM",
-    "country": "United States",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 187,
-    "name": "Soma FM - n5MD Radio",
-    "url": "https://ice6.somafm.com/n5md-128-aac",
-    "genre": "Electronica, Ambient, NASA Radio Traffic",
-    "broadcaster": "Soma FM",
-    "country": "United States",
-    "bitrate": "128",
-    "format": "AAC"
+    "id": 203,
+    "name": "SUB.FM - Where Bass Matters",
+    "url": "http://subfm.radioca.st/Sub.FM",
+    "genre": "Dub, Dubstep, Garage, Grime, Deep House, Techno, Juke, Jungle Trap",
+    "broadcaster": "SUB.FM",
+    "country": "United Kingdom",
+    "bitrate": "192",
+    "format": "MP3"
   },
   {
     "id": 204,
@@ -2028,6 +2770,16 @@
     "country": "Switzerland",
     "bitrate": "128",
     "format": "MP3"
+  },
+  {
+    "id": 205,
+    "name": "SWR 2",
+    "url": "https://liveradio.swr.de/sw331ch/swr2/play.aac",
+    "genre": "Classical, Jazz",
+    "broadcaster": "Südwestdeutscher Rundfunk",
+    "country": "Germany",
+    "bitrate": "128",
+    "format": "AAC"
   },
   {
     "id": 206,
@@ -2058,6 +2810,16 @@
     "country": "Australia",
     "bitrate": "96",
     "format": "MP3"
+  },
+  {
+    "id": 209,
+    "name": "Venice Classic Radio Italia",
+    "url": "https://uk2.streamingpulse.com/ssl/vcr1",
+    "genre": "Classical",
+    "broadcaster": "Venice Classic Radio",
+    "country": "Italy",
+    "bitrate": "128",
+    "format": "AAC"
   },
   {
     "id": 210,
@@ -2128,16 +2890,6 @@
     "country": "Belgium",
     "bitrate": "128",
     "format": "MP3"
-  },
-  {
-    "id": 209,
-    "name": "Venice Classic Radio Italia",
-    "url": "https://uk2.streamingpulse.com/ssl/vcr1",
-    "genre": "Classical",
-    "broadcaster": "Venice Classic Radio",
-    "country": "Italy",
-    "bitrate": "128",
-    "format": "AAC"
   },
   {
     "id": 217,
@@ -2317,516 +3069,6 @@
     "broadcaster": "Zen FM",
     "country": "Belgium",
     "bitrate": "192",
-    "format": "MP3"
-  },
-  {
-    "id": 81,
-    "name": "frequence3 (FLAC)",
-    "url": "http://hd.stream.frequence3.net/frequence3.flac",
-    "genre": "Pop, Top 40, Chart",
-    "broadcaster": "Frequence3 Association",
-    "country": "France",
-    "bitrate": "900",
-    "format": "FLAC"
-  },
-  {
-    "id": 1001,
-    "name": "RNE Radio Nacional",
-    "url": "https://dispatcher.rndfnk.com/crtve/rne1/main/mp3/high",
-    "genre": "General, News, Talk",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1002,
-    "name": "RNE Radio Clásica",
-    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r2_main.m3u8",
-    "genre": "Classical",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1003,
-    "name": "RNE Radio 3",
-    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r3_main.m3u8",
-    "genre": "Alternative, Indie, Rock, Electronic",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1004,
-    "name": "RNE Ràdio 4",
-    "url": "https://rtvelivestream.rtve.es/rtvesec/rne/rne_r4_main.m3u8",
-    "genre": "General, Culture, Talk",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1005,
-    "name": "RNE Radio 5 Todo Noticias",
-    "url": "https://dispatcher.rndfnk.com/crtve/rne5/main/mp3/high",
-    "genre": "News, Talk",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1006,
-    "name": "RNE Radio Exterior de España",
-    "url": "https://dispatcher.rndfnk.com/crtve/rneree/main/mp3/high",
-    "genre": "News, World, Culture",
-    "broadcaster": "RNE",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1007,
-    "name": "Cadena SER",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENASER.mp3",
-    "genre": "News, Talk, Sports",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1008,
-    "name": "LOS40",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40.mp3",
-    "genre": "Pop, Hits, Top 40",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1009,
-    "name": "LOS40 Classic",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_CLASSIC.mp3",
-    "genre": "Classic Hits, Rock, Pop, 80s, 90s",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1010,
-    "name": "LOS40 Dance",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_DANCE.mp3",
-    "genre": "Dance, Electronic, House",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1011,
-    "name": "LOS40 Urban",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_URBAN.mp3",
-    "genre": "Urban, Hip Hop, Pop",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1012,
-    "name": "Cadena Dial",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/CADENADIAL.mp3",
-    "genre": "Pop, Español, Hits",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1013,
-    "name": "Radiolé",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOLE.mp3",
-    "genre": "Flamenco, Folk, World, Español",
-    "broadcaster": "PRISA Radio",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1014,
-    "name": "COPE Nacional",
-    "url": "https://net1-cope-rrcast.flumotion.com/cope/net1.mp3",
-    "genre": "News, Talk, Sports",
-    "broadcaster": "Ábside Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1015,
-    "name": "Cadena 100",
-    "url": "https://cadena100-streamers-mp3.flumotion.com/cope/cadena100.mp3",
-    "genre": "Pop, Rock, Hits",
-    "broadcaster": "Ábside Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1016,
-    "name": "Rock FM España",
-    "url": "https://rockfm-cope-rrcast.flumotion.com/cope/rockfm.mp3",
-    "genre": "Rock, Classic Rock",
-    "broadcaster": "Ábside Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1017,
-    "name": "MegaStarFM",
-    "url": "https://megastar-cope-rrcast.flumotion.com/cope/megastar.mp3",
-    "genre": "Pop, Dance, Top 40",
-    "broadcaster": "Ábside Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1018,
-    "name": "Onda Cero",
-    "url": "https://atres-live.ondacero.es/live/ondacero/master.m3u8",
-    "genre": "News, Talk, Sports",
-    "broadcaster": "Atresmedia",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1019,
-    "name": "Europa FM",
-    "url": "https://atres-live.europafm.com/live/europafm/master.m3u8",
-    "genre": "Pop, Dance, Hits",
-    "broadcaster": "Atresmedia",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1020,
-    "name": "Melodía FM",
-    "url": "https://atres-live.melodia-fm.com/live/melodiafm/master.m3u8",
-    "genre": "Pop, Classic Hits, 80s, 90s",
-    "broadcaster": "Atresmedia",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1021,
-    "name": "Kiss FM España",
-    "url": "https://bbkissfm.kissfmradio.cires21.com/bbkissfm.mp3",
-    "genre": "Pop, 80s, 90s, Classic Hits",
-    "broadcaster": "Grupo Kiss Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1022,
-    "name": "Hit FM España",
-    "url": "https://hitfm.kissfmradio.cires21.com/hitfm.mp3",
-    "genre": "Pop, Dance, Top 40",
-    "broadcaster": "Grupo Kiss Media",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1023,
-    "name": "esRadio",
-    "url": "https://libertaddigital-radio-live1.flumotion.com/libertaddigital/ld-live1-med.aac",
-    "genre": "News, Talk",
-    "broadcaster": "Libertad Digital",
-    "country": "Spain",
-    "bitrate": "96",
-    "format": "AAC"
-  },
-  {
-    "id": 1024,
-    "name": "Radio Marca Nacional",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIOMARCA_NACIONAL_SC",
-    "genre": "Sports, Talk",
-    "broadcaster": "Unidad Editorial",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1025,
-    "name": "RAC1",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC_1.mp3",
-    "genre": "News, Talk, Sports",
-    "broadcaster": "Grupo Godó",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1026,
-    "name": "RAC105",
-    "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/RAC105.mp3",
-    "genre": "Pop, Hits",
-    "broadcaster": "Grupo Godó",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1027,
-    "name": "Catalunya Ràdio",
-    "url": "https://shoutcast.ccma.cat/ccma/catalunyaradioHD.mp3",
-    "genre": "News, Talk, Culture",
-    "broadcaster": "CCMA / 3Cat",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1028,
-    "name": "Catalunya Música",
-    "url": "https://shoutcast.ccma.cat/ccma/catalunyamusicaHD.mp3",
-    "genre": "Classical, Jazz",
-    "broadcaster": "CCMA / 3Cat",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1029,
-    "name": "Catalunya Informació",
-    "url": "https://shoutcast.ccma.cat/ccma/catalunyainformacioHD.mp3",
-    "genre": "News, Talk",
-    "broadcaster": "CCMA / 3Cat",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1030,
-    "name": "iCat",
-    "url": "https://shoutcast.ccma.cat/ccma/icatHD.mp3",
-    "genre": "Alternative, Indie, Electronic",
-    "broadcaster": "CCMA / 3Cat",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1031,
-    "name": "Canal Sur Radio",
-    "url": "https://rtva-live-radio.flumotion.com/rtva/csr.mp3",
-    "genre": "News, Talk, Culture",
-    "broadcaster": "RTVA",
-    "country": "Spain",
-    "bitrate": "320",
-    "format": "MP3"
-  },
-  {
-    "id": 1032,
-    "name": "Canal Fiesta Radio",
-    "url": "https://rtva-live-radio.flumotion.com/rtva/cfr.mp3",
-    "genre": "Pop, Español",
-    "broadcaster": "RTVA",
-    "country": "Spain",
-    "bitrate": "320",
-    "format": "MP3"
-  },
-  {
-    "id": 1033,
-    "name": "Canal Sur Radio Música",
-    "url": "https://rtva-live-radio.flumotion.com/rtva/csm.mp3",
-    "genre": "Pop, Culture, Español",
-    "broadcaster": "RTVA",
-    "country": "Spain",
-    "bitrate": "320",
-    "format": "MP3"
-  },
-  {
-    "id": 1034,
-    "name": "Canal Flamenco Radio",
-    "url": "https://rtva-live-radio.flumotion.com/rtva/flamenco.mp3",
-    "genre": "Flamenco, Folk, World",
-    "broadcaster": "RTVA",
-    "country": "Spain",
-    "bitrate": "320",
-    "format": "MP3"
-  },
-  {
-    "id": 1035,
-    "name": "Flaix FM",
-    "url": "https://stream.flaixfm.cat/icecast",
-    "genre": "Electronic, Dance, EDM",
-    "broadcaster": "Grup Flaix",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1036,
-    "name": "Ràdio Flaixbac",
-    "url": "https://stream.flaixbac.cat/icecast",
-    "genre": "Pop, Dance, Hits",
-    "broadcaster": "Grup Flaix",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "AAC"
-  },
-  {
-    "id": 1037,
-    "name": "Ibiza Global Radio",
-    "url": "http://ibizaglobalradio.streaming-pro.com:8024/",
-    "genre": "Electronic, House, Deep House",
-    "broadcaster": "Ibiza Global",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1038,
-    "name": "Ibiza Sonica Radio",
-    "url": "https://ibizasonica.streaming-pro.com:8000/ibizasonica",
-    "genre": "Electronic, House, Chillout",
-    "broadcaster": "Ibiza Sonica",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1039,
-    "name": "Loca FM",
-    "url": "http://s3.we4stream.com:8045/live",
-    "genre": "Electronic, Dance, House",
-    "broadcaster": "Loca FM",
-    "country": "Spain",
-    "bitrate": "160",
-    "format": "MP3"
-  },
-  {
-    "id": 1040,
-    "name": "Loca FM 80s",
-    "url": "http://s02.fjperezdj.com:8075/live",
-    "genre": "80s, Pop, Rock",
-    "broadcaster": "Loca FM",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1041,
-    "name": "Loca FM Urban",
-    "url": "http://locafm02.we4stream.com:8015/live",
-    "genre": "Urban, Hip Hop",
-    "broadcaster": "Loca FM",
-    "country": "Spain",
-    "bitrate": "160",
-    "format": "MP3"
-  },
-  {
-    "id": 1042,
-    "name": "Loca FM Deep Techno",
-    "url": "http://s02.fjperezdj.com:8066/live",
-    "genre": "Electronic, Techno",
-    "broadcaster": "Loca FM",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1043,
-    "name": "EITB Radio Euskadi",
-    "url": "http://mp3-eitb.stream.flumotion.com/eitb/radioeuskadi.mp3",
-    "genre": "News, Talk, Culture",
-    "broadcaster": "EITB",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1044,
-    "name": "EITB Gaztea",
-    "url": "http://mp3-eitb.stream.flumotion.com/eitb/gaztea.mp3",
-    "genre": "Pop, Rock, Indie",
-    "broadcaster": "EITB",
-    "country": "Spain",
-    "bitrate": "128",
-    "format": "MP3"
-  },
-  {
-    "id": 1045,
-    "name": "Radio Galega",
-    "url": "https://crtvg-radiogalega-hls.flumotion.cloud/playlist.m3u8",
-    "genre": "News, Talk, Culture",
-    "broadcaster": "CRTVG",
-    "country": "Spain",
-    "bitrate": "192",
-    "format": "AAC"
-  },
-  {
-    "id": 1046,
-    "name": "Radio Galega Música",
-    "url": "https://crtvg-radiogalega-musica-hls.flumotion.cloud/playlist.m3u8",
-    "genre": "Pop, Rock, Folk",
-    "broadcaster": "CRTVG",
-    "country": "Spain",
-    "bitrate": "192",
-    "format": "AAC"
-  },
-  {
-    "id": 1047,
-    "name": "Jazz Radio Spain",
-    "url": "https://stream.tunerplay.com/radio/8020/jazzradiospain.mp3",
-    "genre": "Jazz, Smooth Jazz",
-    "broadcaster": "Jazz Radio Spain",
-    "country": "Spain",
-    "bitrate": "256",
-    "format": "MP3"
-  },
-  {
-    "id": 1048,
-    "name": "Costa Del Mar - Smooth Jazz",
-    "url": "https://radio4.cdm-radio.com:18024/stream-mp3-Smooth",
-    "genre": "Jazz, Smooth Jazz, Ambient",
-    "broadcaster": "Costa Del Mar",
-    "country": "Spain",
-    "bitrate": "96",
-    "format": "MP3"
-  },
-  {
-    "id": 1049,
-    "name": "Cafe Mambo Ibiza Radio",
-    "url": "https://streamer.radio.co/sd7b28e5f3/listen",
-    "genre": "Electronic, Ambient, House",
-    "broadcaster": "Cafe Mambo",
-    "country": "Spain",
-    "bitrate": "192",
-    "format": "MP3"
-  },
-  {
-    "id": 1050,
-    "name": "1000 HITS 80s España",
-    "url": "http://c2.auracast.net:8048/stream",
-    "genre": "80s, Pop, Rock",
-    "broadcaster": "1000 HITS",
-    "country": "Spain",
-    "bitrate": "128",
     "format": "MP3"
   }
 ]

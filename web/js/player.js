@@ -3,10 +3,10 @@
 // Safeguard Volume, Timeline Scrubber & Ambient Background Rendering
 // =====================================================================
 
-import * as api from './api.js?v=21';
-import { state, subscribe, notifyListeners } from './state.js?v=21';
-import { sanitizeCoverURL } from './sanitize.js?v=21';
-import { openNowPlaying, closeNowPlaying } from './gestures.js?v=21';
+import * as api from './api.js';
+import { state, subscribe, notifyListeners } from './state.js';
+import { sanitizeCoverURL } from './sanitize.js';
+import { openNowPlaying, closeNowPlaying } from './gestures.js';
 
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
 let isScrubbing = false;
@@ -185,6 +185,10 @@ function bindNowPlayingControls() {
       if (val > state.player.max_volume_limit) {
         val = state.player.max_volume_limit;
         volSlider.value = val;
+      }
+      const volDbfs = document.getElementById('npVolDbfs');
+      if (volDbfs) {
+        volDbfs.textContent = val > 0 ? `${Math.round(20 * Math.log10(val / 100))} dB` : '-∞ dB';
       }
       api.setVolume(val);
     });
@@ -753,7 +757,7 @@ export function renderMiniPlayer() {
 
   const coverImg = document.getElementById('miniCover');
   if (coverImg) {
-    delete coverImg.dataset.fallbackApplied;
+    coverImg.removeAttribute('data-fallback-applied');
     coverImg.dataset.fallback = '/assets/default-cover.svg';
     coverImg.src = sanitizeCoverURL(track.cover_url);
   }
@@ -787,6 +791,11 @@ export function renderNowPlaying() {
   const isPlaying = (state.player.status === 'play');
   const maxLimit = state.player.max_volume_limit || 85;
 
+  const npModal = document.getElementById('nowPlayingModal');
+  if (npModal) {
+    npModal.classList.toggle('playing', isPlaying);
+  }
+
   // Sincronizar botón principal de play / pausa
   const playIcon = document.getElementById('npPlayIcon');
   if (playIcon) {
@@ -808,6 +817,12 @@ export function renderNowPlaying() {
     if (document.activeElement !== volSlider) {
       volSlider.value = state.player.volume;
     }
+  }
+
+  const volDbfs = document.getElementById('npVolDbfs');
+  if (volDbfs) {
+    const vol = Number(state.player.volume) || 0;
+    volDbfs.textContent = vol > 0 ? `${Math.round(20 * Math.log10(vol / 100))} dB` : '-∞ dB';
   }
 
   const settingMaxVol = document.getElementById('settingMaxVol');
@@ -874,7 +889,7 @@ export function renderNowPlaying() {
   const coverSrc = sanitizeCoverURL(track.cover_url);
   const npCover = document.getElementById('npCover');
   if (npCover) {
-    delete npCover.dataset.fallbackApplied;
+    npCover.removeAttribute('data-fallback-applied');
     npCover.dataset.fallback = '/assets/default-cover.svg';
     npCover.src = coverSrc;
   }

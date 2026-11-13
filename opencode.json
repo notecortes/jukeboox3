@@ -1,0 +1,88 @@
+/*
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-plugin-llama.cpp@latest"
+  ],
+  "model": "llama.cpp/Qwen3.8-27B",
+  "provider": {
+    "llama.cpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen3.8 27B - Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:8083/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "Qwen3.8-27B": {
+          "name": "Qwen3.8 27B GSQ RCO IQ3_S",
+          "limit": {
+            "context": 128000,
+            "output": 2048
+          },
+          "options": {
+            "temperature": 0,
+            "topP": 0.95,
+            "topK": 20
+          }
+        }
+      }
+    }
+  }
+}
+*/
+/*
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "strata/qwen3.8-flash-next-iq2_xs",
+  "provider": {
+    "strata": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Strata local",
+      "options": {
+        "baseURL": "http://127.0.0.1:8081/v1"
+      },
+      "models": {
+        "qwen3.8-flash-next-iq2_xs": {
+          "name": "Qwen3.8 Flash Next IQ2 XS",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}
+*/
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-plugin-llama.cpp@latest"
+  ],
+  "model": "llama.cpp/qwen3.8",
+  "provider": {
+    "llama.cpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen3.8 27B - Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:7770/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "qwen3.8": {
+          "name": "Qwen3.8 27B UD-Q4_K_M",
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          },
+          "options": {
+            "temperature": 1.0,
+            "topP": 0.95,
+            "topK": 20
+          }
+        }
+      }
+    }
+  }
+}

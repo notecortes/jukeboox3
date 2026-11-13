@@ -1,41 +1,62 @@
 #!/bin/sh
 # =====================================================================
-# AuraBox DSP Pipe — Procesamiento SoX 32-bit hacia dispositivo ALSA
+# AuraBox DSP Pipe — Procesamiento SoX 32-bit hacia ALSA o PulseAudio
 # =====================================================================
 set -eu
 
-ALSA_DEV="${1:-}"
+AUDIO_DEV="${1:-}"
 PRESET="${2:-flat}"
 
-# Validar formato estricto de dispositivo ALSA para impedir inyección de opciones o rutas arbitrarias.
-case "$ALSA_DEV" in
-    plughw:[A-Za-z0-9_.,=-]*) ;;
+# Identificar si la salida es el servidor de sonido PulseAudio/PipeWire o una tarjeta ALSA física
+IS_PULSE=0
+case "$AUDIO_DEV" in
+    pulse|pulseaudio|unix:*)
+        IS_PULSE=1
+        ;;
+    plughw:[A-Za-z0-9_.,=-]*)
+        IS_PULSE=0
+        ;;
     *)
-        echo "[AuraBox DSP] Dispositivo ALSA inválido: $ALSA_DEV" >&2
+        echo "[AuraBox DSP] Dispositivo de audio no válido: $AUDIO_DEV" >&2
         exit 1
         ;;
 esac
 
+# run_dsp aplica la cadena de filtros SoX y envía el flujo PCM 48kHz 32-bit al dispositivo de audio
+run_dsp() {
+    PULSE_SOCK="${PULSE_SERVER:-unix:/tmp/pulse-socket}"
+    if [ "$IS_PULSE" -eq 1 ]; then
+        if [ $# -eq 0 ]; then
+            exec paplay --raw --server="${PULSE_SOCK}" --rate=48000 --format=s32le --channels=2
+        else
+            sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t raw - "$@" | \
+                exec paplay --raw --server="${PULSE_SOCK}" --rate=48000 --format=s32le --channels=2
+        fi
+    else
+        if [ $# -eq 0 ]; then
+            exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$AUDIO_DEV"
+        else
+            exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$AUDIO_DEV" "$@"
+        fi
+    fi
+}
+
 case "$PRESET" in
     night)
-        # Noche / Loudness: realza graves y agudos a bajo volumen con compresión suave sin recorte.
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
-            gain -4.5 bass +4 100 0.7s treble +2 9000 0.7s compand 0.1,0.5 -40,-36,-16,-14,0,-3 0 -12 0.1
+        # Noche / Loudness: realza graves y agudos a bajo volumen con compresión suave sin recorte
+        run_dsp gain -4.5 bass +4 100 0.7s treble +2 9000 0.7s compand 0.1,0.5 -40,-36,-16,-14,0,-3 0 -12 0.1
         ;;
     voice)
-        # Voz y Acústica: limpia retumbes subgraves y aporta claridad en medios vocales.
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
-            gain -3.5 highpass 80 equalizer 2200 1.2q +3.5 equalizer 350 1.4q -1.5
+        # Voz y Acústica: limpia retumbes subgraves y aporta claridad en medios vocales
+        run_dsp gain -3.5 highpass 80 equalizer 2200 1.2q +3.5 equalizer 350 1.4q -1.5
         ;;
     livingroom)
-        # Altavoces Salón: escena más amplia y presencia cálida en frecuencias medias-altas.
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
-            gain -3.5 bass +2.5 85 0.7s equalizer 3000 1.1q +2 treble +1.5 10000 0.7s
+        # Altavoces Salón: escena más amplia y presencia cálida en frecuencias medias-altas
+        run_dsp gain -3.5 bass +2.5 85 0.7s equalizer 3000 1.1q +2 treble +1.5 10000 0.7s
         ;;
     bass)
-        # Graves Hi-Fi: cuerpo extendido en subgraves para auriculares abiertos o cajas compactas.
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
-            gain -5.5 bass +5.5 95 0.65s equalizer 240 1.3q -1 treble +1 11000 0.7s
+        # Graves Hi-Fi: cuerpo extendido en subgraves para auriculares abiertos o cajas compactas
+        run_dsp gain -5.5 bass +5.5 95 0.65s equalizer 240 1.3q -1 treble +1 11000 0.7s
         ;;
     eq:*)
         if ! printf '%s' "$PRESET" | grep -Eq '^eq:-?[0-9]{1,2}(,-?[0-9]{1,2}){4}$'; then
@@ -64,18 +85,18 @@ case "$PRESET" in
         set -- $PARSED
         HEADROOM="$1"; B1="$2"; B2="$3"; B4_1K="$4"; B4="$5"; B5="$6"
         if [ "$B1" = "0" ] && [ "$B2" = "0" ] && [ "$B4_1K" = "0" ] && [ "$B4" = "0" ] && [ "$B5" = "0" ]; then
-            exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV"
+            run_dsp
+        else
+            run_dsp gain "$HEADROOM" \
+                equalizer 60 1.0q "$B1" \
+                equalizer 250 1.0q "$B2" \
+                equalizer 1000 1.0q "$B4_1K" \
+                equalizer 4000 1.0q "$B4" \
+                equalizer 12000 1.0q "$B5"
         fi
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV" \
-            gain "$HEADROOM" \
-            equalizer 60 1.0q "$B1" \
-            equalizer 250 1.0q "$B2" \
-            equalizer 1000 1.0q "$B4_1K" \
-            equalizer 4000 1.0q "$B4" \
-            equalizer 12000 1.0q "$B5"
         ;;
     flat|"")
-        exec sox -q --buffer 8192 -t raw -r 48000 -e signed -b 32 -c 2 -L - -t alsa "$ALSA_DEV"
+        run_dsp
         ;;
     *)
         echo "[AuraBox DSP] Preset no reconocido: $PRESET" >&2

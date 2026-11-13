@@ -881,6 +881,11 @@ func (c *Client) syncQueueFromMPD() {
 					return
 				}
 			} else if t, err := c.database.GetTrackByPath(fullPath); err == nil && t != nil {
+				if t.CoverURL == "" && t.Album != "" {
+					if cover := c.database.GetAlbumCoverByTitle(t.Album); cover != "" {
+						t.CoverURL = cover
+					}
+				}
 				if currentDuration > 0 && (t.Duration <= 0 || t.Duration == 240.0) {
 					t.Duration = currentDuration
 					trackID := t.ID
@@ -1289,6 +1294,12 @@ func (c *Client) syncStatusFromMPD() bool {
 			}
 		}
 		trackCopy := c.queue[songIdx]
+		if trackCopy.CoverURL == "" && trackCopy.Album != "" && c.database != nil {
+			if cover := c.database.GetAlbumCoverByTitle(trackCopy.Album); cover != "" {
+				trackCopy.CoverURL = cover
+				c.queue[songIdx].CoverURL = cover
+			}
+		}
 		c.state.CurrentIndex = songIdx
 		c.state.CurrentTrack = &trackCopy
 		c.state.StreamTitle = ""
@@ -3495,7 +3506,7 @@ func (c *Client) SelectAudioOutput(outputID int) error {
 	_ = c.writeDSPConfigFile()
 
 	wantPipe := (targetPreset != "flat")
-	if c.isConnected() && ((wantPipe && selectedPlugin == "alsa") || (!wantPipe && selectedPlugin == "pipe")) {
+	if c.isConnected() && ((wantPipe && (selectedPlugin == "alsa" || selectedPlugin == "pulse")) || (!wantPipe && selectedPlugin == "pipe")) {
 		_, _ = c.RefreshAudioOutputs()
 		return nil
 	}
@@ -3597,14 +3608,14 @@ func (c *Client) dspNeedsMPDReloadLockedCheck() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, o := range c.state.AudioOutputs {
-		if !o.Enabled || o.Plugin == "httpd" || o.Plugin == "null" || o.Plugin == "pulse" {
+		if !o.Enabled || o.Plugin == "httpd" || o.Plugin == "null" {
 			continue
 		}
 		preset := c.state.DSPPresets[o.Name]
 		if preset == "" {
 			preset = "flat"
 		}
-		if preset != "flat" && o.Plugin == "alsa" {
+		if preset != "flat" && (o.Plugin == "alsa" || o.Plugin == "pulse") {
 			return true
 		}
 		if preset == "flat" && o.Plugin == "pipe" {
@@ -3655,9 +3666,6 @@ func (c *Client) SetOutputDSPPreset(outputName, preset string) (PlayerState, err
 	case "null":
 		c.mu.Unlock()
 		return c.GetState(), fmt.Errorf("la salida virtual no admite perfiles DSP")
-	case "pulse":
-		c.mu.Unlock()
-		return c.GetState(), fmt.Errorf("las salidas PulseAudio del sistema no admiten DSP ALSA SoX")
 	}
 
 	prevPreset, hasPrev := c.state.DSPPresets[target]
@@ -3689,7 +3697,7 @@ func (c *Client) SetOutputDSPPreset(outputName, preset string) (PlayerState, err
 	}
 	_ = c.writeDSPConfigFile()
 
-	needsReload := isActive && prevPreset != normPreset && (foundPlugin == "alsa" || foundPlugin == "pipe")
+	needsReload := isActive && prevPreset != normPreset && (foundPlugin == "alsa" || foundPlugin == "pulse" || foundPlugin == "pipe")
 	if needsReload && c.isConnected() {
 		if _, err := c.RefreshAudioOutputs(); err == nil {
 			return c.GetState(), nil
@@ -3921,5 +3929,33 @@ func (c *Client) broadcastQueue() {
 			"queue":  q,
 			"length": len(q),
 		})
+	}
+}
+
+// UpdateCurrentTrackCoverIfAlbumMatches propaga en tiempo real la nueva carátula si coincide con el álbum en reproducción o en cola.
+func (c *Client) UpdateCurrentTrackCoverIfAlbumMatches(albumTitle, coverURL string) {
+	cleanAlbum := strings.TrimSpace(albumTitle)
+	cleanCover := strings.TrimSpace(coverURL)
+	if cleanAlbum == "" || cleanCover == "" {
+		return
+	}
+
+	c.mu.Lock()
+	updated := false
+	if c.state.CurrentTrack != nil && strings.EqualFold(c.state.CurrentTrack.Album, cleanAlbum) {
+		c.state.CurrentTrack.CoverURL = cleanCover
+		updated = true
+	}
+	for i := range c.queue {
+		if strings.EqualFold(c.queue[i].Album, cleanAlbum) {
+			c.queue[i].CoverURL = cleanCover
+			updated = true
+		}
+	}
+	c.mu.Unlock()
+
+	if updated {
+		c.broadcastState()
+		c.broadcastQueue()
 	}
 }

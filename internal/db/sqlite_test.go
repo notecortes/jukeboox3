@@ -301,6 +301,30 @@ func TestEmbeddedRadiosSeededAndCRUD(t *testing.T) {
 		t.Fatalf("AddRadio no debería sobrescribir una emisora integrada existente (%s)", defaultStation.Name)
 	}
 
+	// Probar favoritos de radio y ordenación prioritaria
+	isFav, favErr := d.ToggleRadioFavorite(defaultStation.ID)
+	if favErr != nil || !isFav {
+		t.Fatalf("ToggleRadioFavorite falló al marcar favorita: err=%v isFav=%v", favErr, isFav)
+	}
+	favStation, err := d.GetRadioByID(int(defaultStation.ID))
+	if err != nil || !favStation.Favorite {
+		t.Fatalf("GetRadioByID no reflejó estado favorito: err=%v station=%+v", err, favStation)
+	}
+	allRadios, err := d.GetRadios()
+	if err != nil || len(allRadios) == 0 || allRadios[0].ID != defaultStation.ID {
+		t.Fatalf("GetRadios debía colocar la radio favorita al inicio, primera: %+v", allRadios[0])
+	}
+	isFav2, favErr2 := d.ToggleRadioFavorite(defaultStation.ID)
+	if favErr2 != nil || isFav2 {
+		t.Fatalf("ToggleRadioFavorite falló al desmarcar favorita: err=%v isFav=%v", favErr2, isFav2)
+	}
+
+	// Probar SearchRadios
+	matches, searchErr := d.SearchRadios("La Indie")
+	if searchErr != nil || len(matches) == 0 {
+		t.Fatalf("SearchRadios('La Indie') falló o no encontró resultados: err=%v matches=%d", searchErr, len(matches))
+	}
+
 	if err := d.DeleteRadio(defaultStation.ID); err == nil {
 		t.Fatalf("DeleteRadio no debería borrar una emisora predeterminada (ID=%d)", defaultStation.ID)
 	}

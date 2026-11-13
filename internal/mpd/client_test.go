@@ -1388,7 +1388,8 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 	srv.outputs = []OutputInfo{
 		{ID: 0, Name: "DAC USB (Topping)", Plugin: "alsa", Enabled: true},
 		{ID: 1, Name: "Jack 3.5mm (bcm2835)", Plugin: "alsa", Enabled: false},
-		{ID: 2, Name: "Transmisión Web HTTP (Hi-Fi Stream)", Plugin: "httpd", Enabled: true},
+		{ID: 2, Name: "Altavoces del Sistema (PipeWire / PulseAudio)", Plugin: "pulse", Enabled: false},
+		{ID: 3, Name: "Transmisión Web HTTP (Hi-Fi Stream)", Plugin: "httpd", Enabled: true},
 	}
 	srv.mu.Unlock()
 
@@ -1398,7 +1399,7 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 	}
 	defer database.Close()
 
-	// Simular entrypoint.sh observando reload_outputs y actualizando plugins ALSA/pipe según dsp_config
+	// Simular entrypoint.sh observando reload_outputs y actualizando plugins ALSA/Pulse/pipe según dsp_config
 	reloadStop := make(chan struct{})
 	defer close(reloadStop)
 	go func() {
@@ -1431,10 +1432,14 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 						if srv.outputs[i].Plugin == "httpd" {
 							continue
 						}
+						origPlugin := "alsa"
+						if srv.outputs[i].Name == "Altavoces del Sistema (PipeWire / PulseAudio)" {
+							origPlugin = "pulse"
+						}
 						if p := presets[srv.outputs[i].Name]; p != "" && p != "flat" {
 							srv.outputs[i].Plugin = "pipe"
 						} else {
-							srv.outputs[i].Plugin = "alsa"
+							srv.outputs[i].Plugin = origPlugin
 						}
 						if activeName != "" {
 							srv.outputs[i].Enabled = (srv.outputs[i].Name == activeName)
@@ -1515,6 +1520,32 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 	}
 	if stCustom.DSPPreset != "eq:4,1,0,-2,3" || stCustom.AudioOutputs[0].Plugin != "pipe" {
 		t.Fatalf("curva EQ personalizada no reflejada en estado/plugin pipe: %+v", stCustom)
+	}
+
+	// Probar que las salidas PulseAudio / PipeWire admiten DSP sin error 400 y conmutan a pipe
+	if err := c.SelectAudioOutput(2); err != nil {
+		t.Fatalf("SelectAudioOutput(2) falló: %v", err)
+	}
+	stPulse, err := c.SetOutputDSPPreset("Altavoces del Sistema (PipeWire / PulseAudio)", "voice")
+	if err != nil {
+		t.Fatalf("SetOutputDSPPreset en salida PulseAudio falló: %v", err)
+	}
+	if stPulse.DSPPreset != "voice" || stPulse.AudioOutputs[2].Plugin != "pipe" {
+		t.Fatalf("se esperaba salida PulseAudio con DSP 'voice' y plugin 'pipe': %+v", stPulse)
+	}
+
+	// Revertir a flat en PulseAudio -> debe volver a plugin 'pulse'
+	stPulseFlat, err := c.SetOutputDSPPreset("Altavoces del Sistema (PipeWire / PulseAudio)", "flat")
+	if err != nil {
+		t.Fatalf("SetOutputDSPPreset('flat') en PulseAudio falló: %v", err)
+	}
+	if stPulseFlat.DSPPreset != "flat" || stPulseFlat.AudioOutputs[2].Plugin != "pulse" {
+		t.Fatalf("se esperaba salida PulseAudio restablecida a plugin 'pulse': %+v", stPulseFlat)
+	}
+
+	// Volver al DAC USB para el resto del test
+	if err := c.SelectAudioOutput(0); err != nil {
+		t.Fatalf("SelectAudioOutput(0) falló: %v", err)
 	}
 
 	// Verificar duración configurable de soft fade

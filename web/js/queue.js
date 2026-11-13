@@ -3,11 +3,11 @@
 // Touch Drag & Drop Reordering & Swipe-to-Delete
 // =====================================================================
 
-import * as api from './api.js?v=21';
-import { state, subscribe, updatePlayerState } from './state.js?v=21';
-import { escapeHtml, sanitizeCoverURL } from './sanitize.js?v=21';
-import { formatTime, isLiveStreamTrack, showToast } from './player.js?v=21';
-import { openNowPlaying } from './gestures.js?v=21';
+import * as api from './api.js';
+import { state, subscribe, updatePlayerState } from './state.js';
+import { escapeHtml, sanitizeCoverURL } from './sanitize.js';
+import { formatTime, isLiveStreamTrack, showToast } from './player.js';
+import { openNowPlaying } from './gestures.js';
 
 // initQueue configura los escuchadores de la vista de cola.
 export function initQueue() {

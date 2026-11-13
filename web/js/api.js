@@ -340,6 +340,14 @@ export function deleteRadio(id) {
   return requestHelper(`/radios?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+// toggleRadioFavorite conmuta el estado de favorita de una emisora en el servidor.
+export function toggleRadioFavorite(id) {
+  return requestHelper('/radios/favorite', {
+    method: 'POST',
+    body: JSON.stringify({ id })
+  });
+}
+
 // playRadio arranca la reproducción de una emisora web.
 export function playRadio(radio) {
   return requestHelper('/radios/play', {

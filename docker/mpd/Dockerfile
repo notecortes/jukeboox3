@@ -4,6 +4,7 @@ RUN apk add --no-cache \
     mpd \
     mpc \
     alsa-utils \
+    pulseaudio-utils \
     sox \
     lame \
     flac \
