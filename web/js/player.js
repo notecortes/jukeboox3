@@ -624,9 +624,7 @@ export function renderEQSliders(bands) {
   document.querySelectorAll('#eqBandsList .eq-band-slider').forEach((slider) => {
     const idx = parseInt(slider.dataset.band || '0', 10);
     const val = safe[idx] ?? 0;
-    if (document.activeElement !== slider) {
-      slider.value = String(val);
-    }
+    slider.value = String(val);
     const label = document.querySelector(`#eqBandsList [data-band-val="${idx}"]`);
     if (label) {
       label.textContent = `${val > 0 ? '+' : ''}${val} dB`;
@@ -635,7 +633,7 @@ export function renderEQSliders(bands) {
 }
 
 // syncSettingsAudioControls mantiene sincronizados Crossfade, ReplayGain, Fade, Marco Musical y EQ DSP entre dispositivos.
-function syncSettingsAudioControls() {
+export function syncSettingsAudioControls() {
   const cfSlider = document.getElementById('settingCrossfade');
   const cfLabel = document.getElementById('labelCrossfade');
   const cf = Number(state.player.crossfade || 0);

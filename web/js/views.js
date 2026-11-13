@@ -6,7 +6,7 @@
 import * as api from './api.js';
 import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
 import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
-import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders } from './player.js';
+import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders, syncSettingsAudioControls } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
 // debounce retrasa la ejecución de una función para no sobrecargar el hilo UI con entradas continuas.
@@ -24,6 +24,9 @@ let selectedAlbumIds = new Set();
 let albumViewMode = localStorage.getItem('aurabox_album_view') || 'grid-4'; // 'grid-4' | 'grid-3' | 'list'
 let albumSortBy = localStorage.getItem('aurabox_album_sort') || 'title'; // 'title' | 'year' | 'recent' | 'tracks'
 let includeAllAlbums = localStorage.getItem('aurabox_include_all_albums') === 'true';
+let genreColumnsMode = localStorage.getItem('aurabox_genre_columns') || '2'; // '1' | '2' | '3' | '4'
+let genreFilterQuery = '';
+let cachedGenresData = null;
 let albumFilterQuery = '';
 let artistFilterQuery = '';
 let recentMode = 'added';
@@ -156,6 +159,7 @@ export async function loadLibraryData(options = {}) {
     state.library.artists = artists || [];
     state.library.recentTracks = recent || [];
     state.library.themes = themes || [];
+    cachedGenresData = null;
 
     if (!skipRender) {
       renderActiveSubTab();
@@ -815,17 +819,21 @@ async function openArtistDetail(artistName, options = {}) {
   }
 }
 
-// buildGenreCategoryCard construye una tarjeta interactiva de género o década con botón rápido de Smart Mix.
+// buildGenreCategoryCard construye una tarjeta interactiva de género o década con carátula ampliada, tipografía multilínea y botón Smart Mix.
 function buildGenreCategoryCard(cat) {
   const card = document.createElement('div');
   card.className = 'genre-card';
   const cover = sanitizeCoverURL(cat.cover_url);
-  const albumLabel = cat.album_count === 1 ? '1 álbum' : `${cat.album_count} álbumes`;
+  const albumCount = Number(cat.album_count || 0);
+  const trackCount = Number(cat.track_count || 0);
+  const albumLabel = albumCount === 1 ? '1 álbum' : `${albumCount.toLocaleString()} álbumes`;
+  const trackLabel = trackCount === 1 ? '1 tema' : `${trackCount.toLocaleString()} temas`;
+
   card.innerHTML = `
     <img class="genre-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(cat.label)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
     <div class="genre-card-info">
-      <div class="genre-card-title">${escapeHtml(cat.label)}</div>
-      <div class="genre-card-meta">${escapeHtml(albumLabel)} • ${cat.track_count} temas</div>
+      <div class="genre-card-title" title="${escapeHtml(cat.label)}">${escapeHtml(cat.label)}</div>
+      <div class="genre-card-meta">${escapeHtml(albumLabel)} • ${escapeHtml(trackLabel)}</div>
     </div>
     <button type="button" class="genre-card-mix-btn" title="Crear Smart Mix de ${escapeHtml(cat.label)}">⚡</button>
   `;
@@ -842,43 +850,131 @@ function buildGenreCategoryCard(cat) {
   return card;
 }
 
-// renderGenresView muestra todos los estilos musicales y décadas del catálogo para explorar álbumes.
+// renderGenresView muestra todos los estilos musicales y décadas con selector de columnas por fila y filtro en vivo.
 async function renderGenresView(container, shouldRestoreScroll = false) {
-  container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando estilos y décadas...</div>';
+  if (!cachedGenresData) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando estilos y décadas...</div>';
+  }
   try {
-    const data = await api.getLibraryGenres();
-    const genres = data?.genres || [];
-    const decades = data?.decades || [];
+    if (!cachedGenresData) {
+      cachedGenresData = await api.getLibraryGenres();
+    }
+    const data = cachedGenresData;
+    const allGenres = data?.genres || [];
+    const allDecades = data?.decades || [];
 
-    if (genres.length === 0 && decades.length === 0) {
+    if (allGenres.length === 0 && allDecades.length === 0) {
       container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No hay etiquetas de género o año registradas en tu música</div>';
       return;
     }
 
-    container.innerHTML = `
-      <div id="genresOverviewView">
-        ${genres.length > 0 ? `
-          <div class="settings-section-title" style="margin-bottom:10px;">Estilos y Géneros</div>
-          <div class="genres-grid" id="genresGridList"></div>
-        ` : ''}
-        ${decades.length > 0 ? `
-          <div class="settings-section-title" style="margin-bottom:10px;">Por Década</div>
-          <div class="genres-grid" id="decadesGridList"></div>
-        ` : ''}
-      </div>
+    // Filtrado reactivo en vivo por texto de búsqueda
+    const q = genreFilterQuery.trim().toLowerCase();
+    const visibleGenres = q
+      ? allGenres.filter((g) => (g.label && g.label.toLowerCase().includes(q)) || (g.value && g.value.toLowerCase().includes(q)))
+      : allGenres;
+    const visibleDecades = q
+      ? allDecades.filter((d) => (d.label && d.label.toLowerCase().includes(q)) || (d.value && d.value.toLowerCase().includes(q)))
+      : allDecades;
+
+    const totalResults = visibleGenres.length + visibleDecades.length;
+
+    let filterInput = document.getElementById('genreFilterInput');
+    let overviewView = document.getElementById('genresOverviewView');
+
+    if (!filterInput || !overviewView) {
+      container.innerHTML = `
+        <div class="genres-toolbar">
+          <input type="text" id="genreFilterInput" class="genre-filter-input" placeholder="Buscar estilo, género o década..." value="${escapeHtml(genreFilterQuery)}" />
+          <div class="genres-toolbar-actions">
+            <div class="genre-density-selector" title="Número de tarjetas por fila">
+              <span class="genre-density-label">Por fila:</span>
+              <button type="button" class="genre-density-btn ${genreColumnsMode === '1' ? 'active' : ''}" data-cols="1" title="1 tarjeta por fila (Lista amplia y legible)">1</button>
+              <button type="button" class="genre-density-btn ${genreColumnsMode === '2' ? 'active' : ''}" data-cols="2" title="2 tarjetas por fila (Confortable - Recomendado)">2</button>
+              <button type="button" class="genre-density-btn ${genreColumnsMode === '3' ? 'active' : ''}" data-cols="3" title="3 tarjetas por fila">3</button>
+              <button type="button" class="genre-density-btn ${genreColumnsMode === '4' ? 'active' : ''}" data-cols="4" title="4 tarjetas por fila (Compacto)">4</button>
+            </div>
+          </div>
+        </div>
+        <div id="genresOverviewView"></div>
+      `;
+
+      filterInput = document.getElementById('genreFilterInput');
+      overviewView = document.getElementById('genresOverviewView');
+
+      const debouncedGenreFilter = debounce((val) => {
+        genreFilterQuery = val;
+        renderGenresView(container);
+      }, 120);
+
+      filterInput?.addEventListener('input', (e) => {
+        debouncedGenreFilter(e.target.value);
+      });
+
+      // Control de columnas por fila con actualización instantánea sin recarga
+      document.querySelectorAll('.genre-density-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const selectedCols = btn.dataset.cols;
+          if (!selectedCols || selectedCols === genreColumnsMode) return;
+          genreColumnsMode = selectedCols;
+          try {
+            localStorage.setItem('aurabox_genre_columns', genreColumnsMode);
+          } catch (_) {}
+
+          document.querySelectorAll('.genre-density-btn').forEach((b) => {
+            b.classList.toggle('active', b.dataset.cols === genreColumnsMode);
+          });
+
+          // Conmutación inmediata de clases en el DOM
+          const curGGrid = document.getElementById('genresGridList');
+          const curDGrid = document.getElementById('decadesGridList');
+          [curGGrid, curDGrid].forEach((gridEl) => {
+            if (!gridEl) return;
+            gridEl.classList.remove('cols-1', 'cols-2', 'cols-3', 'cols-4');
+            gridEl.classList.add(`cols-${genreColumnsMode}`);
+          });
+        });
+      });
+    }
+
+    // Actualizar únicamente el contenido de genresOverviewView sin tocar el <input>
+    overviewView.innerHTML = `
+      ${visibleGenres.length > 0 ? `
+        <div class="settings-section-title" style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Estilos y Géneros</span>
+          <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">${visibleGenres.length} ${visibleGenres.length === 1 ? 'estilo' : 'estilos'}</span>
+        </div>
+        <div class="genres-grid cols-${genreColumnsMode}" id="genresGridList"></div>
+      ` : ''}
+
+      ${visibleDecades.length > 0 ? `
+        <div class="settings-section-title" style="margin-top:20px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Por Década</span>
+          <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">${visibleDecades.length} décadas</span>
+        </div>
+        <div class="genres-grid cols-${genreColumnsMode}" id="decadesGridList"></div>
+      ` : ''}
+
+      ${totalResults === 0 ? `
+        <div style="text-align:center; padding:40px 20px; color:var(--text-muted); font-size:0.9rem;">
+          No se encontraron estilos o décadas para "<strong>${escapeHtml(genreFilterQuery)}</strong>"
+        </div>
+      ` : ''}
     `;
 
+    // Renderizado de las tarjetas en las cuadrículas
     const gGrid = document.getElementById('genresGridList');
-    if (gGrid) {
+    if (gGrid && visibleGenres.length > 0) {
       const frag = document.createDocumentFragment();
-      genres.forEach((g) => frag.appendChild(buildGenreCategoryCard(g)));
+      visibleGenres.forEach((g) => frag.appendChild(buildGenreCategoryCard(g)));
       gGrid.appendChild(frag);
     }
 
     const dGrid = document.getElementById('decadesGridList');
-    if (dGrid) {
+    if (dGrid && visibleDecades.length > 0) {
       const frag = document.createDocumentFragment();
-      decades.forEach((d) => frag.appendChild(buildGenreCategoryCard(d)));
+      visibleDecades.forEach((d) => frag.appendChild(buildGenreCategoryCard(d)));
       dGrid.appendChild(frag);
     }
 
@@ -2525,8 +2621,9 @@ async function runForcedScan(btn, startMsg) {
 
 // bindSettingsView gestiona selectores dinámicos de audio, salvaguarda de volumen y configuración del NAS.
 function bindSettingsView() {
-  // Renderizar inicialmente salidas de audio detectadas
+  // Renderizar inicialmente salidas de audio detectadas y sincronizar controles DSP
   renderAudioOutputs(true);
+  syncSettingsAudioControls();
 
   // Botón para redetectar DAC USB y salidas ALSA en caliente sin reiniciar Docker
   const btnRefreshOutputs = document.getElementById('btnRefreshOutputs');
@@ -2585,11 +2682,24 @@ function bindSettingsView() {
     const descEl = document.getElementById('dspPresetDesc');
     if (descEl) descEl.textContent = 'Aplicando ecualizador DSP en MPD...';
 
+    // Actualización optimista inmediata en state.player para respuesta táctil instantánea
+    state.player.dsp_preset = presetOrEq;
+    if (!state.player.dsp_presets || typeof state.player.dsp_presets !== 'object') {
+      state.player.dsp_presets = {};
+    }
+    state.player.dsp_presets[activeOutput] = presetOrEq;
+    if (presetOrEq === 'flat') {
+      renderEQSliders([0, 0, 0, 0, 0]);
+    }
+
     try {
       const updatedState = await api.setOutputDSPPreset(activeOutput, presetOrEq);
       if (updatedState) {
         updatePlayerState(updatedState);
         renderAudioOutputs(true);
+      }
+      if (presetOrEq === 'flat') {
+        renderEQSliders([0, 0, 0, 0, 0]);
       }
       showToast(successLabel || 'Ecualizador DSP aplicado');
     } catch (err) {
@@ -2624,7 +2734,11 @@ function bindSettingsView() {
         applyDSPSelection(eqStr, 'Curva EQ personalizada aplicada');
         return;
       }
+      // Actualizar visualmente de inmediato los deslizadores y selección de botón
       renderEQSliders(parseDSPBands(key));
+      dspButtons.forEach((b) => {
+        b.classList.toggle('active', b.dataset.dsp === key);
+      });
       applyDSPSelection(key, `Perfil DSP aplicado: ${btn.textContent.trim()}`);
     });
   });
@@ -2645,11 +2759,22 @@ function bindSettingsView() {
 
   document.getElementById('btnApplyCustomEQ')?.addEventListener('click', () => {
     const eqStr = formatEQPresetString(getSliderBands());
-    applyDSPSelection(eqStr, eqStr === 'flat' ? 'Ecualizador restablecido a Plano Hi-Fi' : 'Curva EQ de 5 bandas aplicada');
+    if (eqStr === 'flat') {
+      renderEQSliders([0, 0, 0, 0, 0]);
+      dspButtons.forEach((b) => {
+        b.classList.toggle('active', b.dataset.dsp === 'flat');
+      });
+      applyDSPSelection('flat', 'Ecualizador restablecido a Plano Hi-Fi (Bit-Perfect)');
+      return;
+    }
+    applyDSPSelection(eqStr, 'Curva EQ de 5 bandas aplicada');
   });
 
   document.getElementById('btnResetEQ')?.addEventListener('click', () => {
     renderEQSliders([0, 0, 0, 0, 0]);
+    dspButtons.forEach((b) => {
+      b.classList.toggle('active', b.dataset.dsp === 'flat');
+    });
     applyDSPSelection('flat', 'Ecualizador restablecido a Plano Hi-Fi (Bit-Perfect)');
   });
 

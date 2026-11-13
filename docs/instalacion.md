@@ -519,8 +519,7 @@ sudo COMPOSE_PARALLEL_LIMIT=1 docker compose up -d --build
 # Actualizar via GIT 
 
 1 en el pc:
-git add .gitignore docker-compose.yml docker/mpd/entrypoint.sh main.go main_test.go \
-  internal/ scripts/ web/ docs/seguridad.md
+git add .
 git commit -m "Endurecimiento de seguridad y robustez 24/7"
 git push origin main
 

@@ -1208,24 +1208,128 @@
 }
 
 /* Explorador de Géneros y Décadas en Biblioteca */
-.genres-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+.genres-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
+.genre-filter-input {
+  height: 38px;
+  padding: 0 14px;
+  font-size: 0.85rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  outline: none;
+  flex: 1;
+  min-width: 140px;
+  box-sizing: border-box;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.genre-filter-input:focus {
+  border-color: var(--accent);
+  background: var(--bg-surface-elevated);
+}
+
+.genres-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.genre-density-selector {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+}
+
+.genre-density-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 0 4px 0 8px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.genre-density-btn {
+  height: 28px;
+  min-width: 30px;
+  padding: 0 8px;
+  font-size: 0.80rem;
+  font-weight: 700;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.genre-density-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-elevated);
+}
+
+.genre-density-btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
+}
+
+.genres-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+/* Modos de densidad de cuadrícula para géneros */
+.genres-grid.cols-1 {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.genres-grid.cols-2 {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.genres-grid.cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.genres-grid.cols-4 {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+/* Tarjeta de género base (Audiophile Glassmorphic) */
 .genre-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: var(--radius-md);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: border-color var(--transition-fast), transform var(--transition-fast), background var(--transition-fast);
+  transition: border-color var(--transition-fast), transform var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
   min-width: 0;
+  box-sizing: border-box;
 }
 
 .genre-card:active {
@@ -1235,55 +1339,177 @@
 .genre-card:hover {
   border-color: var(--accent);
   background: var(--bg-surface-elevated);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
 .genre-card-cover {
-  width: 46px;
-  height: 46px;
-  min-width: 46px;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
   border-radius: var(--radius-sm);
   object-fit: cover;
   background: var(--bg-surface-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
 }
 
 .genre-card-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .genre-card-title {
-  font-size: 0.88rem;
+  font-size: 0.94rem;
   font-weight: 700;
   color: var(--text-primary);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.genre-card-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.genre-card-meta {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-
 .genre-card-mix-btn {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
   border-radius: 50%;
-  background: rgba(99, 102, 241, 0.16);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(124, 58, 237, 0.14);
+  border: 1px solid rgba(124, 58, 237, 0.35);
   color: var(--accent-light);
-  font-size: 0.85rem;
+  font-size: 0.90rem;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
 }
 
 .genre-card-mix-btn:hover {
   background: var(--accent);
   color: #ffffff;
+  transform: scale(1.1);
+}
+
+/* Adaptaciones específicas para cada modo de columnas */
+/* Modo 1 Columna: lista amplia ultra legible */
+.genres-grid.cols-1 .genre-card {
+  padding: 14px 18px;
+  gap: 16px;
+}
+.genres-grid.cols-1 .genre-card-cover {
+  width: 64px;
+  height: 64px;
+  min-width: 64px;
+}
+.genres-grid.cols-1 .genre-card-title {
+  font-size: 1.05rem;
+  -webkit-line-clamp: 2;
+}
+.genres-grid.cols-1 .genre-card-meta {
+  font-size: 0.82rem;
+  margin-top: 5px;
+}
+.genres-grid.cols-1 .genre-card-mix-btn {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  font-size: 1rem;
+}
+
+/* Modo 2 Columnas: espacioso y balanceado */
+.genres-grid.cols-2 .genre-card {
+  padding: 12px 14px;
+  gap: 12px;
+}
+.genres-grid.cols-2 .genre-card-cover {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+}
+.genres-grid.cols-2 .genre-card-title {
+  font-size: 0.92rem;
+  -webkit-line-clamp: 2;
+}
+.genres-grid.cols-2 .genre-card-meta {
+  font-size: 0.76rem;
+}
+.genres-grid.cols-2 .genre-card-mix-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+}
+
+/* Modo 3 Columnas */
+.genres-grid.cols-3 .genre-card {
+  padding: 10px 10px;
+  gap: 8px;
+}
+.genres-grid.cols-3 .genre-card-cover {
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+}
+.genres-grid.cols-3 .genre-card-title {
+  font-size: 0.82rem;
+  -webkit-line-clamp: 2;
+}
+.genres-grid.cols-3 .genre-card-meta {
+  font-size: 0.70rem;
+}
+.genres-grid.cols-3 .genre-card-mix-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  font-size: 0.80rem;
+}
+
+/* Modo 4 Columnas: compacto para pantallas anchas */
+.genres-grid.cols-4 .genre-card {
+  padding: 8px 8px;
+  gap: 6px;
+}
+.genres-grid.cols-4 .genre-card-cover {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+}
+.genres-grid.cols-4 .genre-card-title {
+  font-size: 0.76rem;
+  -webkit-line-clamp: 2;
+}
+.genres-grid.cols-4 .genre-card-meta {
+  font-size: 0.68rem;
+}
+.genres-grid.cols-4 .genre-card-mix-btn {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  font-size: 0.72rem;
+}
+
+/* En smartphones muy estrechos (<380px) */
+@media (max-width: 380px) {
+  .genres-grid.cols-3,
+  .genres-grid.cols-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* Perfiles DSP / Ecualizador por salida en Ajustes */

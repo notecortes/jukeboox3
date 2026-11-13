@@ -55,7 +55,7 @@ type PlayerState struct {
 	SoftFade       bool              `json:"soft_fade"`
 	SoftFadeMs     int               `json:"soft_fade_ms"`
 	DSPPreset      string            `json:"dsp_preset"`
-	DSPPresets     map[string]string `json:"dsp_presets,omitempty"`
+	DSPPresets     map[string]string `json:"dsp_presets"`
 	AudioOutputs   []OutputInfo      `json:"audio_outputs"`
 	ActiveOutput   string            `json:"active_output"`
 	SleepTimerSec  int          `json:"sleep_timer_sec"`
@@ -3673,11 +3673,7 @@ func (c *Client) SetOutputDSPPreset(outputName, preset string) (PlayerState, err
 		prevPreset = "flat"
 	}
 
-	if normPreset == "flat" {
-		delete(c.state.DSPPresets, target)
-	} else {
-		c.state.DSPPresets[target] = normPreset
-	}
+	c.state.DSPPresets[target] = normPreset
 
 	isActive := (target == c.state.ActiveOutput)
 	if isActive {

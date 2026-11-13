@@ -93,6 +93,11 @@ export function updatePlayerState(newState) {
     state.player.last_sync_timestamp = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     state.player.base_elapsed_time = newState.elapsed_time;
   }
+  if (newState && newState.dsp_presets !== undefined) {
+    state.player.dsp_presets = (newState.dsp_presets && typeof newState.dsp_presets === 'object')
+      ? { ...newState.dsp_presets }
+      : {};
+  }
   Object.assign(state.player, newState);
   notifyListeners('player_updated', state.player);
 }
