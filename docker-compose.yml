@@ -65,6 +65,7 @@ services:
       - mpd_run:/run/mpd
     depends_on:
       - mpd
+    pid: "service:mpd"
     networks:
       - aurabox-net
 

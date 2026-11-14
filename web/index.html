@@ -20,22 +20,12 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
   <!-- Inicialización inmediata de tema (Evita destello FOUC antes del primer render) -->
-  <script>
-    (function() {
-      try {
-        var savedTheme = localStorage.getItem('aurabox_theme');
-        var theme = savedTheme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-        document.documentElement.setAttribute('data-theme', theme);
-        var metaTheme = document.querySelector('meta[name="theme-color"]');
-        if (metaTheme) metaTheme.setAttribute('content', theme === 'light' ? '#f8fafc' : '#090a0f');
-      } catch (e) {}
-    })();
-  </script>
+  <script src="/js/theme-init.js?v=28"></script>
 
   <!-- Hojas de estilo CSS modulares -->
-  <link rel="stylesheet" href="/css/app.css?v=27"/>
-  <link rel="stylesheet" href="/css/player.css?v=27"/>
-  <link rel="stylesheet" href="/css/views.css?v=27"/>
+  <link rel="stylesheet" href="/css/app.css?v=28"/>
+  <link rel="stylesheet" href="/css/player.css?v=28"/>
+  <link rel="stylesheet" href="/css/views.css?v=28"/>
 </head>
 <body>
   <div id="app">
@@ -877,7 +867,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=27"></script>
+  <script type="module" src="/js/app.js?v=28"></script>
 </body>
 </html>
 

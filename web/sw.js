@@ -2,13 +2,14 @@
 // AuraBox Service Worker - PWA Caching & Offline Recovery
 // =====================================================================
 
-const CACHE_NAME = 'aurabox-v27';
+const CACHE_NAME = 'aurabox-v28';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/css/app.css',
   '/css/player.css',
   '/css/views.css',
+  '/js/theme-init.js',
   '/js/app.js',
   '/js/sanitize.js',
   '/js/state.js',

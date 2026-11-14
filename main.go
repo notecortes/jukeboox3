@@ -129,6 +129,7 @@ func main() {
 	// Inicializar controlador de audio MPD / ALSA (Unix socket preferido + fallback TCP)
 	player := mpd.NewClient(mpdSocket, mpdHost, mpdPort, hub, database)
 	defer player.Close()
+	player.TriggerLibraryUpdate()
 
 	// Hidratar estado y cola al instante cuando cualquier cliente abre el canal SSE
 	hub.SetOnConnect(func(send func(string, interface{})) {
@@ -511,7 +512,7 @@ func compressionAndSecurityMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https: http: data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'")
 
 		// Omitir compresión en SSE, streaming binario, peticiones HEAD, Range o respuestas binarias prefijadas.
 		if r.Method == http.MethodHead ||
