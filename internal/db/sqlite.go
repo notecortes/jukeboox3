@@ -207,6 +207,42 @@ func (d *DB) createSchema() error {
 		value TEXT NOT NULL,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS podcasts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		author TEXT DEFAULT '',
+		feed_url TEXT UNIQUE NOT NULL,
+		description TEXT DEFAULT '',
+		cover_url TEXT DEFAULT '',
+		link TEXT DEFAULT '',
+		last_build_date TEXT DEFAULT '',
+		favorite INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_podcasts_title ON podcasts(title COLLATE NOCASE);
+
+	CREATE TABLE IF NOT EXISTS podcast_episodes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		podcast_id INTEGER NOT NULL,
+		guid TEXT NOT NULL,
+		title TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		enclosure_url TEXT NOT NULL,
+		enclosure_type TEXT DEFAULT 'audio/mpeg',
+		duration REAL DEFAULT 0,
+		pub_date TEXT DEFAULT '',
+		played INTEGER DEFAULT 0,
+		progress REAL DEFAULT 0,
+		favorite INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE,
+		UNIQUE(podcast_id, guid)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_podcast_episodes_podcast_id ON podcast_episodes(podcast_id);
+	CREATE INDEX IF NOT EXISTS idx_podcast_episodes_enclosure ON podcast_episodes(enclosure_url);
 	`
 	if _, err := d.conn.Exec(schema); err != nil {
 		return err
@@ -218,6 +254,11 @@ func (d *DB) createSchema() error {
 	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN format TEXT DEFAULT 'MP3'`)
 	_, _ = d.conn.Exec(`ALTER TABLE radio_stations ADD COLUMN favorite INTEGER DEFAULT 0`)
 	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_radio_stations_favorite ON radio_stations(favorite)`)
+
+	_, _ = d.conn.Exec(`ALTER TABLE podcasts ADD COLUMN favorite INTEGER DEFAULT 0`)
+	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_podcasts_favorite ON podcasts(favorite)`)
+	_, _ = d.conn.Exec(`ALTER TABLE podcast_episodes ADD COLUMN favorite INTEGER DEFAULT 0`)
+	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_podcast_episodes_favorite ON podcast_episodes(favorite)`)
 
 	return nil
 }
@@ -985,6 +1026,18 @@ func (d *DB) GetTrackByPath(filePath string) (*Track, error) {
 	}
 	t.Favorite = (fav == 1)
 	return &t, nil
+}
+
+// GetTrackByID recupera una canción específica por su identificador numérico primario.
+func (d *DB) GetTrackByID(id int64) (*Track, error) {
+	tracks, err := d.GetTracksByIDs([]int64{id})
+	if err != nil {
+		return nil, err
+	}
+	if len(tracks) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return &tracks[0], nil
 }
 
 // GetTracksByIDs devuelve las canciones específicas por sus identificadores preservando el orden solicitado.
@@ -1938,6 +1991,35 @@ func (d *DB) UpdateAlbumCover(albumTitle, coverURL string) error {
 	return nil
 }
 
+// UpdateTrackCover actualiza la URL de carátula de una pista individual identificada por su ID.
+func (d *DB) UpdateTrackCover(trackID int64, coverURL string) error {
+	cleanCover := strings.TrimSpace(coverURL)
+	if trackID <= 0 || cleanCover == "" {
+		return fmt.Errorf("trackID y coverURL válidos requeridos")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	_, err := d.conn.Exec(`UPDATE tracks SET cover_url = ? WHERE id = ?`, cleanCover, trackID)
+	return err
+}
+
+// UpdateTrackCoverByPath actualiza la URL de carátula de una pista identificada por su ruta en disco.
+func (d *DB) UpdateTrackCoverByPath(path, coverURL string) error {
+	cleanPath := strings.TrimSpace(path)
+	cleanCover := strings.TrimSpace(coverURL)
+	if cleanPath == "" || cleanCover == "" {
+		return fmt.Errorf("ruta y coverURL requeridos")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	_, err := d.conn.Exec(`UPDATE tracks SET cover_url = ? WHERE path = ?`, cleanCover, cleanPath)
+	return err
+}
+
 // GetAlbumCoverByTitle devuelve la URL de carátula para un álbum consultando tanto albums como tracks.
 func (d *DB) GetAlbumCoverByTitle(albumTitle string) string {
 	clean := strings.TrimSpace(albumTitle)
@@ -1984,6 +2066,389 @@ func (d *DB) syncMissingTrackCoversFromAlbums() {
 			log.Printf("[DB] Sincronizadas %d pistas huérfanas con la carátula de su álbum", aff)
 		}
 	}
+}
+
+// SavePodcast guarda o actualiza una suscripción de podcast en SQLite.
+func (d *DB) SavePodcast(p *Podcast) (int64, error) {
+	if p == nil || strings.TrimSpace(p.FeedURL) == "" {
+		return 0, fmt.Errorf("feed_url requerido para guardar podcast")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var existingID int64
+	err := d.conn.QueryRow(`SELECT id FROM podcasts WHERE feed_url = ?`, strings.TrimSpace(p.FeedURL)).Scan(&existingID)
+	if err == nil && existingID > 0 {
+		_, updateErr := d.conn.Exec(`
+			UPDATE podcasts 
+			SET title = ?, author = ?, description = ?, cover_url = ?, link = ?, last_build_date = ?
+			WHERE id = ?
+		`, p.Title, p.Author, p.Description, p.CoverURL, p.Link, p.LastBuildDate, existingID)
+		if updateErr != nil {
+			return 0, updateErr
+		}
+		p.ID = existingID
+		return existingID, nil
+	}
+
+	res, insertErr := d.conn.Exec(`
+		INSERT INTO podcasts (title, author, feed_url, description, cover_url, link, last_build_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, p.Title, p.Author, p.FeedURL, p.Description, p.CoverURL, p.Link, p.LastBuildDate)
+	if insertErr != nil {
+		return 0, insertErr
+	}
+
+	id, err := res.LastInsertId()
+	if err == nil {
+		p.ID = id
+	}
+	return id, err
+}
+
+// GetPodcasts lista todas las suscripciones a podcasts junto con el conteo de episodios indexados.
+func (d *DB) GetPodcasts() ([]Podcast, error) {
+	query := `
+		SELECT p.id, p.title, p.author, p.feed_url, p.description, p.cover_url, p.link, p.last_build_date, p.created_at,
+		       COALESCE(p.favorite, 0) AS favorite,
+		       COUNT(e.id) AS episode_count
+		FROM podcasts p
+		LEFT JOIN podcast_episodes e ON p.id = e.podcast_id
+		GROUP BY p.id
+		ORDER BY p.favorite DESC, p.title COLLATE NOCASE ASC
+	`
+	rows, err := d.reader().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var podcasts []Podcast
+	for rows.Next() {
+		var p Podcast
+		var createdAt time.Time
+		var favInt int
+		if err := rows.Scan(&p.ID, &p.Title, &p.Author, &p.FeedURL, &p.Description, &p.CoverURL, &p.Link, &p.LastBuildDate, &createdAt, &favInt, &p.EpisodeCount); err != nil {
+			continue
+		}
+		p.Favorite = (favInt == 1)
+		p.CreatedAt = createdAt
+		podcasts = append(podcasts, p)
+	}
+	if podcasts == nil {
+		podcasts = []Podcast{}
+	}
+	return podcasts, nil
+}
+
+// GetFavoritePodcasts lista únicamente los programas marcados como favoritos.
+func (d *DB) GetFavoritePodcasts() ([]Podcast, error) {
+	all, err := d.GetPodcasts()
+	if err != nil {
+		return nil, err
+	}
+	favs := make([]Podcast, 0)
+	for _, p := range all {
+		if p.Favorite {
+			favs = append(favs, p)
+		}
+	}
+	return favs, nil
+}
+
+// GetPodcastByID obtiene los detalles de un podcast y todos sus episodios asociados ordenados cronológicamente.
+func (d *DB) GetPodcastByID(id int64) (*Podcast, []PodcastEpisode, error) {
+	if id <= 0 {
+		return nil, nil, fmt.Errorf("id de podcast inválido")
+	}
+
+	var p Podcast
+	var createdAt time.Time
+	var favInt int
+	queryPodcast := `SELECT id, title, author, feed_url, description, cover_url, link, last_build_date, COALESCE(favorite, 0), created_at FROM podcasts WHERE id = ?`
+	err := d.reader().QueryRow(queryPodcast, id).Scan(&p.ID, &p.Title, &p.Author, &p.FeedURL, &p.Description, &p.CoverURL, &p.Link, &p.LastBuildDate, &favInt, &createdAt)
+	if err != nil {
+		return nil, nil, err
+	}
+	p.Favorite = (favInt == 1)
+	p.CreatedAt = createdAt
+
+	queryEpisodes := `
+		SELECT id, podcast_id, guid, title, description, enclosure_url, enclosure_type, duration, pub_date, played, progress, COALESCE(favorite, 0), created_at
+		FROM podcast_episodes
+		WHERE podcast_id = ?
+		ORDER BY id DESC
+	`
+	rows, err := d.reader().Query(queryEpisodes, id)
+	if err != nil {
+		return &p, []PodcastEpisode{}, nil
+	}
+	defer rows.Close()
+
+	var episodes []PodcastEpisode
+	for rows.Next() {
+		var ep PodcastEpisode
+		var epCreated time.Time
+		var playedInt int
+		var epFavInt int
+		if err := rows.Scan(&ep.ID, &ep.PodcastID, &ep.GUID, &ep.Title, &ep.Description, &ep.EnclosureURL, &ep.EnclosureType, &ep.Duration, &ep.PubDate, &playedInt, &ep.Progress, &epFavInt, &epCreated); err != nil {
+			continue
+		}
+		ep.Played = (playedInt == 1)
+		ep.Favorite = (epFavInt == 1)
+		ep.CreatedAt = epCreated
+		ep.PodcastTitle = p.Title
+		ep.PodcastCover = p.CoverURL
+		episodes = append(episodes, ep)
+	}
+	if episodes == nil {
+		episodes = []PodcastEpisode{}
+	}
+	p.EpisodeCount = len(episodes)
+	return &p, episodes, nil
+}
+
+// GetPodcastByFeedURL busca si un feed ya está registrado en la base de datos.
+func (d *DB) GetPodcastByFeedURL(feedURL string) (*Podcast, error) {
+	cleanFeed := strings.TrimSpace(feedURL)
+	if cleanFeed == "" {
+		return nil, fmt.Errorf("feed_url requerido")
+	}
+	var p Podcast
+	var createdAt time.Time
+	var favInt int
+	err := d.reader().QueryRow(`SELECT id, title, author, feed_url, description, cover_url, link, last_build_date, COALESCE(favorite, 0), created_at FROM podcasts WHERE feed_url = ?`, cleanFeed).
+		Scan(&p.ID, &p.Title, &p.Author, &p.FeedURL, &p.Description, &p.CoverURL, &p.Link, &p.LastBuildDate, &favInt, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	p.Favorite = (favInt == 1)
+	p.CreatedAt = createdAt
+	return &p, nil
+}
+
+// TogglePodcastFavorite conmuta el estado de favorito de un canal de podcast suscrito.
+func (d *DB) TogglePodcastFavorite(id int64) (bool, error) {
+	if id <= 0 {
+		return false, fmt.Errorf("id de podcast inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var curFav int
+	err := d.conn.QueryRow(`SELECT COALESCE(favorite, 0) FROM podcasts WHERE id = ?`, id).Scan(&curFav)
+	if err != nil {
+		return false, err
+	}
+	newFav := 1
+	if curFav == 1 {
+		newFav = 0
+	}
+	_, err = d.conn.Exec(`UPDATE podcasts SET favorite = ? WHERE id = ?`, newFav, id)
+	return newFav == 1, err
+}
+
+// ToggleEpisodeFavorite conmuta el estado de favorito de un episodio específico.
+func (d *DB) ToggleEpisodeFavorite(id int64) (bool, error) {
+	if id <= 0 {
+		return false, fmt.Errorf("id de episodio inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var curFav int
+	err := d.conn.QueryRow(`SELECT COALESCE(favorite, 0) FROM podcast_episodes WHERE id = ?`, id).Scan(&curFav)
+	if err != nil {
+		return false, err
+	}
+	newFav := 1
+	if curFav == 1 {
+		newFav = 0
+	}
+	_, err = d.conn.Exec(`UPDATE podcast_episodes SET favorite = ? WHERE id = ?`, newFav, id)
+	return newFav == 1, err
+}
+
+// ToggleEpisodePlayed conmuta el estado de escuchado/no escuchado de un episodio específico.
+func (d *DB) ToggleEpisodePlayed(id int64) (bool, error) {
+	if id <= 0 {
+		return false, fmt.Errorf("id de episodio inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var curPlayed int
+	err := d.conn.QueryRow(`SELECT COALESCE(played, 0) FROM podcast_episodes WHERE id = ?`, id).Scan(&curPlayed)
+	if err != nil {
+		return false, err
+	}
+	newPlayed := 1
+	if curPlayed == 1 {
+		newPlayed = 0
+	}
+	_, err = d.conn.Exec(`UPDATE podcast_episodes SET played = ? WHERE id = ?`, newPlayed, id)
+	return newPlayed == 1, err
+}
+
+// DeletePodcast elimina un podcast y todos sus episodios asociados en cascada.
+func (d *DB) DeletePodcast(id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("id de podcast inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	_, _ = d.conn.Exec(`DELETE FROM podcast_episodes WHERE podcast_id = ?`, id)
+	_, err := d.conn.Exec(`DELETE FROM podcasts WHERE id = ?`, id)
+	return err
+}
+
+// SavePodcastEpisodes inserta o actualiza en bloque los episodios de un podcast sin duplicar registros.
+func (d *DB) SavePodcastEpisodes(podcastID int64, episodes []PodcastEpisode) error {
+	if podcastID <= 0 || len(episodes) == 0 {
+		return nil
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO podcast_episodes (podcast_id, guid, title, description, enclosure_url, enclosure_type, duration, pub_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(podcast_id, guid) DO UPDATE SET
+			title = excluded.title,
+			description = excluded.description,
+			enclosure_url = excluded.enclosure_url,
+			enclosure_type = excluded.enclosure_type,
+			duration = CASE WHEN excluded.duration > 0 THEN excluded.duration ELSE podcast_episodes.duration END,
+			pub_date = excluded.pub_date
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, ep := range episodes {
+		guid := ep.GUID
+		if guid == "" {
+			guid = ep.EnclosureURL
+		}
+		if ep.EnclosureURL == "" {
+			continue
+		}
+		_, _ = stmt.Exec(podcastID, guid, ep.Title, ep.Description, ep.EnclosureURL, ep.EnclosureType, ep.Duration, ep.PubDate)
+	}
+
+	return tx.Commit()
+}
+
+// GetPodcastEpisodeByID obtiene un episodio por su identificador primario junto con los datos de su podcast.
+func (d *DB) GetPodcastEpisodeByID(id int64) (*PodcastEpisode, *Podcast, error) {
+	if id <= 0 {
+		return nil, nil, fmt.Errorf("id de episodio inválido")
+	}
+
+	query := `
+		SELECT e.id, e.podcast_id, e.guid, e.title, e.description, e.enclosure_url, e.enclosure_type, e.duration, e.pub_date, e.played, e.progress, COALESCE(e.favorite, 0), e.created_at,
+		       p.title, p.author, p.cover_url, p.feed_url
+		FROM podcast_episodes e
+		JOIN podcasts p ON e.podcast_id = p.id
+		WHERE e.id = ?
+	`
+	var ep PodcastEpisode
+	var p Podcast
+	var epCreated time.Time
+	var playedInt int
+	var epFavInt int
+
+	err := d.reader().QueryRow(query, id).Scan(
+		&ep.ID, &ep.PodcastID, &ep.GUID, &ep.Title, &ep.Description, &ep.EnclosureURL, &ep.EnclosureType, &ep.Duration, &ep.PubDate, &playedInt, &ep.Progress, &epFavInt, &epCreated,
+		&p.Title, &p.Author, &p.CoverURL, &p.FeedURL,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ep.Played = (playedInt == 1)
+	ep.Favorite = (epFavInt == 1)
+	ep.CreatedAt = epCreated
+	ep.PodcastTitle = p.Title
+	ep.PodcastCover = p.CoverURL
+	p.ID = ep.PodcastID
+
+	return &ep, &p, nil
+}
+
+// GetPodcastEpisodeByEnclosureURL busca un episodio a partir de su URL de flujo multimedia.
+func (d *DB) GetPodcastEpisodeByEnclosureURL(url string) (*PodcastEpisode, *Podcast, error) {
+	cleanURL := strings.TrimSpace(url)
+	if cleanURL == "" {
+		return nil, nil, fmt.Errorf("url requerida")
+	}
+
+	query := `
+		SELECT e.id, e.podcast_id, e.guid, e.title, e.description, e.enclosure_url, e.enclosure_type, e.duration, e.pub_date, e.played, e.progress, COALESCE(e.favorite, 0), e.created_at,
+		       p.title, p.author, p.cover_url, p.feed_url
+		FROM podcast_episodes e
+		JOIN podcasts p ON e.podcast_id = p.id
+		WHERE e.enclosure_url = ?
+		LIMIT 1
+	`
+	var ep PodcastEpisode
+	var p Podcast
+	var epCreated time.Time
+	var playedInt int
+	var epFavInt int
+
+	err := d.reader().QueryRow(query, cleanURL).Scan(
+		&ep.ID, &ep.PodcastID, &ep.GUID, &ep.Title, &ep.Description, &ep.EnclosureURL, &ep.EnclosureType, &ep.Duration, &ep.PubDate, &playedInt, &ep.Progress, &epFavInt, &epCreated,
+		&p.Title, &p.Author, &p.CoverURL, &p.FeedURL,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ep.Played = (playedInt == 1)
+	ep.Favorite = (epFavInt == 1)
+	ep.CreatedAt = epCreated
+	ep.PodcastTitle = p.Title
+	ep.PodcastCover = p.CoverURL
+	p.ID = ep.PodcastID
+
+	return &ep, &p, nil
+}
+
+// MarkEpisodePlayed actualiza el estado de reproducción de un episodio.
+func (d *DB) MarkEpisodePlayed(id int64, played bool) error {
+	if id <= 0 {
+		return fmt.Errorf("id de episodio inválido")
+	}
+	val := 0
+	if played {
+		val = 1
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	_, err := d.conn.Exec(`UPDATE podcast_episodes SET played = ? WHERE id = ?`, val, id)
+	return err
+}
+
+// UpdateEpisodeProgress actualiza los segundos reproducidos de un episodio para reanudar donde se dejó.
+func (d *DB) UpdateEpisodeProgress(id int64, progress float64) error {
+	if id <= 0 {
+		return fmt.Errorf("id de episodio inválido")
+	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	_, err := d.conn.Exec(`UPDATE podcast_episodes SET progress = ? WHERE id = ?`, progress, id)
+	return err
 }
 
 // Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.

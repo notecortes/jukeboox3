@@ -2,6 +2,7 @@ package mpd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -106,6 +107,8 @@ type Client struct {
 	fadeDuration       time.Duration
 	softFadeMs         atomic.Int64
 	dspBootSynced      atomic.Bool
+	coverFetcher       func(ctx context.Context, title, artist, album string) (string, error)
+	coverDebounce      sync.Map
 	closeOnce          sync.Once
 	closed             atomic.Bool
 }
@@ -349,7 +352,7 @@ func (c *Client) triggerReconnect() {
 	}
 }
 
-// connectionSupervisor reintenta periódicamente el enlace con MPD si el servidor se reinicia o aún está arrancando.
+// connectionSupervisor reintenta periódicamente el enlace con MPD si el servidor se reinicia o aún está arrancando, y migra de TCP a Unix socket cuando esté disponible.
 func (c *Client) connectionSupervisor() {
 	for {
 		if c.closed.Load() {
@@ -357,6 +360,8 @@ func (c *Client) connectionSupervisor() {
 		}
 		if !c.isConnected() {
 			c.tryConnect()
+		} else if !c.usingUnixSocket.Load() && c.socketPath != "" {
+			c.tryUpgradeToUnixSocket()
 		}
 		timer := time.NewTimer(3 * time.Second)
 		select {
@@ -368,6 +373,35 @@ func (c *Client) connectionSupervisor() {
 		case <-timer.C:
 		}
 	}
+}
+
+// tryUpgradeToUnixSocket migra la conexión de TCP a Unix socket cuando éste vuelve a estar disponible tras un reinicio o recarga de MPD.
+func (c *Client) tryUpgradeToUnixSocket() {
+	if c.socketPath == "" || c.closed.Load() {
+		return
+	}
+	probe, err := net.DialTimeout("unix", c.socketPath, 500*time.Millisecond)
+	if err != nil {
+		return
+	}
+	_ = probe.Close()
+
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	if c.closed.Load() || c.isUsingUnixSocketLocked() {
+		return
+	}
+	log.Printf("[MPD] Socket Unix detectado en %s; migrando enlace activo desde TCP a Unix...", c.socketPath)
+	_ = c.connectLocked(false)
+}
+
+// isUsingUnixSocketLocked comprueba si la conexión física activa con MPD es efectivamente un socket de dominio Unix.
+func (c *Client) isUsingUnixSocketLocked() bool {
+	if c.conn == nil {
+		return false
+	}
+	_, ok := c.conn.(*net.UnixConn)
+	return ok
 }
 
 // connectLocked establece el socket Unix (preferido) o TCP con MPD bajo connMu, respetando cooldown si se solicita.
@@ -388,10 +422,16 @@ func (c *Client) connectLocked(respectCooldown bool) error {
 	endpoint := ""
 
 	if c.socketPath != "" {
-		conn, err = net.DialTimeout("unix", c.socketPath, 1500*time.Millisecond)
-		if err == nil {
-			usedUnix = true
-			endpoint = c.socketPath
+		for attempt := 0; attempt < 3; attempt++ {
+			conn, err = net.DialTimeout("unix", c.socketPath, 1500*time.Millisecond)
+			if err == nil {
+				usedUnix = true
+				endpoint = c.socketPath
+				break
+			}
+			if attempt < 2 {
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}
 
@@ -559,6 +599,23 @@ func mpdCommandDeadline(cmd string) time.Duration {
 	}
 }
 
+// sanitizeCommandForTCP transforma URIs file:///... o rutas absolutas a rutas relativas para evitar que MPD rechace el comando con ACK [4@0] sobre TCP.
+func sanitizeCommandForTCP(cmd string) string {
+	if strings.Contains(cmd, "file:///rawmusic/") {
+		cmd = strings.ReplaceAll(cmd, "file:///rawmusic/", "")
+	}
+	if strings.Contains(cmd, "file:///music/") {
+		cmd = strings.ReplaceAll(cmd, "file:///music/", "")
+	}
+	if strings.Contains(cmd, `"/music/`) {
+		cmd = strings.ReplaceAll(cmd, `"/music/`, `"`)
+	}
+	if strings.Contains(cmd, `"/rawmusic/`) {
+		cmd = strings.ReplaceAll(cmd, `"/rawmusic/`, `"`)
+	}
+	return cmd
+}
+
 // sendRawCommand envía una directiva de texto a MPD con reconexión transparente ante cortes por inactividad.
 func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 	c.connMu.Lock()
@@ -568,6 +625,12 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 		if err := c.connectLocked(true); err != nil {
 			return nil, fmt.Errorf("mpd desconectado: %w", err)
 		}
+	}
+
+	isUnix := c.isUsingUnixSocketLocked()
+	c.usingUnixSocket.Store(isUnix)
+	if !isUnix {
+		cmd = sanitizeCommandForTCP(cmd)
 	}
 
 	deadlineDur := mpdCommandDeadline(cmd)
@@ -605,6 +668,9 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 		// Reconectar de inmediato si hubo error de red/socket
 		c.lastDialFail = time.Time{}
 		if reconnErr := c.connectLocked(false); reconnErr == nil {
+			if !c.isUsingUnixSocketLocked() {
+				cmd = sanitizeCommandForTCP(cmd)
+			}
 			return execCmd()
 		}
 	}
@@ -622,15 +688,17 @@ func mpdQuote(s string) string {
 
 // localMPDURIs construye la ruta relativa en music_directory y la URI file:// directa para socket Unix.
 func localMPDURIs(trackPath string) (string, string) {
-	relPath := strings.TrimPrefix(trackPath, "/music/")
-	relPath = strings.TrimPrefix(relPath, "/")
-	if relPath == "" {
+	clean := strings.TrimPrefix(trackPath, "file://")
+	clean = strings.TrimPrefix(clean, "/rawmusic/")
+	clean = strings.TrimPrefix(clean, "rawmusic/")
+	clean = strings.TrimPrefix(clean, "/music/")
+	clean = strings.TrimPrefix(clean, "music/")
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "" {
 		return "", ""
 	}
-	rawURI := "file:///rawmusic/" + relPath
-	if !strings.HasPrefix(trackPath, "/music/") && strings.HasPrefix(trackPath, "/") {
-		rawURI = "file://" + trackPath
-	}
+	relPath := clean
+	rawURI := "file:///rawmusic/" + clean
 	return relPath, rawURI
 }
 
@@ -674,10 +742,13 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 	}
 
 	_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
-	if err != nil && rawErr != nil && strings.Contains(err.Error(), "No such directory") {
-		return rawErr
+	if err != nil {
+		if rawErr != nil && strings.Contains(err.Error(), "No such directory") && !strings.Contains(rawErr.Error(), "via TCP") {
+			return rawErr
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 // addTrackToMPDAt inserta una pista en una posición concreta usando addid para saltos instantáneos en play_now.
@@ -720,10 +791,13 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 	}
 
 	_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
-	if err != nil && rawErr != nil && strings.Contains(err.Error(), "No such directory") {
-		return rawErr
+	if err != nil {
+		if rawErr != nil && strings.Contains(err.Error(), "No such directory") && !strings.Contains(rawErr.Error(), "via TCP") {
+			return rawErr
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 // TriggerLibraryUpdate solicita de forma asíncrona a MPD reindexar su base de datos interna como respaldo para sesiones TCP.
@@ -739,21 +813,18 @@ func (c *Client) TriggerLibraryUpdate() {
 	}()
 }
 
-// normalizeMPDFilePath normaliza rutas devueltas por MPD (incluidas file:///rawmusic/...) a rutas /music/... de SQLite.
+// normalizeMPDFilePath normaliza rutas devueltas por MPD (incluidas file:///rawmusic/, /rawmusic/, etc.) a rutas canónicas /music/... de SQLite.
 func normalizeMPDFilePath(file string) string {
 	if strings.HasPrefix(file, "http://") || strings.HasPrefix(file, "https://") {
 		return file
 	}
-	if strings.HasPrefix(file, "file:///rawmusic/") {
-		return "/music/" + strings.TrimPrefix(file, "file:///rawmusic/")
-	}
-	if strings.HasPrefix(file, "file:///music/") {
-		return "/music/" + strings.TrimPrefix(file, "file:///music/")
-	}
-	if strings.HasPrefix(file, "file:///") {
-		return "/" + strings.TrimPrefix(file, "file:///")
-	}
-	return "/music/" + strings.TrimPrefix(file, "/")
+	clean := strings.TrimPrefix(file, "file://")
+	clean = strings.TrimPrefix(clean, "/")
+	clean = strings.TrimPrefix(clean, "music/")
+	clean = strings.TrimPrefix(clean, "rawmusic/")
+	clean = strings.TrimPrefix(clean, "music/")
+	clean = strings.TrimPrefix(clean, "/")
+	return "/music/" + clean
 }
 
 // syncOutputsFromMPD actualiza el listado real y estado de las salidas físicas y virtuales de MPD.
@@ -876,6 +947,31 @@ func (c *Client) syncQueueFromMPD() {
 						CoverURL: coverVal,
 						Source:   "radio",
 						Duration: 0,
+					})
+					currentFile = ""
+					return
+				} else if ep, pod, pErr := c.database.GetPodcastEpisodeByEnclosureURL(fullPath); pErr == nil && ep != nil {
+					podCover := pod.CoverURL
+					if podCover == "" {
+						podCover = "/assets/default-cover.svg"
+					}
+					durVal := ep.Duration
+					if currentDuration > 0 {
+						durVal = currentDuration
+					}
+					tracks = append(tracks, db.Track{
+						ID:       ep.ID,
+						Path:     fullPath,
+						Filename: ep.Title,
+						Title:    ep.Title,
+						Artist:   pod.Title,
+						Album:    pod.Title,
+						Genre:    "Podcast",
+						Bitrate:  192,
+						Format:   "MP3",
+						CoverURL: podCover,
+						Source:   "podcast",
+						Duration: durVal,
 					})
 					currentFile = ""
 					return
@@ -1320,7 +1416,14 @@ func (c *Client) syncStatusFromMPD() bool {
 	}
 
 	if mpdErr != "" {
-		if mpdErr != c.state.LastError {
+		if strings.Contains(mpdErr, "via TCP") {
+			// Error interno de protocolo por intento previo sobre TCP; limpiar de MPD
+			go func() {
+				_, _ = c.sendRawCommand("clearerror\n")
+			}()
+			mpdErr = ""
+		}
+		if mpdErr != "" && mpdErr != c.state.LastError {
 			c.state.LastError = mpdErr
 			stateChanged = true
 		}
@@ -1482,6 +1585,12 @@ func (c *Client) syncStatusFromMPD() bool {
 
 	if trackChanged || stateChanged {
 		c.broadcastState()
+		if trackChanged && c.coverFetcher != nil && c.state.CurrentTrack != nil {
+			cur := *c.state.CurrentTrack
+			if cur.CoverURL == "" || cur.CoverURL == "/assets/default-cover.svg" {
+				c.triggerAsyncCoverSearch(cur)
+			}
+		}
 	}
 
 	if needEmptyResync {
@@ -3954,4 +4063,91 @@ func (c *Client) UpdateCurrentTrackCoverIfAlbumMatches(albumTitle, coverURL stri
 		c.broadcastState()
 		c.broadcastQueue()
 	}
+}
+
+// SetCoverFetcher asigna la función de resolución asíncrona de carátulas para pistas sin portada.
+func (c *Client) SetCoverFetcher(fn func(ctx context.Context, title, artist, album string) (string, error)) {
+	c.coverFetcher = fn
+}
+
+// UpdateTrackCoverInQueue actualiza la URL de carátula para la pista actual y en cola si coincide la ruta o título.
+func (c *Client) UpdateTrackCoverInQueue(path, coverURL string) {
+	cleanPath := strings.TrimSpace(path)
+	cleanCover := strings.TrimSpace(coverURL)
+	if cleanPath == "" || cleanCover == "" {
+		return
+	}
+
+	c.mu.Lock()
+	updated := false
+	if c.state.CurrentTrack != nil && c.state.CurrentTrack.Path == cleanPath {
+		c.state.CurrentTrack.CoverURL = cleanCover
+		updated = true
+	}
+	for i := range c.queue {
+		if c.queue[i].Path == cleanPath {
+			c.queue[i].CoverURL = cleanCover
+			updated = true
+		}
+	}
+	c.mu.Unlock()
+
+	if updated {
+		c.broadcastState()
+		c.broadcastQueue()
+	}
+}
+
+// triggerAsyncCoverSearch busca en segundo plano la carátula online de la canción actual si no posee ninguna.
+func (c *Client) triggerAsyncCoverSearch(t db.Track) {
+	if c.coverFetcher == nil {
+		return
+	}
+	title := strings.TrimSpace(t.Title)
+	artist := strings.TrimSpace(t.Artist)
+	album := strings.TrimSpace(t.Album)
+	cacheKey := fmt.Sprintf("%s|%s|%s", title, artist, album)
+	if cacheKey == "||" {
+		return
+	}
+
+	if last, ok := c.coverDebounce.Load(cacheKey); ok {
+		if tLast, isTime := last.(time.Time); isTime && time.Since(tLast) < 5*time.Minute {
+			return
+		}
+	}
+	c.coverDebounce.Store(cacheKey, time.Now())
+
+	go func(tr db.Track) {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+
+		coverURL, err := c.coverFetcher(ctx, tr.Title, tr.Artist, tr.Album)
+		if err != nil || coverURL == "" {
+			return
+		}
+
+		// 1. Persistir en base de datos si la pista o álbum están indexados
+		if tr.ID > 0 && c.database != nil {
+			_ = c.database.UpdateTrackCover(tr.ID, coverURL)
+		}
+		if tr.Path != "" && c.database != nil {
+			_ = c.database.UpdateTrackCoverByPath(tr.Path, coverURL)
+		}
+		if tr.Album != "" && !strings.EqualFold(tr.Album, "Sencillos") && !strings.EqualFold(tr.Album, "Singles") && c.database != nil {
+			_ = c.database.UpdateAlbumCover(tr.Album, coverURL)
+		}
+
+		// 2. Propagar en memoria
+		c.UpdateTrackCoverInQueue(tr.Path, coverURL)
+		if tr.Album != "" {
+			c.UpdateCurrentTrackCoverIfAlbumMatches(tr.Album, coverURL)
+		}
+
+		// 3. Notificar a clientes conectados
+		if c.eventsHub != nil {
+			c.eventsHub.Broadcast("player_state", c.GetState())
+			c.eventsHub.Broadcast("library_updated", map[string]interface{}{"cover_updated": true})
+		}
+	}(t)
 }

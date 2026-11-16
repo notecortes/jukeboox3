@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"aurabox/internal/events"
 	"aurabox/internal/lyrics"
 	"aurabox/internal/mpd"
+	"aurabox/internal/podcasts"
 	"aurabox/internal/scanner"
 	"aurabox/internal/smartmix"
 	"aurabox/internal/tlsutil"
@@ -43,6 +45,7 @@ type Server struct {
 	covers            *covers.Service
 	certManager       *tlsutil.CertManager
 	streamClient      *http.Client
+	httpClient        *http.Client
 	streamUpstreamURL string
 	localDir        string
 	nasDir          string
@@ -152,8 +155,15 @@ func main() {
 	// Inicializar servicio de letras LRCLIB
 	lyrService := lyrics.NewService()
 
-	// Inicializar servicio de búsqueda de carátulas Cover Art Archive / MusicBrainz
+	// Inicializar servicio de búsqueda de carátulas Cover Art Archive / MusicBrainz / iTunes / Deezer
 	coversService := covers.NewService(coversDir)
+	if player != nil {
+		player.SetCoverFetcher(coversService.FetchAndCacheTrackCover)
+	}
+
+	generalHTTPClient := &http.Client{
+		Timeout: 15 * time.Second,
+	}
 
 	srv := &Server{
 		database:        database,
@@ -165,6 +175,7 @@ func main() {
 		covers:          coversService,
 		certManager:     certMgr,
 		streamClient:    newAudioStreamClient(),
+		httpClient:      generalHTTPClient,
 		localDir:        musicLocal,
 		nasDir:          musicNas,
 		usbDir:          musicUsb,
@@ -316,6 +327,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/player/outputs/diagnostics", requireMethod(s.handleAudioDiagnostics, http.MethodGet))
 	mux.HandleFunc("/api/player/config", requireMethod(s.handleAudioConfig, http.MethodPost))
 	mux.HandleFunc("/api/player/sleeptimer", requireMethod(s.handleSleepTimer, http.MethodPost))
+	mux.HandleFunc("/api/player/cover/auto-fetch", requireMethod(s.handlePlayerCoverAutoFetch, http.MethodPost, http.MethodGet))
 
 	// 5. API de Cola (Jukebox Queue)
 	mux.HandleFunc("/api/queue", requireMethod(s.handleQueue, http.MethodGet))
@@ -360,6 +372,21 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/nas", requireMethod(s.handleNASConfig, http.MethodGet, http.MethodPost))
 	mux.HandleFunc("/api/security/status", requireMethod(s.handleSecurityStatus, http.MethodGet))
 	mux.HandleFunc("/api/security/ca.crt", requireMethod(s.handleDownloadCACert, http.MethodGet, http.MethodHead))
+
+	// 10. API de Podcasts, Búsqueda Online y OPML
+	mux.HandleFunc("/api/podcasts", requireMethod(s.handlePodcasts, http.MethodGet))
+	mux.HandleFunc("/api/podcasts/subscribe", requireMethod(s.handlePodcastSubscribe, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/unsubscribe", requireMethod(s.handlePodcastUnsubscribe, http.MethodDelete, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/favorite", requireMethod(s.handlePodcastFavorite, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/episodes", requireMethod(s.handlePodcastEpisodes, http.MethodGet))
+	mux.HandleFunc("/api/podcasts/episodes/favorite", requireMethod(s.handlePodcastEpisodeFavorite, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/episodes/played", requireMethod(s.handlePodcastEpisodePlayed, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/play", requireMethod(s.handlePodcastPlay, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/search", requireMethod(s.handlePodcastSearch, http.MethodGet))
+	mux.HandleFunc("/api/podcasts/opml/import", requireMethod(s.handlePodcastOPMLImport, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/opml/export", requireMethod(s.handlePodcastOPMLExport, http.MethodGet))
+	mux.HandleFunc("/api/podcasts/refresh", requireMethod(s.handlePodcastsRefresh, http.MethodPost))
+	mux.HandleFunc("/api/podcasts/progress", requireMethod(s.handlePodcastProgress, http.MethodPost))
 }
 
 // noCacheMiddleware previene que el navegador almacene en caché HTML, JS o CSS desactualizados.
@@ -2208,6 +2235,712 @@ func (s *Server) handleDownloadCACert(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(pemBytes)
+}
+
+// handlePlayerCoverAutoFetch busca online y actualiza la carátula para la pista actual o una pista indicada por ID.
+func (s *Server) handlePlayerCoverAutoFetch(w http.ResponseWriter, r *http.Request) {
+	if s.covers == nil {
+		http.Error(w, "servicio de carátulas no configurado", http.StatusServiceUnavailable)
+		return
+	}
+
+	var title, artist, album, trackPath string
+	var trackID int64
+
+	// Permitir consulta por track_id específico o usar la canción sonando actualmente
+	if idStr := r.URL.Query().Get("track_id"); idStr != "" {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+			trackID = id
+			if tr, err := s.database.GetTrackByID(trackID); err == nil && tr != nil {
+				title = tr.Title
+				artist = tr.Artist
+				album = tr.Album
+				trackPath = tr.Path
+			}
+		}
+	}
+
+	if title == "" && s.player != nil {
+		st := s.player.GetState()
+		if st.CurrentTrack != nil {
+			title = st.CurrentTrack.Title
+			artist = st.CurrentTrack.Artist
+			album = st.CurrentTrack.Album
+			trackPath = st.CurrentTrack.Path
+			trackID = st.CurrentTrack.ID
+		}
+	}
+
+	if title == "" {
+		http.Error(w, "no hay canción en reproducción ni track_id válido", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	coverURL, err := s.covers.FetchAndCacheTrackCover(ctx, title, artist, album)
+	if err != nil || coverURL == "" {
+		log.Printf("[Covers] No se encontró portada online para %q (%s): %v", title, artist, err)
+		http.Error(w, "no se encontró portada online para la canción", http.StatusNotFound)
+		return
+	}
+
+	// Persistir en base de datos si la pista o álbum existen localmente
+	if trackID > 0 {
+		_ = s.database.UpdateTrackCover(trackID, coverURL)
+	}
+	if trackPath != "" {
+		_ = s.database.UpdateTrackCoverByPath(trackPath, coverURL)
+	}
+	if album != "" && !strings.EqualFold(album, "Sencillos") && !strings.EqualFold(album, "Singles") {
+		_ = s.database.UpdateAlbumCover(album, coverURL)
+	}
+
+	// Propagar en memoria a la cola y al reproductor activo
+	if s.player != nil {
+		s.player.UpdateTrackCoverInQueue(trackPath, coverURL)
+		if album != "" {
+			s.player.UpdateCurrentTrackCoverIfAlbumMatches(album, coverURL)
+		}
+	}
+
+	if s.eventsHub != nil {
+		if s.player != nil {
+			s.eventsHub.Broadcast("player_state", s.player.GetState())
+		}
+		s.eventsHub.Broadcast("library_updated", map[string]interface{}{
+			"cover_updated": true,
+			"cover_url":     coverURL,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"cover_url": coverURL,
+		"title":     title,
+		"artist":    artist,
+	})
+}
+
+// handlePodcasts devuelve la lista de podcasts suscritos con sus totales de episodios, opcionalmente filtrada por favoritos.
+func (s *Server) handlePodcasts(w http.ResponseWriter, r *http.Request) {
+	var podcastsList []db.Podcast
+	var err error
+	if r.URL.Query().Get("favorites") == "true" || r.URL.Query().Get("favorite") == "1" {
+		podcastsList, err = s.database.GetFavoritePodcasts()
+	} else {
+		podcastsList, err = s.database.GetPodcasts()
+	}
+	if err != nil {
+		log.Printf("[Podcasts] Error obteniendo lista: %v", err)
+		http.Error(w, "error al consultar podcasts en base de datos", http.StatusInternalServerError)
+		return
+	}
+	if podcastsList == nil {
+		podcastsList = []db.Podcast{}
+	}
+	jsonResponse(w, http.StatusOK, podcastsList)
+}
+
+// handlePodcastFavorite conmuta el estado de favorito de un canal de podcast suscrito.
+func (s *Server) handlePodcastFavorite(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		ID int64 `json:"id"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil || payload.ID <= 0 {
+		http.Error(w, "id de podcast inválido", http.StatusBadRequest)
+		return
+	}
+
+	fav, err := s.database.TogglePodcastFavorite(payload.ID)
+	if err != nil {
+		log.Printf("[Podcasts] Error conmutando favorito para podcast %d: %v", payload.ID, err)
+		http.Error(w, "error al actualizar favorito", http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+			"action":     "favorite_toggled",
+			"podcast_id": payload.ID,
+			"favorite":   fav,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"podcast_id": payload.ID,
+		"favorite":   fav,
+	})
+}
+
+// handlePodcastSubscribe registra un nuevo feed RSS de podcast y descarga su catálogo inicial de episodios.
+func (s *Server) handlePodcastSubscribe(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		FeedURL string `json:"feed_url"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil || strings.TrimSpace(payload.FeedURL) == "" {
+		http.Error(w, "feed_url requerido en formato JSON", http.StatusBadRequest)
+		return
+	}
+
+	cleanURL := strings.TrimSpace(payload.FeedURL)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	pod, episodes, err := podcasts.FetchAndParseFeed(ctx, s.httpClient, cleanURL)
+	if err != nil {
+		log.Printf("[Podcasts] Error descargando feed %s: %v", cleanURL, err)
+		http.Error(w, fmt.Sprintf("no se pudo descargar el feed: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	dbPod := &db.Podcast{
+		Title:         pod.Title,
+		Author:        pod.Author,
+		FeedURL:       pod.FeedURL,
+		Description:   pod.Description,
+		CoverURL:      pod.CoverURL,
+		Link:          pod.Link,
+		LastBuildDate: pod.LastBuildDate,
+		EpisodeCount:  len(episodes),
+	}
+
+	podID, err := s.database.SavePodcast(dbPod)
+	if err != nil {
+		log.Printf("[Podcasts] Error guardando podcast %s: %v", pod.Title, err)
+		http.Error(w, "error al guardar podcast en base de datos", http.StatusInternalServerError)
+		return
+	}
+
+	var dbEpisodes []db.PodcastEpisode
+	for _, ep := range episodes {
+		dbEpisodes = append(dbEpisodes, db.PodcastEpisode{
+			PodcastID:     podID,
+			GUID:          ep.GUID,
+			Title:         ep.Title,
+			Description:   ep.Description,
+			EnclosureURL:  ep.EnclosureURL,
+			EnclosureType: ep.EnclosureType,
+			Duration:      ep.Duration,
+			PubDate:       ep.PubDate,
+		})
+	}
+
+	_ = s.database.SavePodcastEpisodes(podID, dbEpisodes)
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+			"action":     "subscribed",
+			"podcast_id": podID,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":        "subscribed",
+		"podcast_id":    podID,
+		"title":         pod.Title,
+		"episode_count": len(episodes),
+		"cover_url":     pod.CoverURL,
+	})
+}
+
+// handlePodcastUnsubscribe elimina una suscripción a un podcast y borra sus episodios asociados.
+func (s *Server) handlePodcastUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	var podID int64
+	if idStr := r.URL.Query().Get("id"); idStr != "" {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+			podID = id
+		}
+	}
+	if podID <= 0 {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		if err := decodeJSONBody(w, r, &payload); err == nil && payload.ID > 0 {
+			podID = payload.ID
+		}
+	}
+
+	if podID <= 0 {
+		http.Error(w, "parámetro id de podcast requerido", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.database.DeletePodcast(podID); err != nil {
+		log.Printf("[Podcasts] Error eliminando podcast %d: %v", podID, err)
+		http.Error(w, "error al eliminar podcast", http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+			"action":     "unsubscribed",
+			"podcast_id": podID,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "unsubscribed",
+	})
+}
+
+// handlePodcastEpisodes devuelve los episodios indexados para un podcast específico.
+func (s *Server) handlePodcastEpisodes(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("podcast_id")
+	if idStr == "" {
+		idStr = r.URL.Query().Get("id")
+	}
+	podID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || podID <= 0 {
+		http.Error(w, "parámetro podcast_id requerido", http.StatusBadRequest)
+		return
+	}
+
+	pod, episodes, err := s.database.GetPodcastByID(podID)
+	if err != nil || pod == nil {
+		http.Error(w, "podcast no encontrado", http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"podcast":  pod,
+		"episodes": episodes,
+		"total":    len(episodes),
+	})
+}
+
+// handlePodcastEpisodeFavorite conmuta el estado de favorito de un episodio de podcast.
+func (s *Server) handlePodcastEpisodeFavorite(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		EpisodeID int64 `json:"episode_id"`
+		ID        int64 `json:"id"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		http.Error(w, "json inválido", http.StatusBadRequest)
+		return
+	}
+	epID := payload.EpisodeID
+	if epID <= 0 {
+		epID = payload.ID
+	}
+	if epID <= 0 {
+		http.Error(w, "episode_id inválido", http.StatusBadRequest)
+		return
+	}
+
+	fav, err := s.database.ToggleEpisodeFavorite(epID)
+	if err != nil {
+		log.Printf("[Podcasts] Error conmutando favorito para episodio %d: %v", epID, err)
+		http.Error(w, "error al actualizar favorito de episodio", http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+			"action":     "episode_favorite_toggled",
+			"episode_id": epID,
+			"favorite":   fav,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"episode_id": epID,
+		"favorite":   fav,
+	})
+}
+
+// handlePodcastEpisodePlayed conmuta o establece el estado de reproducción de un episodio de podcast.
+func (s *Server) handlePodcastEpisodePlayed(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		EpisodeID int64 `json:"episode_id"`
+		ID        int64 `json:"id"`
+		Played    *bool `json:"played,omitempty"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		http.Error(w, "json inválido", http.StatusBadRequest)
+		return
+	}
+	epID := payload.EpisodeID
+	if epID <= 0 {
+		epID = payload.ID
+	}
+	if epID <= 0 {
+		http.Error(w, "episode_id inválido", http.StatusBadRequest)
+		return
+	}
+
+	var played bool
+	var err error
+	if payload.Played != nil {
+		played = *payload.Played
+		err = s.database.MarkEpisodePlayed(epID, played)
+	} else {
+		played, err = s.database.ToggleEpisodePlayed(epID)
+	}
+
+	if err != nil {
+		log.Printf("[Podcasts] Error conmutando estado escuchado para episodio %d: %v", epID, err)
+		http.Error(w, "error al actualizar estado de episodio", http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+			"action":     "episode_played_toggled",
+			"episode_id": epID,
+			"played":     played,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"episode_id": epID,
+		"played":     played,
+	})
+}
+
+// handlePodcastPlay encola o reproduce inmediatamente un episodio en el motor MPD.
+func (s *Server) handlePodcastPlay(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		EpisodeID int64  `json:"episode_id"`
+		Mode      string `json:"mode"` // "replace" (por defecto), "next", "append"
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil || payload.EpisodeID <= 0 {
+		http.Error(w, "episode_id inválido o faltante", http.StatusBadRequest)
+		return
+	}
+
+	ep, pod, err := s.database.GetPodcastEpisodeByID(payload.EpisodeID)
+	if err != nil || ep == nil {
+		http.Error(w, "episodio no encontrado", http.StatusNotFound)
+		return
+	}
+
+	coverVal := ep.PodcastCover
+	if coverVal == "" && pod != nil {
+		coverVal = pod.CoverURL
+	}
+	if coverVal == "" {
+		coverVal = "/assets/default-cover.svg"
+	}
+
+	authorVal := pod.Author
+	if authorVal == "" {
+		authorVal = pod.Title
+	}
+
+	tr := db.Track{
+		ID:          ep.ID,
+		Path:        ep.EnclosureURL,
+		Filename:    ep.Title,
+		Title:       ep.Title,
+		Artist:      authorVal,
+		Album:       pod.Title,
+		AlbumArtist: pod.Title,
+		Genre:       "Podcast",
+		Bitrate:     192,
+		Format:      "MP3",
+		CoverURL:    coverVal,
+		Source:      "podcast",
+		Duration:    ep.Duration,
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(payload.Mode))
+	enqueueMode := "replace"
+	if mode == "next" {
+		enqueueMode = "play_next"
+	} else if mode == "append" {
+		enqueueMode = "append"
+	}
+	s.player.EnqueueTracks([]db.Track{tr}, enqueueMode)
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":     "playing",
+		"episode_id": ep.ID,
+		"title":      ep.Title,
+		"podcast":    pod.Title,
+		"stream_url": ep.EnclosureURL,
+	})
+}
+
+// handlePodcastSearch busca programas de podcast en el directorio abierto de Apple Podcasts.
+func (s *Server) handlePodcastSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		jsonResponse(w, http.StatusOK, []podcasts.SearchResult{})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	results, err := podcasts.SearchOnline(ctx, s.httpClient, q, 25)
+	if err != nil {
+		log.Printf("[Podcasts] Error en búsqueda online: %v", err)
+		http.Error(w, "error al buscar podcasts en internet", http.StatusBadGateway)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, results)
+}
+
+// handlePodcastOPMLImport procesa archivos o texto OPML y suscribe en segundo plano los podcasts descubiertos.
+func (s *Server) handlePodcastOPMLImport(w http.ResponseWriter, r *http.Request) {
+	var opmlData []byte
+
+	// 1. Intentar como subida de archivo multipart
+	if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(10 << 20); err == nil {
+			file, _, fErr := r.FormFile("file")
+			if fErr == nil {
+				defer file.Close()
+				opmlData, _ = io.ReadAll(io.LimitReader(file, 10<<20))
+			}
+		}
+	}
+
+	// 2. Intentar como JSON {"opml": "<xml...>"} o texto plano en cuerpo
+	if len(opmlData) == 0 {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		var jsonPayload struct {
+			OPML string `json:"opml"`
+		}
+		if err := json.Unmarshal(body, &jsonPayload); err == nil && jsonPayload.OPML != "" {
+			opmlData = []byte(jsonPayload.OPML)
+		} else if len(body) > 0 {
+			opmlData = body
+		}
+	}
+
+	if len(opmlData) == 0 {
+		http.Error(w, "archivo o contenido OPML vacío", http.StatusBadRequest)
+		return
+	}
+
+	outlines, err := podcasts.ParseOPML(opmlData)
+	if err != nil {
+		log.Printf("[OPML] Error al interpretar archivo: %v", err)
+		http.Error(w, fmt.Sprintf("archivo OPML no válido: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if len(outlines) == 0 {
+		http.Error(w, "no se encontraron feeds de podcast en el archivo OPML", http.StatusBadRequest)
+		return
+	}
+
+	// Procesar importación en segundo plano para no bloquear la interfaz web
+	go func(feeds []podcasts.OPMLOutline) {
+		imported := 0
+		client := &http.Client{Timeout: 15 * time.Second}
+		for _, item := range feeds {
+			if item.XMLURL == "" {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			pod, episodes, pErr := podcasts.FetchAndParseFeed(ctx, client, item.XMLURL)
+			cancel()
+			if pErr != nil || pod == nil {
+				continue
+			}
+
+			dbPod := &db.Podcast{
+				Title:         pod.Title,
+				Author:        pod.Author,
+				FeedURL:       pod.FeedURL,
+				Description:   pod.Description,
+				CoverURL:      pod.CoverURL,
+				Link:          pod.Link,
+				LastBuildDate: pod.LastBuildDate,
+				EpisodeCount:  len(episodes),
+			}
+			podID, sErr := s.database.SavePodcast(dbPod)
+			if sErr != nil || podID <= 0 {
+				continue
+			}
+
+			var dbEpisodes []db.PodcastEpisode
+			for _, ep := range episodes {
+				dbEpisodes = append(dbEpisodes, db.PodcastEpisode{
+					PodcastID:     podID,
+					GUID:          ep.GUID,
+					Title:         ep.Title,
+					Description:   ep.Description,
+					EnclosureURL:  ep.EnclosureURL,
+					EnclosureType: ep.EnclosureType,
+					Duration:      ep.Duration,
+					PubDate:       ep.PubDate,
+				})
+			}
+			_ = s.database.SavePodcastEpisodes(podID, dbEpisodes)
+			imported++
+
+			if s.eventsHub != nil {
+				s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+					"action":   "feed_imported",
+					"imported": imported,
+					"total":    len(feeds),
+					"title":    pod.Title,
+				})
+			}
+		}
+
+		if s.eventsHub != nil {
+			s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+				"action":   "import_completed",
+				"imported": imported,
+				"total":    len(feeds),
+			})
+		}
+		log.Printf("[OPML] Importación completada: %d de %d feeds registrados", imported, len(feeds))
+	}(outlines)
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":           "importing",
+		"total_discovered": len(outlines),
+		"message":          fmt.Sprintf("Importando %d feeds en segundo plano", len(outlines)),
+	})
+}
+
+// handlePodcastOPMLExport genera y descarga el archivo OPML con todas las suscripciones actuales de AuraBox.
+func (s *Server) handlePodcastOPMLExport(w http.ResponseWriter, r *http.Request) {
+	dbList, err := s.database.GetPodcasts()
+	if err != nil {
+		http.Error(w, "error al leer podcasts para exportar", http.StatusInternalServerError)
+		return
+	}
+
+	podList := make([]podcasts.Podcast, 0, len(dbList))
+	for _, p := range dbList {
+		podList = append(podList, podcasts.Podcast{
+			Title:   p.Title,
+			FeedURL: p.FeedURL,
+			Link:    p.Link,
+		})
+	}
+
+	xmlBytes, err := podcasts.GenerateOPML(podList)
+	if err != nil {
+		http.Error(w, "error al generar documento OPML", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="aurabox-podcasts.opml"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(xmlBytes)
+}
+
+// handlePodcastsRefresh actualiza los episodios de todos o de un podcast específico.
+func (s *Server) handlePodcastsRefresh(w http.ResponseWriter, r *http.Request) {
+	var podcastsList []db.Podcast
+	var targetID int64
+
+	if idStr := r.URL.Query().Get("id"); idStr != "" {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+			targetID = id
+		}
+	} else if idStr := r.URL.Query().Get("podcast_id"); idStr != "" {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+			targetID = id
+		}
+	}
+
+	if targetID <= 0 && r.Body != nil {
+		var payload struct {
+			ID        int64 `json:"id"`
+			PodcastID int64 `json:"podcast_id"`
+		}
+		if err := decodeJSONBody(w, r, &payload); err == nil {
+			if payload.PodcastID > 0 {
+				targetID = payload.PodcastID
+			} else if payload.ID > 0 {
+				targetID = payload.ID
+			}
+		}
+	}
+
+	if targetID > 0 {
+		if p, _, err := s.database.GetPodcastByID(targetID); err == nil && p != nil {
+			podcastsList = append(podcastsList, *p)
+		}
+	}
+
+	if len(podcastsList) == 0 {
+		var err error
+		podcastsList, err = s.database.GetPodcasts()
+		if err != nil {
+			http.Error(w, "error al leer podcasts", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	go func(list []db.Podcast) {
+		client := &http.Client{Timeout: 15 * time.Second}
+		refreshed := 0
+		for _, p := range list {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			_, episodes, err := podcasts.FetchAndParseFeed(ctx, client, p.FeedURL)
+			cancel()
+			if err != nil {
+				continue
+			}
+
+			var dbEpisodes []db.PodcastEpisode
+			for _, ep := range episodes {
+				dbEpisodes = append(dbEpisodes, db.PodcastEpisode{
+					PodcastID:     p.ID,
+					GUID:          ep.GUID,
+					Title:         ep.Title,
+					Description:   ep.Description,
+					EnclosureURL:  ep.EnclosureURL,
+					EnclosureType: ep.EnclosureType,
+					Duration:      ep.Duration,
+					PubDate:       ep.PubDate,
+				})
+			}
+			_ = s.database.SavePodcastEpisodes(p.ID, dbEpisodes)
+			refreshed++
+		}
+		if s.eventsHub != nil {
+			s.eventsHub.Broadcast("podcasts_updated", map[string]interface{}{
+				"action":    "refresh_completed",
+				"refreshed": refreshed,
+				"total":     len(list),
+			})
+		}
+	}(podcastsList)
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":  "refreshing",
+		"total":   len(podcastsList),
+		"message": "Actualizando feeds en segundo plano",
+	})
+}
+
+// handlePodcastProgress guarda los segundos reproducidos y el estado de visto de un episodio.
+func (s *Server) handlePodcastProgress(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		EpisodeID int64    `json:"episode_id"`
+		Progress  float64  `json:"progress"`
+		Played    *bool    `json:"played,omitempty"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil || payload.EpisodeID <= 0 {
+		http.Error(w, "episode_id inválido", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Progress >= 0 {
+		_ = s.database.UpdateEpisodeProgress(payload.EpisodeID, payload.Progress)
+	}
+	if payload.Played != nil {
+		_ = s.database.MarkEpisodePlayed(payload.EpisodeID, *payload.Played)
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"status": "updated",
+	})
 }
 
 // buildHTTPSURLForHost construye la URL HTTPS segura conservando IP/host y evitando redirecciones abiertas.

@@ -387,4 +387,121 @@ export function getSecurityStatus() {
   return requestHelper('/security/status');
 }
 
+// autoFetchCurrentCover solicita al servidor buscar y descargar automáticamente la portada para la pista actual o por trackId.
+export function autoFetchCurrentCover(trackId = 0) {
+  const url = trackId > 0 ? `/player/cover/auto-fetch?track_id=${encodeURIComponent(trackId)}` : '/player/cover/auto-fetch';
+  return requestHelper(url, { method: 'POST' });
+}
+
+// getPodcasts obtiene todos los podcasts suscritos en AuraBox, con opción de filtrar solo favoritos.
+export function getPodcasts(favoritesOnly = false) {
+  const query = favoritesOnly ? '?favorites=true' : '';
+  return requestHelper(`/podcasts${query}`);
+}
+
+// getPodcastDetail obtiene los detalles de un podcast y todos sus episodios indexados.
+export function getPodcastDetail(id) {
+  return requestHelper(`/podcasts/episodes?podcast_id=${encodeURIComponent(id)}`);
+}
+
+// subscribePodcast suscribe un nuevo feed RSS de podcast y descarga sus capítulos iniciales.
+export function subscribePodcast(feedUrl) {
+  return requestHelper('/podcasts/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ feed_url: feedUrl })
+  });
+}
+
+// unsubscribePodcast cancela la suscripción y elimina un podcast y sus episodios.
+export function unsubscribePodcast(id) {
+  return requestHelper(`/podcasts/unsubscribe?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// togglePodcastFavorite conmuta el estado de favorito de un canal de podcast.
+export function togglePodcastFavorite(id) {
+  return requestHelper('/podcasts/favorite', {
+    method: 'POST',
+    body: JSON.stringify({ id: Number(id) })
+  });
+}
+
+// toggleEpisodeFavorite conmuta el estado de favorito de un episodio específico.
+export function toggleEpisodeFavorite(episodeId) {
+  return requestHelper('/podcasts/episodes/favorite', {
+    method: 'POST',
+    body: JSON.stringify({ episode_id: Number(episodeId) })
+  });
+}
+
+// toggleEpisodePlayed conmuta o actualiza el estado de reproducción de un episodio.
+export function toggleEpisodePlayed(episodeId, played = null) {
+  const payload = { episode_id: Number(episodeId) };
+  if (played !== null && played !== undefined) {
+    payload.played = Boolean(played);
+  }
+  return requestHelper('/podcasts/episodes/played', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+// playPodcastEpisode reproduce o encola un episodio en el motor MPD.
+export function playPodcastEpisode(episodeId, mode = 'replace') {
+  return requestHelper('/podcasts/play', {
+    method: 'POST',
+    body: JSON.stringify({ episode_id: episodeId, mode })
+  });
+}
+
+// searchPodcastsOnline busca programas de podcast en el directorio abierto de Apple Podcasts.
+export function searchPodcastsOnline(query) {
+  return requestHelper(`/podcasts/search?q=${encodeURIComponent(query)}`);
+}
+
+// importOPML envía un archivo o contenido XML OPML para importar feeds en segundo plano.
+export function importOPML(fileOrXML) {
+  if (fileOrXML instanceof File || fileOrXML instanceof Blob) {
+    const formData = new FormData();
+    formData.append('file', fileOrXML);
+    return fetch('/api/podcasts/opml/import', {
+      method: 'POST',
+      body: formData
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Error ${res.status}`);
+      }
+      return res.json();
+    });
+  }
+  return requestHelper('/podcasts/opml/import', {
+    method: 'POST',
+    body: JSON.stringify({ opml: fileOrXML })
+  });
+}
+
+// exportOPMLURL devuelve la URL directa para descargar el archivo OPML con las suscripciones actuales.
+export function exportOPMLURL() {
+  return '/api/podcasts/opml/export';
+}
+
+// refreshPodcasts solicita al servidor actualizar los episodios de todos los podcasts o de uno específico.
+export function refreshPodcasts(id = null) {
+  if (id) {
+    return requestHelper(`/podcasts/refresh?id=${encodeURIComponent(id)}`, { method: 'POST' });
+  }
+  return requestHelper('/podcasts/refresh', { method: 'POST' });
+}
+
+// updatePodcastProgress actualiza el avance y estado de escuchado de un capítulo.
+export function updatePodcastProgress(episodeId, progress, played = null) {
+  const payload = { episode_id: episodeId, progress };
+  if (played !== null) payload.played = played;
+  return requestHelper('/podcasts/progress', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+
 

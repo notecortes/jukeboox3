@@ -112,13 +112,16 @@ func startMockMPDServer(t *testing.T, sockPath string) (*sync.Mutex, *[]string) 
 	return &cmdMu, &cmds
 }
 
-// TestNormalizeMPDFilePath valida la conversión inversa de URIs file:///rawmusic/... y rutas de MPD a SQLite.
+// TestNormalizeMPDFilePath valida la conversión inversa de URIs file:///rawmusic/..., /rawmusic/... y rutas de MPD a SQLite.
 func TestNormalizeMPDFilePath(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
 	}{
 		{"file:///rawmusic/nas/01.rock/Queen/01.flac", "/music/nas/01.rock/Queen/01.flac"},
+		{"/rawmusic/nas/01.rock/Queen/01.flac", "/music/nas/01.rock/Queen/01.flac"},
+		{"rawmusic/nas/01.rock/Queen/01.flac", "/music/nas/01.rock/Queen/01.flac"},
+		{"/music/rawmusic/nas/01.rock/Queen/01.flac", "/music/nas/01.rock/Queen/01.flac"},
 		{"file:///music/local/track.mp3", "/music/local/track.mp3"},
 		{"local/The Cure/Boys.mp3", "/music/local/The Cure/Boys.mp3"},
 		{"https://stream.radioparadise.com/flacm", "https://stream.radioparadise.com/flacm"},
@@ -126,6 +129,43 @@ func TestNormalizeMPDFilePath(t *testing.T) {
 	for _, tc := range cases {
 		if got := normalizeMPDFilePath(tc.in); got != tc.want {
 			t.Fatalf("normalizeMPDFilePath(%q) = %q, esperado %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestLocalMPDURIs verifica la correcta resolución de relPath y rawURI evitando duplicaciones o prefijos espurios.
+func TestLocalMPDURIs(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantRel string
+		wantRaw string
+	}{
+		{"/music/nas/Abril/track.m4a", "nas/Abril/track.m4a", "file:///rawmusic/nas/Abril/track.m4a"},
+		{"/rawmusic/nas/Abril/track.m4a", "nas/Abril/track.m4a", "file:///rawmusic/nas/Abril/track.m4a"},
+		{"file:///rawmusic/nas/Abril/track.m4a", "nas/Abril/track.m4a", "file:///rawmusic/nas/Abril/track.m4a"},
+		{"nas/Abril/track.m4a", "nas/Abril/track.m4a", "file:///rawmusic/nas/Abril/track.m4a"},
+	}
+	for _, tc := range cases {
+		gotRel, gotRaw := localMPDURIs(tc.in)
+		if gotRel != tc.wantRel || gotRaw != tc.wantRaw {
+			t.Fatalf("localMPDURIs(%q) = (%q, %q), esperado (%q, %q)", tc.in, gotRel, gotRaw, tc.wantRel, tc.wantRaw)
+		}
+	}
+}
+
+// TestSanitizeCommandForTCP verifica que comandos con file:/// o /music/ se conviertan a rutas relativas seguras para TCP.
+func TestSanitizeCommandForTCP(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`add "file:///rawmusic/nas/01.flac"` + "\n", `add "nas/01.flac"` + "\n"},
+		{`addid "file:///rawmusic/nas/01.flac" 2` + "\n", `addid "nas/01.flac" 2` + "\n"},
+		{`add "/music/local/track.mp3"` + "\n", `add "local/track.mp3"` + "\n"},
+	}
+	for _, tc := range cases {
+		if got := sanitizeCommandForTCP(tc.in); got != tc.want {
+			t.Fatalf("sanitizeCommandForTCP(%q) = %q, esperado %q", tc.in, got, tc.want)
 		}
 	}
 }

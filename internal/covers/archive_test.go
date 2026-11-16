@@ -81,3 +81,34 @@ func TestFetchAndCacheRejectsInvalidMagicBytes(t *testing.T) {
 	}
 }
 
+// TestFetchAndCacheTrackCover verifica la búsqueda y guardado en disco para una pista individual.
+func TestFetchAndCacheTrackCover(t *testing.T) {
+	validJPEG := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xFF, 0xD9}
+
+	caaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(validJPEG)
+	}))
+	defer caaSrv.Close()
+
+	mbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"release-groups": []map[string]interface{}{
+				{"id": "mbid-track-1", "title": "Myopia", "score": 100},
+			},
+		})
+	}))
+	defer mbSrv.Close()
+
+	coversDir := t.TempDir()
+	svc := NewServiceWithEndpoints(coversDir, mbSrv.URL, caaSrv.URL, caaSrv.Client())
+
+	coverURL, err := svc.FetchAndCacheTrackCover(context.Background(), "Broken Sleep (128kbit_AAC)", "Agnes Obel", "Myopia")
+	if err != nil {
+		t.Fatalf("FetchAndCacheTrackCover falló: %v", err)
+	}
+	if !strings.HasPrefix(coverURL, "/api/covers/online_") {
+		t.Fatalf("URL devuelta inesperada: %q", coverURL)
+	}
+}
+

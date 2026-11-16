@@ -25,13 +25,35 @@ let ambientOrientation = (typeof localStorage !== 'undefined' && localStorage.ge
   : 'all';
 let ambientInactivityTimer = null;
 let swallowAmbientWakeClick = false;
+let lastAutoFetchKey = '';
+let autoFetchTimer = null;
 
-// isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo.
+// isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo sin duración finita.
 export function isLiveStreamTrack(track) {
   if (!track) return false;
+  if (track.source === 'podcast') return false;
   if (track.source === 'radio') return true;
   const p = (track.path || '').toLowerCase();
-  return p.startsWith('http://') || p.startsWith('https://');
+  return (p.startsWith('http://') || p.startsWith('https://')) && (!track.duration || track.duration <= 0);
+}
+
+// checkAutoFetchMissingCover inicia la búsqueda automática en segundo plano de la portada si la canción actual no tiene ninguna.
+function checkAutoFetchMissingCover(track) {
+  if (!track || isLiveStreamTrack(track)) return;
+  const cover = track.cover_url || '';
+  if (cover && cover !== '/assets/default-cover.svg') return;
+  const trackKey = `${track.title || ''}|${track.artist || ''}|${track.album || ''}`;
+  if (!trackKey || trackKey === '||' || trackKey === lastAutoFetchKey) return;
+  lastAutoFetchKey = trackKey;
+
+  clearTimeout(autoFetchTimer);
+  autoFetchTimer = setTimeout(async () => {
+    try {
+      await api.autoFetchCurrentCover(track.id || 0);
+    } catch {
+      // Ignorar si no se halla carátula en los directorios online
+    }
+  }, 1200);
 }
 
 // formatLiveSubtitle construye el subtítulo con la canción ICY activa o el nombre de la emisora.
@@ -759,6 +781,7 @@ export function renderMiniPlayer() {
     coverImg.dataset.fallback = '/assets/default-cover.svg';
     coverImg.src = sanitizeCoverURL(track.cover_url);
   }
+  checkAutoFetchMissingCover(track);
 
   // Actualizar icono play / pausa en mini-player
   const icon = document.getElementById('miniPlayIcon');
@@ -891,6 +914,7 @@ export function renderNowPlaying() {
     npCover.dataset.fallback = '/assets/default-cover.svg';
     npCover.src = coverSrc;
   }
+  checkAutoFetchMissingCover(track);
 
   // Fondo adaptativo con desenfoque basado en la carátula validada sin riesgo de inyección CSS
   const bg = document.getElementById('npAmbientBg');

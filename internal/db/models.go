@@ -101,3 +101,38 @@ type PlaybackHistory struct {
 	Completed bool      `json:"completed"`
 }
 
+// Podcast representa un programa o feed RSS de podcast suscrito en AuraBox.
+type Podcast struct {
+	ID            int64     `json:"id"`
+	Title         string    `json:"title"`
+	Author        string    `json:"author"`
+	FeedURL       string    `json:"feed_url"`
+	Description   string    `json:"description"`
+	CoverURL      string    `json:"cover_url"`
+	Link          string    `json:"link"`
+	LastBuildDate string    `json:"last_build_date"`
+	EpisodeCount  int       `json:"episode_count"`
+	Favorite      bool      `json:"favorite"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// PodcastEpisode representa un capítulo de audio descargable o reproducible de un podcast.
+type PodcastEpisode struct {
+	ID            int64     `json:"id"`
+	PodcastID     int64     `json:"podcast_id"`
+	PodcastTitle  string    `json:"podcast_title,omitempty"`
+	PodcastCover  string    `json:"podcast_cover,omitempty"`
+	GUID          string    `json:"guid"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	EnclosureURL  string    `json:"enclosure_url"`
+	EnclosureType string    `json:"enclosure_type"`
+	Duration      float64   `json:"duration"` // Duración en segundos
+	PubDate       string    `json:"pub_date"`
+	Played        bool      `json:"played"`
+	Progress      float64   `json:"progress"` // Segundos reproducidos
+	Favorite      bool      `json:"favorite"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+

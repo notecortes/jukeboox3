@@ -589,5 +589,117 @@ func TestUXLibraryQueriesAndThemes(t *testing.T) {
 	}
 }
 
+// TestPodcastsCRUDAndEpisodes verifica la persistencia y lectura de podcasts, episodios y progreso.
+func TestPodcastsCRUDAndEpisodes(t *testing.T) {
+	d, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer d.Close()
+
+	// 1. Guardar podcast
+	pod := &Podcast{
+		Title:       "Historias Invisibles",
+		Author:      "Marta Gómez",
+		FeedURL:     "https://ejemplo.com/podcast/feed.xml",
+		Description: "Relatos sonoros del mundo.",
+		CoverURL:    "https://ejemplo.com/cover.jpg",
+		Link:        "https://ejemplo.com",
+	}
+
+	podID, err := d.SavePodcast(pod)
+	if err != nil || podID <= 0 {
+		t.Fatalf("SavePodcast falló: %v", err)
+	}
+
+	// 2. Insertar episodios
+	episodes := []PodcastEpisode{
+		{
+			GUID:         "ep-1",
+			Title:        "Capítulo 1: El Eco del Silencio",
+			Description:  "Primer capítulo sonoro.",
+			EnclosureURL: "https://ejemplo.com/audio/ep1.mp3",
+			Duration:     1800,
+			PubDate:      "Sun, 01 Nov 2026 12:00:00 GMT",
+		},
+		{
+			GUID:         "ep-2",
+			Title:        "Capítulo 2: Voces de la Niebla",
+			Description:  "Segundo capítulo sonoro.",
+			EnclosureURL: "https://ejemplo.com/audio/ep2.mp3",
+			Duration:     2100,
+			PubDate:      "Sun, 08 Nov 2026 12:00:00 GMT",
+		},
+	}
+
+	if err := d.SavePodcastEpisodes(podID, episodes); err != nil {
+		t.Fatalf("SavePodcastEpisodes falló: %v", err)
+	}
+
+	// 3. Listar podcasts
+	list, err := d.GetPodcasts()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("GetPodcasts esperaba 1 podcast, obtuvo %d: %v", len(list), err)
+	}
+	if list[0].EpisodeCount != 2 {
+		t.Fatalf("EpisodeCount esperado 2, obtenido %d", list[0].EpisodeCount)
+	}
+
+	// 4. Obtener detalle por ID
+	p, eps, err := d.GetPodcastByID(podID)
+	if err != nil || p == nil || len(eps) != 2 {
+		t.Fatalf("GetPodcastByID falló: %v (eps=%d)", err, len(eps))
+	}
+
+	// 5. Buscar por Enclosure URL
+	foundEp, foundPod, err := d.GetPodcastEpisodeByEnclosureURL("https://ejemplo.com/audio/ep1.mp3")
+	if err != nil || foundEp == nil || foundPod == nil {
+		t.Fatalf("GetPodcastEpisodeByEnclosureURL falló: %v", err)
+	}
+	if foundEp.Title != "Capítulo 1: El Eco del Silencio" {
+		t.Errorf("título de episodio inesperado: %q", foundEp.Title)
+	}
+
+	// 6. Actualizar progreso y marcar reproducido
+	if err := d.UpdateEpisodeProgress(foundEp.ID, 350.5); err != nil {
+		t.Fatalf("UpdateEpisodeProgress falló: %v", err)
+	}
+	if err := d.MarkEpisodePlayed(foundEp.ID, true); err != nil {
+		t.Fatalf("MarkEpisodePlayed falló: %v", err)
+	}
+
+	// 7. Conmutar favoritos (podcast y episodio)
+	favState, err := d.TogglePodcastFavorite(podID)
+	if err != nil || !favState {
+		t.Fatalf("TogglePodcastFavorite falló: fav=%v err=%v", favState, err)
+	}
+	favPods, err := d.GetFavoritePodcasts()
+	if err != nil || len(favPods) != 1 {
+		t.Fatalf("GetFavoritePodcasts esperaba 1 podcast, obtuvo %d", len(favPods))
+	}
+	epFavState, err := d.ToggleEpisodeFavorite(foundEp.ID)
+	if err != nil || !epFavState {
+		t.Fatalf("ToggleEpisodeFavorite falló: fav=%v err=%v", epFavState, err)
+	}
+	toggledPlayed, err := d.ToggleEpisodePlayed(foundEp.ID)
+	if err != nil || toggledPlayed { // Estaba en true, debe pasar a false
+		t.Fatalf("ToggleEpisodePlayed debía pasar a false, obtuvo %v (err=%v)", toggledPlayed, err)
+	}
+
+	reEp, _, err := d.GetPodcastEpisodeByID(foundEp.ID)
+	if err != nil || reEp.Played || reEp.Progress != 350.5 || !reEp.Favorite {
+		t.Fatalf("estado de episodio no persistido correctamente: %+v", reEp)
+	}
+
+	// 8. Borrar podcast
+	if err := d.DeletePodcast(podID); err != nil {
+		t.Fatalf("DeletePodcast falló: %v", err)
+	}
+	listAfter, err := d.GetPodcasts()
+	if err != nil || len(listAfter) != 0 {
+		t.Fatalf("podcast no borrado, lista restante: %d", len(listAfter))
+	}
+}
+
 
 

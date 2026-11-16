@@ -204,6 +204,18 @@ function connectSSE() {
     notifyListeners('library_updated', payload);
   });
 
+  evtSource.addEventListener('podcasts_updated', (e) => {
+    let payload = null;
+    if (e && e.data) {
+      try {
+        payload = JSON.parse(e.data);
+      } catch (err) {
+        payload = null;
+      }
+    }
+    notifyListeners('podcasts_updated', payload);
+  });
+
   evtSource.onerror = () => {
     if (activeEventSource !== evtSource) return;
     document.getElementById('headerStatusDot')?.style.setProperty('background-color', 'var(--color-warning)');
