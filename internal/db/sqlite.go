@@ -1803,6 +1803,26 @@ func (d *DB) GetTracksByGenre(genre string, limit int) ([]Track, error) {
 	return scanTracksFromRows(rows)
 }
 
+// GetRandomTracks devuelve una selección aleatoria de canciones de la biblioteca local.
+func (d *DB) GetRandomTracks(limit int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 15
+	}
+	rows, err := d.reader().Query(`
+		SELECT id, path, filename, title, artist, album, album_artist, genre,
+		       year, duration, track_number, bitrate, sample_rate, format,
+		       source, cover_url, favorite, play_count, bpm, created_at
+		FROM tracks
+		ORDER BY RANDOM()
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTracksFromRows(rows)
+}
+
 // GetTracksByDecade devuelve pistas aleatorias publicadas dentro de una década concreta [decadeStart, decadeStart+9].
 func (d *DB) GetTracksByDecade(decadeStart int, limit int) ([]Track, error) {
 	if limit <= 0 {

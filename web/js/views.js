@@ -3719,6 +3719,25 @@ function bindSettingsView() {
     });
   });
 
+  // Interruptor Radio Infinita / Autoplay Inteligente al terminar la cola
+  const autoplayCheckbox = document.getElementById('settingAutoplaySimilar');
+  if (autoplayCheckbox) {
+    if (typeof state.player.autoplay_similar === 'boolean') {
+      autoplayCheckbox.checked = state.player.autoplay_similar;
+    }
+    autoplayCheckbox.addEventListener('change', async () => {
+      const enabled = autoplayCheckbox.checked;
+      try {
+        const updated = await api.setAutoplay(enabled);
+        if (updated) updatePlayerState(updated);
+        showToast(enabled ? 'Radio Infinita activada (añade música similar al terminar)' : 'Radio Infinita desactivada (se detiene al terminar el disco)');
+      } catch (err) {
+        autoplayCheckbox.checked = !enabled;
+        showToast(`Error al configurar Radio Infinita: ${err.message}`);
+      }
+    });
+  }
+
   // Temporizador de apagado (Sleep Timer)
   const sleepButtons = document.querySelectorAll('.btn-sleep-timer');
   sleepButtons.forEach((btn) => {

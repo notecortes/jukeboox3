@@ -96,6 +96,146 @@ async function checkAndFetchLyrics() {
   }
 }
 
+let lyricsViewMode = 'karaoke';
+try {
+  lyricsViewMode = localStorage.getItem('aurabox_lyrics_mode') || 'karaoke';
+} catch (e) {}
+
+// getLyricLineInfo obtiene de forma segura el texto y tiempo de una línea de letra.
+function getLyricLineInfo(item) {
+  if (!item) return { text: '', time: 0 };
+  const text = item.text ?? item.Text ?? '';
+  const time = item.time ?? item.Time ?? 0;
+  return { text: (text || '').trim(), time };
+}
+
+// escapeHTML sanitiza texto para incrustación segura en el DOM.
+function escapeHTML(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// setLyricsViewMode alterna entre el modo karaoke de 3 líneas y la lista completa desplazable.
+function setLyricsViewMode(mode) {
+  lyricsViewMode = (mode === 'scroll') ? 'scroll' : 'karaoke';
+  try {
+    localStorage.setItem('aurabox_lyrics_mode', lyricsViewMode);
+  } catch (e) {}
+
+  const btnKaraoke = document.getElementById('btnLyricsModeKaraoke');
+  const btnScroll = document.getElementById('btnLyricsModeScroll');
+  const viewKaraoke = document.getElementById('lyricsViewKaraoke');
+  const viewScroll = document.getElementById('lyricsViewScroll');
+
+  if (btnKaraoke && btnScroll && viewKaraoke && viewScroll) {
+    btnKaraoke.classList.toggle('active', lyricsViewMode === 'karaoke');
+    btnScroll.classList.toggle('active', lyricsViewMode === 'scroll');
+    viewKaraoke.classList.toggle('hidden', lyricsViewMode !== 'karaoke');
+    viewScroll.classList.toggle('hidden', lyricsViewMode !== 'scroll');
+    syncActiveLyricLine(true);
+  }
+}
+
+// updatePanelKaraokeDisplay actualiza las 3 líneas (anterior, actual y siguiente) en el panel Now Playing.
+function updatePanelKaraokeDisplay(activeIdx, lines) {
+  const container = document.getElementById('panelKaraoke3Lines');
+  if (!container || !lines || lines.length === 0) return;
+
+  const prevEl = document.getElementById('pkLinePrev');
+  const activeEl = document.getElementById('pkLineActive');
+  const nextEl = document.getElementById('pkLineNext');
+  if (!prevEl || !activeEl || !nextEl) return;
+
+  if (activeIdx < 0 || activeIdx >= lines.length) {
+    const first = getLyricLineInfo(lines[0]);
+    prevEl.textContent = '';
+    prevEl.classList.add('empty');
+    activeEl.textContent = first.text || '♪';
+    activeEl.classList.remove('empty');
+    activeEl.dataset.time = first.time;
+    const second = lines.length > 1 ? getLyricLineInfo(lines[1]) : null;
+    nextEl.textContent = second ? (second.text || '♪') : '';
+    nextEl.classList.toggle('empty', !second);
+    if (second) nextEl.dataset.time = second.time;
+    return;
+  }
+
+  // Línea anterior
+  if (activeIdx > 0) {
+    const prev = getLyricLineInfo(lines[activeIdx - 1]);
+    prevEl.textContent = prev.text || '♪';
+    prevEl.dataset.time = prev.time;
+    prevEl.classList.remove('empty');
+  } else {
+    prevEl.textContent = '';
+    prevEl.classList.add('empty');
+    delete prevEl.dataset.time;
+  }
+
+  // Línea activa
+  const active = getLyricLineInfo(lines[activeIdx]);
+  activeEl.textContent = active.text || '♪';
+  activeEl.dataset.time = active.time;
+  activeEl.classList.remove('empty');
+
+  // Línea siguiente
+  if (activeIdx + 1 < lines.length) {
+    const next = getLyricLineInfo(lines[activeIdx + 1]);
+    nextEl.textContent = next.text || '♪';
+    nextEl.dataset.time = next.time;
+    nextEl.classList.remove('empty');
+  } else {
+    nextEl.textContent = '';
+    nextEl.classList.add('empty');
+    delete nextEl.dataset.time;
+  }
+}
+
+// updateAmbientLyricDisplay actualiza las 3 líneas sincronizadas en el modo marco musical horizontal/ambiental.
+function updateAmbientLyricDisplay(activeIdx, lines) {
+  const el = document.getElementById('npAmbientLyric');
+  if (!el) return;
+
+  if (activeIdx === '' || !lines || lines.length === 0 || typeof activeIdx !== 'number' || activeIdx < 0) {
+    el.innerHTML = '';
+    el.classList.add('hidden');
+    return;
+  }
+
+  const prev = activeIdx > 0 ? getLyricLineInfo(lines[activeIdx - 1]) : null;
+  const active = getLyricLineInfo(lines[activeIdx]);
+  const next = (activeIdx + 1 < lines.length) ? getLyricLineInfo(lines[activeIdx + 1]) : null;
+
+  if (!active.text || active.text === '♪') {
+    el.innerHTML = '';
+    el.classList.add('hidden');
+    return;
+  }
+
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="karaoke-3lines-container ambient">
+      ${prev ? `<div class="karaoke-line karaoke-prev" data-time="${prev.time}">${escapeHTML(prev.text)}</div>` : '<div class="karaoke-line karaoke-prev empty"></div>'}
+      <div class="karaoke-line karaoke-active" data-time="${active.time}">${escapeHTML(active.text)}</div>
+      ${next ? `<div class="karaoke-line karaoke-next" data-time="${next.time}">${escapeHTML(next.text)}</div>` : '<div class="karaoke-line karaoke-next empty"></div>'}
+    </div>
+  `;
+
+  // Añadir eventos click para salto instantáneo al tocar cualquiera de las 3 líneas
+  el.querySelectorAll('.karaoke-line[data-time]').forEach((lineEl) => {
+    lineEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = parseFloat(lineEl.dataset.time);
+      if (!isNaN(t)) {
+        api.seek(t);
+      }
+    });
+  });
+}
+
 // renderLyricsLines renderiza las líneas en el contenedor permitiendo salto de tiempo al hacer tap.
 function renderLyricsLines() {
   const container = document.getElementById('npLyricsContainer');
@@ -109,48 +249,88 @@ function renderLyricsLines() {
     plainEl.style.lineHeight = '1.8';
     plainEl.style.fontSize = '0.95rem';
     plainEl.style.color = 'var(--text-secondary)';
+    plainEl.style.padding = '20px 12px';
     plainEl.textContent = state.lyrics.plain;
     container.appendChild(plainEl);
     return;
   }
 
-  // Renderizar líneas con marca de tiempo sincronizada
+  // Barra de herramientas para cambiar de vista (Karaoke 3 líneas vs Lista completa)
+  const toolbar = document.createElement('div');
+  toolbar.className = 'lyrics-mode-toolbar';
+  toolbar.innerHTML = `
+    <button class="btn-lyrics-mode ${lyricsViewMode === 'karaoke' ? 'active' : ''}" id="btnLyricsModeKaraoke" type="button" title="Modo Karaoke (3 líneas)">
+      <span>🎤</span> Karaoke (3 líneas)
+    </button>
+    <button class="btn-lyrics-mode ${lyricsViewMode === 'scroll' ? 'active' : ''}" id="btnLyricsModeScroll" type="button" title="Lista completa desplazable">
+      <span>📜</span> Lista completa
+    </button>
+  `;
+  container.appendChild(toolbar);
+
+  toolbar.querySelector('#btnLyricsModeKaraoke')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setLyricsViewMode('karaoke');
+  });
+  toolbar.querySelector('#btnLyricsModeScroll')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setLyricsViewMode('scroll');
+  });
+
+  // Vista 1: Modo Karaoke con 3 líneas prominentes
+  const viewKaraoke = document.createElement('div');
+  viewKaraoke.id = 'lyricsViewKaraoke';
+  viewKaraoke.className = `lyrics-view-karaoke ${lyricsViewMode === 'karaoke' ? '' : 'hidden'}`;
+  viewKaraoke.innerHTML = `
+    <div class="karaoke-3lines-container" id="panelKaraoke3Lines">
+      <div class="karaoke-line karaoke-prev empty" id="pkLinePrev"></div>
+      <div class="karaoke-line karaoke-active" id="pkLineActive">♪</div>
+      <div class="karaoke-line karaoke-next empty" id="pkLineNext"></div>
+    </div>
+  `;
+
+  // Asignar listeners de salto en las 3 líneas
+  viewKaraoke.querySelectorAll('.karaoke-line').forEach((lineEl) => {
+    lineEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = parseFloat(lineEl.dataset.time);
+      if (!isNaN(t)) {
+        api.seek(t);
+      }
+    });
+  });
+  container.appendChild(viewKaraoke);
+
+  // Vista 2: Lista completa desplazable con auto-scroll
+  const viewScroll = document.createElement('div');
+  viewScroll.id = 'lyricsViewScroll';
+  viewScroll.className = `lyrics-view-scroll ${lyricsViewMode === 'scroll' ? '' : 'hidden'}`;
+
   state.lyrics.synced.forEach((item, index) => {
     const lineEl = document.createElement('div');
     lineEl.className = 'lyric-line';
     lineEl.id = `lyric-line-${index}`;
-    const text = item.text ?? item.Text ?? '♪';
-    const time = item.time ?? item.Time ?? 0;
+    const { text, time } = getLyricLineInfo(item);
     lineEl.textContent = text || '♪';
     lineEl.dataset.time = time;
 
-    // Tap en la línea para desplazarse inmediatamente a ese punto del audio
-    lineEl.addEventListener('click', () => {
+    lineEl.addEventListener('click', (e) => {
+      e.stopPropagation();
       api.seek(time);
     });
 
-    container.appendChild(lineEl);
+    viewScroll.appendChild(lineEl);
   });
-}
+  container.appendChild(viewScroll);
 
-// updateAmbientLyricDisplay actualiza la línea actual mostrada en el modo marco musical horizontal.
-function updateAmbientLyricDisplay(text) {
-  const el = document.getElementById('npAmbientLyric');
-  if (!el) return;
-  const clean = (text || '').trim();
-  if (!clean || clean === '♪') {
-    el.textContent = '';
-    el.classList.add('hidden');
-  } else {
-    el.textContent = clean;
-    el.classList.remove('hidden');
-  }
+  // Sincronizar inmediatamente la línea actual en ambas vistas
+  updatePanelKaraokeDisplay(state.lyrics.activeIndex, state.lyrics.synced);
 }
 
 // syncActiveLyricLine detecta la línea correspondiente al segundo actual y realiza auto-scroll suave.
 function syncActiveLyricLine(forceAmbientRefresh = false) {
   if (!state.lyrics.found || state.lyrics.synced.length === 0) {
-    updateAmbientLyricDisplay('');
+    updateAmbientLyricDisplay(-1, []);
     return;
   }
   if (!forceAmbientRefresh && state.player.status !== 'play') return;
@@ -173,17 +353,20 @@ function syncActiveLyricLine(forceAmbientRefresh = false) {
   }
 
   if (activeIdx >= 0 && (activeIdx !== state.lyrics.activeIndex || forceAmbientRefresh)) {
-    // Remover activo anterior
+    // Remover activo anterior en lista desplazable
     if (state.lyrics.activeIndex >= 0 && state.lyrics.activeIndex !== activeIdx) {
       document.getElementById(`lyric-line-${state.lyrics.activeIndex}`)?.classList.remove('active');
     }
 
     state.lyrics.activeIndex = activeIdx;
-    const activeItem = lines[activeIdx];
-    const activeText = activeItem?.text ?? activeItem?.Text ?? '';
-    updateAmbientLyricDisplay(activeText);
 
-    if (lyricsOpen) {
+    // Actualizar vista Karaoke de 3 líneas en pantalla ambiental / marco musical
+    updateAmbientLyricDisplay(activeIdx, lines);
+
+    // Actualizar vista Karaoke de 3 líneas en panel Now Playing
+    updatePanelKaraokeDisplay(activeIdx, lines);
+
+    if (lyricsOpen && lyricsViewMode === 'scroll') {
       const currentEl = document.getElementById(`lyric-line-${activeIdx}`);
       if (currentEl) {
         currentEl.classList.add('active');

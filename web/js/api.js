@@ -106,8 +106,8 @@ export function getAudioDiagnostics() {
   return requestHelper('/player/outputs/diagnostics');
 }
 
-// setAudioConfig ajusta parámetros audiófilos de ReplayGain, Crossfade, Fade en pausa y su duración.
-export function setAudioConfig(replayGain, crossfade, softFade = undefined, softFadeMs = undefined) {
+// setAudioConfig ajusta parámetros audiófilos de ReplayGain, Crossfade, Fade en pausa y Autoplay de música similar.
+export function setAudioConfig(replayGain, crossfade, softFade = undefined, softFadeMs = undefined, autoplaySimilar = undefined) {
   let qs = `replay_gain=${encodeURIComponent(replayGain)}&crossfade=${encodeURIComponent(crossfade)}`;
   if (typeof softFade === 'boolean') {
     qs += `&soft_fade=${softFade ? 'true' : 'false'}`;
@@ -115,7 +115,18 @@ export function setAudioConfig(replayGain, crossfade, softFade = undefined, soft
   if (typeof softFadeMs === 'number' && Number.isFinite(softFadeMs) && softFadeMs >= 300) {
     qs += `&soft_fade_ms=${encodeURIComponent(Math.round(softFadeMs))}`;
   }
+  if (typeof autoplaySimilar === 'boolean') {
+    qs += `&autoplay_similar=${autoplaySimilar ? 'true' : 'false'}`;
+  }
   return requestHelper(`/player/config?${qs}`, { method: 'POST' });
+}
+
+// setAutoplay activa o desactiva la adición automática de música similar al terminar la cola (Radio Infinita).
+export function setAutoplay(enabled) {
+  return requestHelper('/player/autoplay', {
+    method: 'POST',
+    body: JSON.stringify({ enabled: Boolean(enabled) })
+  });
 }
 
 // setSleepTimer programa el apagado automático de la música en N minutos.

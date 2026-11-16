@@ -1607,5 +1607,73 @@ func TestOutputDSPPresetPersistenceAndSwitch(t *testing.T) {
 	}
 }
 
+// TestAutoplayProviderAndTriggers valida la invocación automática del proveedor de temas similares al terminar la cola.
+func TestAutoplayProviderAndTriggers(t *testing.T) {
+	sockDir := t.TempDir()
+	sockPath := filepath.Join(sockDir, "autoplay_mpd.sock")
+	startMockMPDServer(t, sockPath)
+
+	dbPath := filepath.Join(sockDir, "test_autoplay.db")
+	database, err := db.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("error creando base de datos: %v", err)
+	}
+	defer database.Close()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, database)
+	defer c.Close()
+
+	if !c.IsAutoplayEnabled() {
+		t.Fatalf("se esperaba autoplay activado por defecto")
+	}
+
+	c.SetAutoplayEnabled(false)
+	if c.IsAutoplayEnabled() || c.GetState().AutoplaySimilar {
+		t.Fatalf("autoplay debía estar desactivado")
+	}
+
+	c.SetAutoplayEnabled(true)
+	if !c.IsAutoplayEnabled() || !c.GetState().AutoplaySimilar {
+		t.Fatalf("autoplay debía estar reactivado")
+	}
+
+	called := make(chan string, 1)
+	c.SetAutoplayProvider(func(seed db.Track) ([]db.Track, error) {
+		called <- seed.Artist
+		return []db.Track{
+			{ID: 101, Title: "Sim 1", Artist: "Similar Band", Duration: 180, Path: "/music/local/sim1.mp3"},
+			{ID: 102, Title: "Sim 2", Artist: "Similar Band", Duration: 210, Path: "/music/local/sim2.mp3"},
+		}, nil
+	})
+
+	seedTrack := db.Track{ID: 99, Title: "Original Song", Artist: "Main Artist", Duration: 200, Path: "/music/local/orig.mp3"}
+	c.ReplaceQueue([]db.Track{seedTrack}, false)
+
+	triggered := c.triggerAutoplay(seedTrack, false)
+	if !triggered {
+		t.Fatalf("triggerAutoplay debía retornar true")
+	}
+
+	select {
+	case artist := <-called:
+		if artist != "Main Artist" {
+			t.Fatalf("proveedor recibió artista %q, esperado 'Main Artist'", artist)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timeout esperando ejecución del proveedor autoplay")
+	}
+
+	// Esperar que las pistas se hayan anexado a la cola
+	time.Sleep(100 * time.Millisecond)
+	q := c.GetQueue()
+	if len(q) < 3 {
+		t.Fatalf("se esperaban al menos 3 temas en la cola tras autoplay, obtenidos %d", len(q))
+	}
+	if q[1].Title != "Sim 1" || q[2].Title != "Sim 2" {
+		t.Fatalf("temas recomendados inesperados en la cola: %+v", q)
+	}
+}
+
+
 
 

@@ -675,6 +675,10 @@ export function syncSettingsAudioControls() {
   if (softFadeChk && typeof state.player.soft_fade === 'boolean') {
     softFadeChk.checked = state.player.soft_fade;
   }
+  const autoplayChk = document.getElementById('settingAutoplaySimilar');
+  if (autoplayChk && typeof state.player.autoplay_similar === 'boolean') {
+    autoplayChk.checked = state.player.autoplay_similar;
+  }
   const fadeMs = Number(state.player.soft_fade_ms || 1100);
   document.querySelectorAll('#softFadeDurationSelector .rg-opt').forEach((btn) => {
     const val = parseInt(btn.dataset.fadeMs || '1100', 10);

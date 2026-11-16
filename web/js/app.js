@@ -216,6 +216,17 @@ function connectSSE() {
     notifyListeners('podcasts_updated', payload);
   });
 
+  evtSource.addEventListener('autoplay_triggered', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data && data.artist) {
+        showToast(`📻 Radio Infinita: Continuando sesión con música similar a ${data.artist}`);
+      }
+    } catch (err) {
+      console.error('[SSE] Error al procesar autoplay_triggered:', err);
+    }
+  });
+
   evtSource.onerror = () => {
     if (activeEventSource !== evtSource) return;
     document.getElementById('headerStatusDot')?.style.setProperty('background-color', 'var(--color-warning)');

@@ -63,7 +63,11 @@ type PlayerState struct {
 	SleepTimerMode string       `json:"sleep_timer_mode,omitempty"`
 	StreamTitle    string       `json:"stream_title,omitempty"`
 	LastError      string       `json:"last_error,omitempty"`
+	AutoplaySimilar bool        `json:"autoplay_similar"`
 }
+
+// AutoplayProvider define la función callback encargada de generar pistas recomendadas cuando finaliza la cola de reproducción.
+type AutoplayProvider func(lastTrack db.Track) ([]db.Track, error)
 
 // Client gestiona la comunicación por socket Unix/TCP con MPD y mantiene el estado en memoria sin bloqueos.
 type Client struct {
@@ -74,6 +78,10 @@ type Client struct {
 	database          *db.DB
 	state             PlayerState
 	queue             []db.Track
+	autoplayProvider  AutoplayProvider
+	autoplayEnabled   atomic.Bool
+	autoplayRunning   atomic.Bool
+	lastAutoplayAt    time.Time
 	mu                sync.RWMutex // Exclusivo para memoria (nunca retener en llamadas de red o SQLite)
 	connMu            sync.Mutex   // Serializa el protocolo petición/respuesta en el socket de MPD
 	syncMu            sync.Mutex   // Serializa secuencias compuestas de actualización de cola en MPD
@@ -211,8 +219,10 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 			DSPPresets:     make(map[string]string),
 			AudioOutputs:   make([]OutputInfo, 0),
 			ActiveOutput:   "Detectando audio...",
+			AutoplaySimilar: true,
 		},
 	}
+	c.autoplayEnabled.Store(true)
 	c.softFadeMs.Store(1100)
 
 	if database != nil {
@@ -267,6 +277,11 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 			if p, ok := c.state.DSPPresets[savedOut]; ok {
 				c.state.DSPPreset = p
 			}
+		}
+		if savedAuto := database.GetSetting("autoplay_similar", ""); savedAuto != "" {
+			enabled := (strings.ToLower(strings.TrimSpace(savedAuto)) != "false" && savedAuto != "0")
+			c.autoplayEnabled.Store(enabled)
+			c.state.AutoplaySimilar = enabled
 		}
 		_ = c.writeDSPConfigFile()
 		c.persistWg.Add(1)
@@ -422,15 +437,15 @@ func (c *Client) connectLocked(respectCooldown bool) error {
 	endpoint := ""
 
 	if c.socketPath != "" {
-		for attempt := 0; attempt < 3; attempt++ {
+		for attempt := 0; attempt < 5; attempt++ {
 			conn, err = net.DialTimeout("unix", c.socketPath, 1500*time.Millisecond)
 			if err == nil {
 				usedUnix = true
 				endpoint = c.socketPath
 				break
 			}
-			if attempt < 2 {
-				time.Sleep(100 * time.Millisecond)
+			if attempt < 4 {
+				time.Sleep(150 * time.Millisecond)
 			}
 		}
 	}
@@ -607,6 +622,9 @@ func sanitizeCommandForTCP(cmd string) string {
 	if strings.Contains(cmd, "file:///music/") {
 		cmd = strings.ReplaceAll(cmd, "file:///music/", "")
 	}
+	if strings.Contains(cmd, "file:///") {
+		cmd = strings.ReplaceAll(cmd, "file:///", "")
+	}
 	if strings.Contains(cmd, `"/music/`) {
 		cmd = strings.ReplaceAll(cmd, `"/music/`, `"`)
 	}
@@ -730,8 +748,15 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
+	isUnix := c.isUsingUnixSocketLocked()
+	if !isUnix && c.socketPath != "" {
+		c.tryUpgradeToUnixSocket()
+		isUnix = c.isUsingUnixSocketLocked()
+	}
+	c.usingUnixSocket.Store(isUnix)
+
 	var rawErr error
-	if c.usingUnixSocket.Load() && rawURI != "" {
+	if isUnix && rawURI != "" {
 		_, rawErr = c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
 		if rawErr == nil {
 			return nil
@@ -779,8 +804,15 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
+	isUnix := c.isUsingUnixSocketLocked()
+	if !isUnix && c.socketPath != "" {
+		c.tryUpgradeToUnixSocket()
+		isUnix = c.isUsingUnixSocketLocked()
+	}
+	c.usingUnixSocket.Store(isUnix)
+
 	var rawErr error
-	if c.usingUnixSocket.Load() && rawURI != "" {
+	if isUnix && rawURI != "" {
 		_, rawErr = c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
 		if rawErr == nil {
 			return nil
@@ -1351,6 +1383,10 @@ func (c *Client) syncStatusFromMPD() bool {
 	var skipCtrlNano int64
 	var skipNextIdx int
 	var prevLastErr string
+
+	needAutoplayPreappend := false
+	needAutoplayPostStop := false
+	var autoplayTrack db.Track
 	triggerTrackEndPause := false
 
 	c.mu.Lock()
@@ -1550,6 +1586,29 @@ func (c *Client) syncStatusFromMPD() bool {
 		c.sleepTrackPath = ""
 		stateChanged = true
 	}
+
+	// Autoplay / Radio infinita:
+	// Caso A (Pre-append): Si está sonando el último tema de la cola, faltan <= 8 segundos y no está en repetición
+	if mpdState == "play" && !wasLiveStream && !c.state.Repeat && c.autoplayEnabled.Load() && !c.autoplayRunning.Load() {
+		currIdx := c.state.CurrentIndex
+		if currIdx >= 0 && currIdx == currQLen-1 && currQLen > 0 {
+			rem := duration - elapsed
+			if duration > 15.0 && rem > 0 && rem <= 8.0 && time.Since(c.lastAutoplayAt) > 20*time.Second {
+				autoplayTrack = c.queue[currIdx]
+				needAutoplayPreappend = true
+			}
+		}
+	}
+
+	// Caso B (Post-stop): Si la cola terminó de reproducirse de forma natural (stop sin error y sin temporizador de apagado)
+	if !needEmptyResync && !needRadioReconnect && !needTrackSkip &&
+		prevStatus == "play" && mpdState == "stop" && mpdErr == "" && !wasLiveStream && !c.state.Repeat &&
+		c.autoplayEnabled.Load() && !c.autoplayRunning.Load() && currQLen > 0 &&
+		c.state.CurrentIndex >= currQLen-1 && time.Since(lastCtrlTime) > 2*time.Second &&
+		time.Since(c.lastAutoplayAt) > 10*time.Second {
+		autoplayTrack = c.queue[c.state.CurrentIndex]
+		needAutoplayPostStop = true
+	}
 	c.mu.Unlock()
 
 	if mpdErr != "" && mpdErr != prevLastErr {
@@ -1600,6 +1659,10 @@ func (c *Client) syncStatusFromMPD() bool {
 		go c.scheduleRadioReconnect(radioVer, radioCtrlNano, radioTargetIdx, stationTitle, radioAttempt, radioDelay)
 	} else if needTrackSkip {
 		go c.scheduleTrackErrorSkip(skipVer, skipCtrlNano, skipNextIdx, mpdErr)
+	} else if needAutoplayPreappend {
+		c.triggerAutoplay(autoplayTrack, false)
+	} else if needAutoplayPostStop {
+		c.triggerAutoplay(autoplayTrack, true)
 	}
 
 	return true
@@ -1705,6 +1768,7 @@ func (c *Client) GetState() PlayerState {
 	defer c.mu.RUnlock()
 
 	st := c.state
+	st.AutoplaySimilar = c.autoplayEnabled.Load()
 	if c.state.CurrentTrack != nil {
 		trackCopy := *c.state.CurrentTrack
 		st.CurrentTrack = &trackCopy
@@ -2247,6 +2311,11 @@ func (c *Client) Next() {
 	if nextIdx >= len(c.queue) {
 		if c.state.Repeat {
 			nextIdx = 0
+		} else if c.autoplayEnabled.Load() && len(c.queue) > 0 {
+			lastTrack := c.queue[len(c.queue)-1]
+			c.mu.Unlock()
+			c.triggerAutoplay(lastTrack, true)
+			return
 		} else {
 			c.state.Status = "stop"
 			c.state.ElapsedTime = 0
@@ -3970,6 +4039,109 @@ func (c *Client) SetAudioConfig(replayGain string, crossfade int) {
 		_ = c.database.SetSetting("crossfade", cfStr)
 	})
 	c.broadcastState()
+}
+
+// SetAutoplayEnabled activa o desactiva la adición automática de música relacionada al terminar el disco/cola.
+func (c *Client) SetAutoplayEnabled(enabled bool) {
+	c.autoplayEnabled.Store(enabled)
+	c.mu.Lock()
+	c.state.AutoplaySimilar = enabled
+	c.mu.Unlock()
+	if c.database != nil {
+		val := "false"
+		if enabled {
+			val = "true"
+		}
+		c.enqueuePersist(func() {
+			_ = c.database.SetSetting("autoplay_similar", val)
+		})
+	}
+	c.broadcastState()
+}
+
+// IsAutoplayEnabled comprueba si la reproducción continua infinita de música similar está activa.
+func (c *Client) IsAutoplayEnabled() bool {
+	return c.autoplayEnabled.Load()
+}
+
+// SetAutoplayProvider registra el generador de pistas similares (Smart Mix / recomendaciones de catálogo).
+func (c *Client) SetAutoplayProvider(fn AutoplayProvider) {
+	c.autoplayProvider = fn
+}
+
+// triggerAutoplay genera y anexa canciones recomendadas basadas en el artista de la pista semilla.
+func (c *Client) triggerAutoplay(targetTrack db.Track, playNow bool) bool {
+	if !c.autoplayEnabled.Load() || c.autoplayProvider == nil {
+		return false
+	}
+	if !c.autoplayRunning.CompareAndSwap(false, true) {
+		return false
+	}
+
+	c.lastAutoplayAt = time.Now()
+
+	go func(lastTrack db.Track, mustPlay bool) {
+		defer c.autoplayRunning.Store(false)
+
+		artist := strings.TrimSpace(lastTrack.Artist)
+		if artist == "" {
+			return
+		}
+
+		// Consultar el proveedor de recomendaciones
+		recommended, err := c.autoplayProvider(lastTrack)
+		if err != nil || len(recommended) == 0 {
+			log.Printf("[Autoplay] No se encontraron pistas similares para '%s': %v", artist, err)
+			return
+		}
+
+		// Evitar duplicados de canciones que ya estén en la cola actual
+		c.mu.RLock()
+		existing := make(map[string]bool, len(c.queue))
+		for _, t := range c.queue {
+			existing[t.Path] = true
+		}
+		oldQLen := len(c.queue)
+		c.mu.RUnlock()
+
+		var freshTracks []db.Track
+		for _, t := range recommended {
+			if !existing[t.Path] {
+				freshTracks = append(freshTracks, t)
+				existing[t.Path] = true
+			}
+		}
+
+		if len(freshTracks) == 0 {
+			log.Printf("[Autoplay] Todas las pistas recomendadas para '%s' ya estaban en la cola", artist)
+			return
+		}
+
+		if len(freshTracks) > 12 {
+			freshTracks = freshTracks[:12]
+		}
+
+		log.Printf("[Autoplay] Añadiendo %d pistas relacionadas con '%s' a la cola", len(freshTracks), artist)
+
+		// Añadir al final de la cola
+		c.EnqueueTracks(freshTracks, "append")
+
+		// Si el reproductor estaba parado o se requirió arranque inmediato, arrancar la primera nueva pista
+		if mustPlay || c.GetState().Status != "play" {
+			c.PlayIndex(oldQLen)
+		}
+
+		if c.eventsHub != nil {
+			c.eventsHub.Broadcast("autoplay_triggered", map[string]interface{}{
+				"artist":      artist,
+				"seed_track":  lastTrack.Title,
+				"count":       len(freshTracks),
+				"start_index": oldQLen,
+			})
+		}
+	}(targetTrack, playNow)
+
+	return true
 }
 
 // StartSleepTimer programa el apagado gradual de la música transcurridos los minutos indicados.

@@ -468,6 +468,121 @@
   transform: scale(1.04);
 }
 
+/* Toolbar de cambio de modo de letras (Karaoke 3 líneas vs Lista completa) */
+.lyrics-mode-toolbar {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-card);
+  padding: 6px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.btn-lyrics-mode {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.btn-lyrics-mode:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-lyrics-mode.active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 2px 10px var(--accent-glow);
+}
+
+/* Vistas de letras */
+.lyrics-view-karaoke {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lyrics-view-karaoke.hidden,
+.lyrics-view-scroll.hidden {
+  display: none !important;
+}
+
+/* Contenedor de 3 líneas sincronizadas estilo Karaoke */
+.karaoke-3lines-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 8px;
+  text-align: center;
+}
+
+.karaoke-line {
+  width: 100%;
+  line-height: 1.45;
+  transition: all 0.35s cubic-bezier(0.2, 0, 0, 1);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.karaoke-line:hover {
+  filter: brightness(1.2);
+}
+
+.karaoke-line.empty {
+  visibility: hidden;
+  height: 1.2em;
+}
+
+/* 1. Línea anterior: sutil, menor tamaño, atenuada */
+.karaoke-line.karaoke-prev {
+  font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+  font-weight: 500;
+  color: var(--text-muted);
+  opacity: 0.55;
+  transform: translateY(2px) scale(0.96);
+}
+
+/* 2. Línea activa (cantando): destacada, color primario, glow envolvente */
+.karaoke-line.karaoke-active {
+  font-size: clamp(1.35rem, 3.8vw, 1.85rem);
+  font-weight: 800;
+  color: var(--text-primary);
+  text-shadow: 0 0 20px var(--accent-glow);
+  transform: scale(1.02);
+  letter-spacing: -0.01em;
+}
+
+/* 3. Línea siguiente: vista previa, semi-transparente */
+.karaoke-line.karaoke-next {
+  font-size: clamp(1.05rem, 2.6vw, 1.25rem);
+  font-weight: 600;
+  color: var(--text-secondary);
+  opacity: 0.72;
+  transform: translateY(-2px) scale(0.98);
+}
+
 /* ---------------------------------------------------------------------
    6. Metadatos de la Pista (Título, Artista, Acciones)
    --------------------------------------------------------------------- */
@@ -831,21 +946,33 @@
 
 .np-ambient-lyric {
   display: none;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  text-shadow: 0 0 18px var(--accent-glow);
-  line-height: 1.45;
-  margin-top: 8px;
+  width: 100%;
+  margin-top: 10px;
   opacity: 0;
   transition: opacity 0.45s ease;
-  overflow: hidden;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
 }
 
 .np-ambient-lyric.hidden {
   display: none !important;
+}
+
+.karaoke-3lines-container.ambient {
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.karaoke-3lines-container.ambient .karaoke-line.karaoke-prev {
+  font-size: clamp(0.95rem, 2vw, 1.15rem);
+  opacity: 0.5;
+}
+
+.karaoke-3lines-container.ambient .karaoke-line.karaoke-active {
+  font-size: clamp(1.3rem, 3.4vw, 1.9rem);
+}
+
+.karaoke-3lines-container.ambient .karaoke-line.karaoke-next {
+  font-size: clamp(1.05rem, 2.4vw, 1.25rem);
+  opacity: 0.7;
 }
 
 /* Modo Marco Musical (Ambient Screen) */

@@ -375,6 +375,17 @@
 
             <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
               <div style="min-width:0;">
+                <div style="font-size:0.85rem; font-weight:600;">Radio Infinita / Autoplay Inteligente</div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Al finalizar el disco o la cola, añade automáticamente música similar del mismo artista o género sin detenerse.</p>
+              </div>
+              <label class="toggle-switch" title="Reproducción continua con temas relacionados al terminar la cola">
+                <input type="checkbox" id="settingAutoplaySimilar" checked/>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div style="min-width:0;">
                 <div style="font-size:0.85rem; font-weight:600;">Modo Atril en Tablet (Mantener Pantalla)</div>
                 <p id="wakeLockStatusText" style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Evita que la pantalla se apague mientras suena música.</p>
               </div>
@@ -868,7 +879,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=30"></script>
+  <script type="module" src="/js/app.js?v=32"></script>
 </body>
 </html>
 

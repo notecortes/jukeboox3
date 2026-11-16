@@ -152,6 +152,29 @@ func main() {
 	// Inicializar motor Smart Mix
 	smService := smartmix.NewSmartMixService(database)
 
+	// Conectar el generador de Autoplay / Radio infinita con Smart Mix y fallback de biblioteca
+	player.SetAutoplayProvider(func(seedTrack db.Track) ([]db.Track, error) {
+		artist := strings.TrimSpace(seedTrack.Artist)
+		if artist != "" {
+			// Nivel 1: Smart Mix combinando Last.fm / ListenBrainz con similitud local
+			mixTracks, _, err := smService.GenerateMix(artist, 10)
+			if err == nil && len(mixTracks) > 0 {
+				return mixTracks, nil
+			}
+		}
+
+		// Nivel 2: Si no hubo Smart Mix o falló, buscar por el mismo género musical
+		if seedTrack.Genre != "" {
+			genreTracks, gErr := database.GetTracksByGenre(seedTrack.Genre, 12)
+			if gErr == nil && len(genreTracks) > 0 {
+				return genreTracks, nil
+			}
+		}
+
+		// Nivel 3: Fallback a temas aleatorios de la colección local
+		return database.GetRandomTracks(12)
+	})
+
 	// Inicializar servicio de letras LRCLIB
 	lyrService := lyrics.NewService()
 
@@ -328,6 +351,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/player/config", requireMethod(s.handleAudioConfig, http.MethodPost))
 	mux.HandleFunc("/api/player/sleeptimer", requireMethod(s.handleSleepTimer, http.MethodPost))
 	mux.HandleFunc("/api/player/cover/auto-fetch", requireMethod(s.handlePlayerCoverAutoFetch, http.MethodPost, http.MethodGet))
+	mux.HandleFunc("/api/player/autoplay", requireMethod(s.handlePlayerAutoplay, http.MethodPost))
 
 	// 5. API de Cola (Jukebox Queue)
 	mux.HandleFunc("/api/queue", requireMethod(s.handleQueue, http.MethodGet))
@@ -821,6 +845,31 @@ func (s *Server) handleAudioConfig(w http.ResponseWriter, r *http.Request) {
 		s.player.SetSoftFadeDuration(ms)
 	}
 
+	if rawAuto := strings.TrimSpace(r.URL.Query().Get("autoplay_similar")); rawAuto != "" {
+		enabled := (strings.EqualFold(rawAuto, "true") || rawAuto == "1")
+		s.player.SetAutoplayEnabled(enabled)
+	}
+
+	jsonResponse(w, http.StatusOK, s.player.GetState())
+}
+
+// handlePlayerAutoplay activa o desactiva la adición automática de música similar al terminar la cola.
+func (s *Server) handlePlayerAutoplay(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil || payload.Enabled == nil {
+		qEnabled := r.URL.Query().Get("enabled")
+		if qEnabled != "" {
+			en := strings.EqualFold(qEnabled, "true") || qEnabled == "1"
+			s.player.SetAutoplayEnabled(en)
+			jsonResponse(w, http.StatusOK, s.player.GetState())
+			return
+		}
+		http.Error(w, "campo 'enabled' (booleano) requerido", http.StatusBadRequest)
+		return
+	}
+	s.player.SetAutoplayEnabled(*payload.Enabled)
 	jsonResponse(w, http.StatusOK, s.player.GetState())
 }
 
@@ -1975,6 +2024,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				s.player.SetSoftFade(val == "true" || val == "1")
+			case "autoplay_similar":
+				val := strings.ToLower(strings.TrimSpace(v))
+				if val != "true" && val != "false" && val != "1" && val != "0" {
+					http.Error(w, "autoplay_similar inválido (true/false)", http.StatusBadRequest)
+					return
+				}
+				s.player.SetAutoplayEnabled(val == "true" || val == "1")
 			default:
 				http.Error(w, "clave de ajuste no permitida", http.StatusBadRequest)
 				return
@@ -1995,6 +2051,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"replay_gain":      s.database.GetSetting("replay_gain", "auto"),
 		"crossfade":        s.database.GetSetting("crossfade", "2"),
 		"soft_fade":        s.database.GetSetting("soft_fade", "true"),
+		"autoplay_similar": s.database.GetSetting("autoplay_similar", "true"),
 	})
 }
 
