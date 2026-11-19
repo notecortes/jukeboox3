@@ -111,6 +111,7 @@
           <button class="sub-tab-btn" data-subtab="artists">Artistas</button>
           <button class="sub-tab-btn" data-subtab="genres">Géneros</button>
           <button class="sub-tab-btn" data-subtab="favorites">Favoritos ♥</button>
+          <button class="sub-tab-btn" data-subtab="playlists">Playlists</button>
           <button class="sub-tab-btn" data-subtab="radios">Radios</button>
           <button class="sub-tab-btn" data-subtab="podcasts">Podcasts</button>
           <button class="sub-tab-btn" data-subtab="folders">Carpetas</button>
@@ -605,6 +606,9 @@
         <button id="btnMultiAppend" class="btn-secondary" style="padding:6px 12px; font-size:0.8rem;">
           ➕ Cola
         </button>
+        <button id="btnMultiPlaylist" class="btn-secondary" style="padding:6px 12px; font-size:0.8rem;" title="Añadir canciones seleccionadas a una playlist">
+          📑 Playlist
+        </button>
         <button id="btnMultiCancel" class="btn-secondary" style="padding:6px 10px; font-size:0.8rem; color:var(--text-muted);" title="Cancelar selección">
           ✕
         </button>
@@ -863,6 +867,9 @@
         </button>
         <button class="context-menu-action" id="cmenuAppend">
           ➕ <span>Añadir al final de la cola</span>
+        </button>
+        <button class="context-menu-action" id="cmenuAddToPlaylist">
+          📑 <span>Añadir a Playlist...</span>
         </button>
         <button class="context-menu-action" id="cmenuSmartMix">
           ⚡ <span>Crear Smart Mix de este artista</span>

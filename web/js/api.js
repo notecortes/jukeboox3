@@ -514,5 +514,106 @@ export function updatePodcastProgress(episodeId, progress, played = null) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// GESTIÓN DE PLAYLISTS DE USUARIO (M3U)
+// ---------------------------------------------------------------------------
+
+// getPlaylists obtiene la lista completa de listas de reproducción del usuario.
+export function getPlaylists() {
+  return requestHelper('/playlists');
+}
+
+// createPlaylist registra una nueva lista de reproducción en el sistema.
+export function createPlaylist(name, description = '') {
+  return requestHelper('/playlists', {
+    method: 'POST',
+    body: JSON.stringify({ name, description })
+  });
+}
+
+// getPlaylistDetail consulta la cabecera y el listado de pistas ordenadas de una playlist.
+export function getPlaylistDetail(id) {
+  return requestHelper(`/playlists/detail?id=${encodeURIComponent(id)}`);
+}
+
+// updatePlaylist actualiza el título y la descripción de una playlist.
+export function updatePlaylist(id, name, description = '') {
+  return requestHelper('/playlists/update', {
+    method: 'POST',
+    body: JSON.stringify({ id: Number(id), name, description })
+  });
+}
+
+// deletePlaylist elimina permanentemente una lista de reproducción.
+export function deletePlaylist(id) {
+  return requestHelper(`/playlists/delete?id=${encodeURIComponent(id)}`, {
+    method: 'POST'
+  });
+}
+
+// addTracksToPlaylist vincula una o más canciones al final de una playlist.
+export function addTracksToPlaylist(playlistId, trackIds) {
+  const ids = Array.isArray(trackIds) ? trackIds.map(Number) : [Number(trackIds)];
+  return requestHelper('/playlists/tracks/add', {
+    method: 'POST',
+    body: JSON.stringify({ playlist_id: Number(playlistId), track_ids: ids })
+  });
+}
+
+// removeTrackFromPlaylist retira una canción de la playlist por su índice de posición.
+export function removeTrackFromPlaylist(playlistId, position) {
+  return requestHelper('/playlists/tracks/remove', {
+    method: 'POST',
+    body: JSON.stringify({ playlist_id: Number(playlistId), position: Number(position) })
+  });
+}
+
+// reorderPlaylistTrack mueve una pista de una posición de origen a una de destino.
+export function reorderPlaylistTrack(playlistId, from, to) {
+  return requestHelper('/playlists/tracks/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ playlist_id: Number(playlistId), from: Number(from), to: Number(to) })
+  });
+}
+
+// playPlaylist inicia la reproducción de una lista completa en modo directo o encolado.
+export function playPlaylist(id, mode = 'play_now', shuffle = false) {
+  return requestHelper('/playlists/play', {
+    method: 'POST',
+    body: JSON.stringify({ id: Number(id), mode, shuffle: Boolean(shuffle) })
+  });
+}
+
+// exportPlaylistURL genera la URL para descargar directamente el archivo .m3u8 de la playlist.
+export function exportPlaylistURL(id) {
+  return `/api/playlists/export?id=${encodeURIComponent(id)}`;
+}
+
+// importPlaylistM3U sube un archivo .m3u o envía su texto para importar una lista de reproducción.
+export function importPlaylistM3U(name, fileOrContent) {
+  if (fileOrContent instanceof File || fileOrContent instanceof Blob) {
+    const formData = new FormData();
+    formData.append('file', fileOrContent);
+    if (name) {
+      formData.append('name', name);
+    }
+    return fetch('/api/playlists/import', {
+      method: 'POST',
+      body: formData
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Error ${res.status}`);
+      }
+      return res.json();
+    });
+  }
+  return requestHelper('/playlists/import', {
+    method: 'POST',
+    body: JSON.stringify({ name, content: fileOrContent })
+  });
+}
+
+
 
 

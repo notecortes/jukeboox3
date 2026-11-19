@@ -701,5 +701,189 @@ func TestPodcastsCRUDAndEpisodes(t *testing.T) {
 	}
 }
 
+// TestPlaylistsCRUD verifica el ciclo de vida completo de creación, consulta, edición y borrado de playlists.
+func TestPlaylistsCRUD(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_playlists.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("Error inicializando DB: %v", err)
+	}
+	defer database.Close()
+
+	// 1. Error con nombre vacío
+	if _, err := database.CreatePlaylist("   ", "desc"); err == nil {
+		t.Fatalf("Se esperaba error al crear playlist con nombre vacío")
+	}
+
+	// 2. Creación exitosa
+	pl, err := database.CreatePlaylist("Grandes Éxitos", "Selección personal de rock")
+	if err != nil {
+		t.Fatalf("Error creando playlist: %v", err)
+	}
+	if pl.ID <= 0 || pl.Name != "Grandes Éxitos" {
+		t.Fatalf("Playlist creada con datos inesperados: %+v", pl)
+	}
+
+	// 3. Error por nombre duplicado (case-insensitive)
+	if _, err := database.CreatePlaylist("grandes éxitos", "otra"); err == nil {
+		t.Fatalf("Se esperaba error por nombre duplicado")
+	}
+
+	// 4. Listado de playlists
+	all, err := database.GetAllPlaylists()
+	if err != nil {
+		t.Fatalf("Error listando playlists: %v", err)
+	}
+	if len(all) != 1 || all[0].Name != "Grandes Éxitos" {
+		t.Fatalf("Lista de playlists incorrecta: %+v", all)
+	}
+
+	// 5. Consulta por ID
+	detail, err := database.GetPlaylistByID(pl.ID)
+	if err != nil {
+		t.Fatalf("Error consultando playlist por ID: %v", err)
+	}
+	if detail.Name != "Grandes Éxitos" || len(detail.Tracks) != 0 {
+		t.Fatalf("Detalle de playlist inesperado: %+v", detail)
+	}
+
+	// 6. Actualización
+	if err := database.UpdatePlaylist(pl.ID, "Rock Clásico", "Actualizado"); err != nil {
+		t.Fatalf("Error actualizando playlist: %v", err)
+	}
+	detailUpdated, _ := database.GetPlaylistByID(pl.ID)
+	if detailUpdated.Name != "Rock Clásico" || detailUpdated.Description != "Actualizado" {
+		t.Fatalf("Playlist no actualizada correctamente: %+v", detailUpdated)
+	}
+
+	// 7. Borrado
+	if err := database.DeletePlaylist(pl.ID); err != nil {
+		t.Fatalf("Error borrando playlist: %v", err)
+	}
+	if _, err := database.GetPlaylistByID(pl.ID); err == nil {
+		t.Fatalf("Se esperaba error al consultar playlist borrada")
+	}
+}
+
+// TestPlaylistTracksAddRemoveReorder valida la adición de canciones, borrado ordinal y reordenación de posiciones.
+func TestPlaylistTracksAddRemoveReorder(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_playlist_tracks.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("Error inicializando DB: %v", err)
+	}
+	defer database.Close()
+
+	// Insertar pistas de prueba
+	track1 := &Track{Path: "/music/local/track1.mp3", Filename: "track1.mp3", Title: "Canción 1", Artist: "Artista A", Duration: 180}
+	track2 := &Track{Path: "/music/local/track2.mp3", Filename: "track2.mp3", Title: "Canción 2", Artist: "Artista B", Duration: 200, CoverURL: "/covers/c2.jpg"}
+	track3 := &Track{Path: "/music/local/track3.mp3", Filename: "track3.mp3", Title: "Canción 3", Artist: "Artista C", Duration: 240}
+	_ = database.UpsertTrack(track1)
+	_ = database.UpsertTrack(track2)
+	_ = database.UpsertTrack(track3)
+
+	pl, err := database.CreatePlaylist("Mi Mix", "Favoritas")
+	if err != nil {
+		t.Fatalf("Error creando playlist: %v", err)
+	}
+
+	// Añadir pistas 1, 2 y 3
+	added, err := database.AddTracksToPlaylist(pl.ID, []int64{track1.ID, track2.ID, track3.ID})
+	if err != nil {
+		t.Fatalf("Error añadiendo pistas a playlist: %v", err)
+	}
+	if added != 3 {
+		t.Fatalf("Se esperaban 3 pistas añadidas, se obtuvieron: %d", added)
+	}
+
+	// Comprobar detalle con duración y carátula del primer tema
+	detail, err := database.GetPlaylistByID(pl.ID)
+	if err != nil {
+		t.Fatalf("Error obteniendo detalle: %v", err)
+	}
+	if detail.TrackCount != 3 || len(detail.Tracks) != 3 {
+		t.Fatalf("Conteo de pistas erróneo: %d", len(detail.Tracks))
+	}
+	if detail.Duration != 620 { // 180 + 200 + 240
+		t.Fatalf("Duración total incorrecta: %f", detail.Duration)
+	}
+
+	// Verificar orden inicial: posición 0 = Canción 1, 1 = Canción 2, 2 = Canción 3
+	if detail.Tracks[0].Title != "Canción 1" || detail.Tracks[1].Title != "Canción 2" || detail.Tracks[2].Title != "Canción 3" {
+		t.Fatalf("Orden inicial incorrecto: %+v", detail.Tracks)
+	}
+
+	// Reordenar: mover posición 0 a posición 2 (Canción 1 al final)
+	if err := database.ReorderPlaylistTrack(pl.ID, 0, 2); err != nil {
+		t.Fatalf("Error al reordenar: %v", err)
+	}
+	detailReordered, _ := database.GetPlaylistByID(pl.ID)
+	if detailReordered.Tracks[0].Title != "Canción 2" || detailReordered.Tracks[1].Title != "Canción 3" || detailReordered.Tracks[2].Title != "Canción 1" {
+		t.Fatalf("Orden tras reordenar incorrecto: [0]=%s, [1]=%s, [2]=%s",
+			detailReordered.Tracks[0].Title, detailReordered.Tracks[1].Title, detailReordered.Tracks[2].Title)
+	}
+
+	// Eliminar pista en posición 1 (Canción 3)
+	if err := database.RemoveTrackFromPlaylist(pl.ID, 1); err != nil {
+		t.Fatalf("Error al eliminar pista: %v", err)
+	}
+	detailAfterRemove, _ := database.GetPlaylistByID(pl.ID)
+	if len(detailAfterRemove.Tracks) != 2 {
+		t.Fatalf("Se esperaban 2 pistas tras borrado, hay %d", len(detailAfterRemove.Tracks))
+	}
+	if detailAfterRemove.Tracks[0].Title != "Canción 2" || detailAfterRemove.Tracks[1].Title != "Canción 1" {
+		t.Fatalf("Pistas tras borrado ordinal erróneas: [0]=%s, [1]=%s",
+			detailAfterRemove.Tracks[0].Title, detailAfterRemove.Tracks[1].Title)
+	}
+}
+
+// TestPlaylistM3UExportImport verifica la exportación e importación de listas en formato estándar M3U8.
+func TestPlaylistM3UExportImport(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_m3u.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("Error inicializando DB: %v", err)
+	}
+	defer database.Close()
+
+	trackA := &Track{Path: "/music/local/queen_bohemian.flac", Filename: "queen_bohemian.flac", Title: "Bohemian Rhapsody", Artist: "Queen", Duration: 354}
+	trackB := &Track{Path: "/music/nas/pink_floyd_time.flac", Filename: "pink_floyd_time.flac", Title: "Time", Artist: "Pink Floyd", Duration: 425}
+	_ = database.UpsertTrack(trackA)
+	_ = database.UpsertTrack(trackB)
+
+	pl, err := database.CreatePlaylist("Clásicos del Rock", "Joyas del rock")
+	if err != nil {
+		t.Fatalf("Error creando playlist: %v", err)
+	}
+	_, _ = database.AddTracksToPlaylist(pl.ID, []int64{trackA.ID, trackB.ID})
+
+	// Exportar a M3U
+	filename, m3uContent, err := database.ExportPlaylistM3U(pl.ID)
+	if err != nil {
+		t.Fatalf("Error exportando M3U: %v", err)
+	}
+	if !strings.HasSuffix(filename, ".m3u8") || !strings.Contains(m3uContent, "#EXTM3U") {
+		t.Fatalf("Contenido o nombre M3U inválido: %s\n%s", filename, m3uContent)
+	}
+	if !strings.Contains(m3uContent, "/music/local/queen_bohemian.flac") || !strings.Contains(m3uContent, "Bohemian Rhapsody") {
+		t.Fatalf("Faltan canciones en el archivo M3U exportado")
+	}
+
+	// Importar desde M3U
+	importedPL, matchedCount, err := database.ImportPlaylistM3U("Rock Importado", m3uContent)
+	if err != nil {
+		t.Fatalf("Error importando M3U: %v", err)
+	}
+	if importedPL == nil || matchedCount != 2 {
+		t.Fatalf("Importación M3U fallida, pistas coincidentes: %d", matchedCount)
+	}
+
+	detail, _ := database.GetPlaylistByID(importedPL.ID)
+	if len(detail.Tracks) != 2 || detail.Tracks[0].Title != "Bohemian Rhapsody" || detail.Tracks[1].Title != "Time" {
+		t.Fatalf("Pistas en playlist importada inesperadas: %+v", detail.Tracks)
+	}
+}
+
+
 
 

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -749,5 +750,126 @@ func TestUXEndpointsAndFeatures(t *testing.T) {
 		t.Fatalf("setting dsp_presets_json inesperado: %q", got)
 	}
 }
+
+// TestPlaylistAPIEndpoints verifica los endpoints REST de creación, consulta, edición, reordenación y export/import de playlists.
+func TestPlaylistAPIEndpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_playlist_api.db")
+	database, err := db.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	// Insertar pistas de prueba
+	t1 := &db.Track{Path: "/music/local/trackA.flac", Filename: "trackA.flac", Title: "Track A", Artist: "Artist X", Duration: 150}
+	t2 := &db.Track{Path: "/music/local/trackB.flac", Filename: "trackB.flac", Title: "Track B", Artist: "Artist Y", Duration: 210}
+	_ = database.UpsertTrack(t1)
+	_ = database.UpsertTrack(t2)
+
+	eventsHub := events.NewHub()
+	srv := &Server{
+		database:  database,
+		eventsHub: eventsHub,
+	}
+
+	mux := http.NewServeMux()
+	srv.registerRoutes(mux)
+
+	// 1. POST /api/playlists (Crear)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/playlists", bytes.NewBufferString(`{"name":"Noche Acústica","description":"Música relajante"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/playlists esperado 201, obtenido %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var createdPL db.Playlist
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createdPL); err != nil || createdPL.ID <= 0 || createdPL.Name != "Noche Acústica" {
+		t.Fatalf("Respuesta creación playlist errónea: %+v", createdPL)
+	}
+
+	// 2. GET /api/playlists (Listar)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/playlists", nil)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/playlists falló con %d", listRec.Code)
+	}
+	var listPL []db.Playlist
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listPL); err != nil || len(listPL) != 1 {
+		t.Fatalf("Listado de playlists inesperado: %+v", listPL)
+	}
+
+	// 3. POST /api/playlists/tracks/add (Añadir pistas)
+	addTracksBody := fmt.Sprintf(`{"playlist_id":%d,"track_ids":[%d,%d]}`, createdPL.ID, t1.ID, t2.ID)
+	addReq := httptest.NewRequest(http.MethodPost, "/api/playlists/tracks/add", bytes.NewBufferString(addTracksBody))
+	addReq.Header.Set("Content-Type", "application/json")
+	addRec := httptest.NewRecorder()
+	mux.ServeHTTP(addRec, addReq)
+	if addRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/playlists/tracks/add falló con %d: %s", addRec.Code, addRec.Body.String())
+	}
+
+	// 4. GET /api/playlists/detail?id=... (Consultar detalle con pistas)
+	detReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/playlists/detail?id=%d", createdPL.ID), nil)
+	detRec := httptest.NewRecorder()
+	mux.ServeHTTP(detRec, detReq)
+	if detRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/playlists/detail falló con %d", detRec.Code)
+	}
+	var detPL db.PlaylistDetail
+	if err := json.Unmarshal(detRec.Body.Bytes(), &detPL); err != nil || len(detPL.Tracks) != 2 {
+		t.Fatalf("Detalle playlist inesperado: %+v", detPL)
+	}
+	if detPL.Tracks[0].Title != "Track A" || detPL.Tracks[1].Title != "Track B" {
+		t.Fatalf("Pistas de la playlist en orden incorrecto: %+v", detPL.Tracks)
+	}
+
+	// 5. POST /api/playlists/tracks/reorder (Reordenar)
+	reordBody := fmt.Sprintf(`{"playlist_id":%d,"from":0,"to":1}`, createdPL.ID)
+	reordReq := httptest.NewRequest(http.MethodPost, "/api/playlists/tracks/reorder", bytes.NewBufferString(reordBody))
+	reordReq.Header.Set("Content-Type", "application/json")
+	reordRec := httptest.NewRecorder()
+	mux.ServeHTTP(reordRec, reordReq)
+	if reordRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/playlists/tracks/reorder falló con %d: %s", reordRec.Code, reordRec.Body.String())
+	}
+	detAfterReord, _ := database.GetPlaylistByID(createdPL.ID)
+	if detAfterReord.Tracks[0].Title != "Track B" || detAfterReord.Tracks[1].Title != "Track A" {
+		t.Fatalf("Reordenación fallida: [0]=%s, [1]=%s", detAfterReord.Tracks[0].Title, detAfterReord.Tracks[1].Title)
+	}
+
+	// 6. GET /api/playlists/export (Exportar M3U8)
+	expReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/playlists/export?id=%d", createdPL.ID), nil)
+	expRec := httptest.NewRecorder()
+	mux.ServeHTTP(expRec, expReq)
+	if expRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/playlists/export falló con %d", expRec.Code)
+	}
+	exportedM3U := expRec.Body.String()
+	if !strings.Contains(exportedM3U, "#EXTM3U") || !strings.Contains(exportedM3U, "/music/local/trackA.flac") {
+		t.Fatalf("Contenido exportado inválido: %s", exportedM3U)
+	}
+
+	// 7. POST /api/playlists/import (Importar M3U8 en formato JSON)
+	impBody := `{"name":"Acústica Copia","content":"#EXTM3U\n/music/local/trackA.flac\n/music/local/trackB.flac\n"}`
+	impReq := httptest.NewRequest(http.MethodPost, "/api/playlists/import", bytes.NewBufferString(impBody))
+	impReq.Header.Set("Content-Type", "application/json")
+	impRec := httptest.NewRecorder()
+	mux.ServeHTTP(impRec, impReq)
+	if impRec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/playlists/import falló con %d: %s", impRec.Code, impRec.Body.String())
+	}
+
+	// 8. POST /api/playlists/delete (Eliminar)
+	delReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/playlists/delete?id=%d", createdPL.ID), nil)
+	delRec := httptest.NewRecorder()
+	mux.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/playlists/delete falló con %d", delRec.Code)
+	}
+}
+
 
 

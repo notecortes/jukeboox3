@@ -1904,6 +1904,57 @@
   background: rgba(99, 102, 241, 0.08);
 }
 
+/* ==========================================================================
+   ESTILOS DE PLAYLISTS DE USUARIO (M3U)
+   ========================================================================== */
+
+.playlists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 500px) {
+  .playlists-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+.playlist-card:hover {
+  border-color: var(--accent) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35) !important;
+}
+
+.playlist-card:active {
+  transform: scale(0.98);
+}
+
+.playlist-track-row:hover {
+  background: var(--bg-surface-elevated) !important;
+}
+
+.playlist-track-row:active {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.btn-pl-up:hover, .btn-pl-down:hover {
+  color: var(--accent-light) !important;
+  transform: scale(1.2);
+}
+
+.btn-pl-remove:hover {
+  color: var(--color-danger) !important;
+  transform: scale(1.15);
+}
+
+.add-pl-item:hover {
+  background: rgba(99, 102, 241, 0.12) !important;
+  border-color: var(--accent) !important;
+}
+
+
 
 
 

@@ -139,6 +139,15 @@ export function initViews() {
           renderPodcastsView(document.getElementById('libraryContent'), true);
         }
       }
+    } else if (event === 'playlists_updated') {
+      hasLoadedPlaylists = false;
+      if (state.ui.activeSubTab === 'playlists') {
+        if (state.ui.detailView && state.ui.detailView.type === 'playlist') {
+          openPlaylistDetail(state.ui.detailView.id);
+        } else {
+          renderPlaylistsView(document.getElementById('libraryContent'), true);
+        }
+      }
     } else if (event === 'player_updated') {
       renderAudioOutputs();
     } else if (event === 'trigger_artist_mix' && payload) {
@@ -227,6 +236,9 @@ function renderActiveSubTab(restoreScrollKey = '') {
     case 'favorites':
       renderFavoritesView(container);
       break;
+    case 'playlists':
+      renderPlaylistsView(container);
+      break;
     case 'radios':
       renderRadiosView(container);
       break;
@@ -249,6 +261,12 @@ function navigateBackFromDetail() {
   if (detail.type === 'podcast') {
     state.ui.detailView = null;
     state.ui.activeSubTab = 'podcasts';
+    renderActiveSubTab();
+    return;
+  }
+  if (detail.type === 'playlist') {
+    state.ui.detailView = null;
+    state.ui.activeSubTab = 'playlists';
     renderActiveSubTab();
     return;
   }
@@ -612,6 +630,30 @@ function bindMultiSelectBar() {
     isSelectingAlbums = false;
     updateMultiSelectBar();
     renderActiveSubTab();
+  });
+
+  document.getElementById('btnMultiPlaylist')?.addEventListener('click', async () => {
+    if (selectedAlbumIds.size === 0) return;
+    const albumIds = Array.from(selectedAlbumIds);
+    showToast('Recopilando canciones de los álbumes seleccionados...');
+    const trackIds = [];
+    for (const albId of albumIds) {
+      try {
+        const detail = await api.getAlbumDetail(albId);
+        if (detail && detail.tracks) {
+          detail.tracks.forEach((t) => trackIds.push(t.id));
+        }
+      } catch {}
+    }
+    if (trackIds.length > 0) {
+      selectedAlbumIds.clear();
+      isSelectingAlbums = false;
+      updateMultiSelectBar();
+      renderActiveSubTab();
+      openAddToPlaylistModal(trackIds);
+    } else {
+      showToast('No se encontraron canciones en los álbumes seleccionados');
+    }
   });
 
   document.getElementById('btnMultiCancel')?.addEventListener('click', () => {
@@ -2444,6 +2486,875 @@ function renderRadiosChunked(container, radios, viewContainer) {
   appendBatch();
 }
 
+// ---------------------------------------------------------------------------
+// GESTIÓN DE PLAYLISTS DE USUARIO (M3U)
+// ---------------------------------------------------------------------------
+
+// Variables de estado del catálogo de Playlists
+let cachedPlaylists = [];
+let hasLoadedPlaylists = false;
+let playlistFilterQuery = '';
+
+// formatPlaylistDuration formatea segundos acumulados en una etiqueta amigable "X h Y min" o "Y min".
+function formatPlaylistDuration(totalSec) {
+  if (!totalSec || totalSec <= 0) return '0 min';
+  const hours = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  if (hours > 0) {
+    return `${hours} h ${mins} min`;
+  }
+  return `${mins} min`;
+}
+
+// renderPlaylistsView renderiza la colección de playlists del usuario con búsqueda, creación e importación M3U.
+async function renderPlaylistsView(container, forceRefresh = false) {
+  if (!hasLoadedPlaylists || forceRefresh || !cachedPlaylists) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando playlists...</div>';
+    try {
+      cachedPlaylists = (await api.getPlaylists()) || [];
+      hasLoadedPlaylists = true;
+    } catch (err) {
+      container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar playlists: ' + escapeHtml(err.message || '') + '</div>';
+      return;
+    }
+  }
+
+  let filtered = cachedPlaylists;
+  const q = playlistFilterQuery.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter((p) => p.name && p.name.toLowerCase().includes(q));
+  }
+
+  container.innerHTML = `
+    <div class="playlists-toolbar" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:18px;">
+      <div style="position:relative; flex:1; min-width:200px; max-width:380px;">
+        <input type="text" id="playlistSearchInput" value="${escapeHtml(playlistFilterQuery)}" placeholder="Buscar en mis playlists..." 
+               style="width:100%; height:40px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 14px 0 38px; font-size:0.88rem; outline:none;"/>
+        <svg style="position:absolute; left:12px; top:11px; color:var(--text-muted);" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+      </div>
+
+      <div style="display:flex; gap:8px;">
+        <button id="btnNewPlaylistTop" class="btn-primary" style="padding:8px 16px; font-size:0.85rem; font-weight:700; border-radius:var(--radius-full); display:flex; align-items:center; gap:6px;">
+          ➕ Nueva Playlist
+        </button>
+        <button id="btnImportM3UTop" class="btn-secondary" style="padding:8px 14px; font-size:0.85rem; border-radius:var(--radius-full); display:flex; align-items:center; gap:6px;">
+          📥 Importar M3U
+        </button>
+      </div>
+    </div>
+
+    <div id="playlistsGridContainer"></div>
+  `;
+
+  // Búsqueda en tiempo real
+  const searchInput = document.getElementById('playlistSearchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      playlistFilterQuery = e.target.value;
+      const grid = document.getElementById('playlistsGridContainer');
+      if (grid) renderPlaylistsCards(grid);
+    });
+  }
+
+  document.getElementById('btnNewPlaylistTop')?.addEventListener('click', openNewPlaylistModal);
+  document.getElementById('btnImportM3UTop')?.addEventListener('click', openImportM3UModal);
+
+  const gridContainer = document.getElementById('playlistsGridContainer');
+  if (gridContainer) {
+    renderPlaylistsCards(gridContainer);
+  }
+}
+
+// renderPlaylistsCards dibuja la rejilla de tarjetas de playlists o el mensaje informativo si no hay ninguna.
+function renderPlaylistsCards(container) {
+  let filtered = cachedPlaylists || [];
+  const q = playlistFilterQuery.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter((p) => p.name && p.name.toLowerCase().includes(q));
+  }
+
+  if (filtered.length === 0) {
+    if (q) {
+      container.innerHTML = `
+        <div style="text-align:center; padding:50px 20px; color:var(--text-muted);">
+          No se encontró ninguna playlist coincidente con "<b>${escapeHtml(q)}</b>"
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div style="text-align:center; padding:60px 20px; max-width:440px; margin:0 auto; color:var(--text-secondary);">
+          <div style="font-size:3.5rem; margin-bottom:14px; opacity:0.8;">📑</div>
+          <h3 style="font-size:1.25rem; font-weight:700; color:var(--text-primary); margin-bottom:8px;">Crea tu primera Playlist</h3>
+          <p style="font-size:0.88rem; line-height:1.5; color:var(--text-muted); margin-bottom:24px;">
+            Organiza tus canciones favoritas por temática, evento o estado de ánimo. También puedes importar listas existentes en formato M3U.
+          </p>
+          <div style="display:flex; gap:10px; justify-content:center;">
+            <button class="btn-primary" id="btnEmptyCreatePL" style="padding:10px 20px; border-radius:var(--radius-full); font-size:0.9rem;">
+              ➕ Crear Playlist
+            </button>
+            <button class="btn-secondary" id="btnEmptyImportM3U" style="padding:10px 18px; border-radius:var(--radius-full); font-size:0.9rem;">
+              📥 Importar M3U
+            </button>
+          </div>
+        </div>
+      `;
+      document.getElementById('btnEmptyCreatePL')?.addEventListener('click', openNewPlaylistModal);
+      document.getElementById('btnEmptyImportM3U')?.addEventListener('click', openImportM3UModal);
+    }
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'playlists-grid';
+  grid.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px;';
+
+  filtered.forEach((pl) => {
+    const card = document.createElement('div');
+    card.className = 'playlist-card';
+    card.style.cssText = 'background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-lg); overflow:hidden; display:flex; flex-direction:column; cursor:pointer; transition:transform 0.15s ease, border-color 0.15s ease; box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+
+    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url) : '';
+    const coverHTML = coverSrc
+      ? `<img src="${coverSrc}" alt="${escapeHtml(pl.name)}" style="width:100%; height:160px; object-fit:cover; display:block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"/>`
+      : '';
+    const fallbackDisplay = coverSrc ? 'none' : 'flex';
+
+    card.innerHTML = `
+      <div style="position:relative; width:100%; height:160px; background:linear-gradient(135deg, rgba(99,102,241,0.25) 0%, rgba(168,85,247,0.2) 100%);">
+        ${coverHTML}
+        <div style="width:100%; height:100%; display:${fallbackDisplay}; align-items:center; justify-content:center; font-size:3rem; color:var(--accent-light);">
+          🎵
+        </div>
+        <div style="position:absolute; bottom:8px; right:8px; display:flex; gap:6px;">
+          <button class="btn-pl-play" title="Reproducir playlist" style="width:38px; height:38px; border-radius:50%; background:var(--accent); border:none; color:#ffffff; display:flex; align-items:center; justify-content:center; font-size:1rem; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+            ▶
+          </button>
+        </div>
+      </div>
+      <div style="padding:14px; flex:1; display:flex; flex-direction:column; justify-content:space-between;">
+        <div>
+          <h4 style="font-size:1.05rem; font-weight:700; color:var(--text-primary); margin:0 0 4px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${escapeHtml(pl.name)}
+          </h4>
+          <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 10px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${escapeHtml(pl.description || 'Sin descripción')}
+          </p>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; font-size:0.78rem; color:var(--text-secondary); border-top:1px solid var(--border-subtle); padding-top:10px;">
+          <span>${pl.track_count} temas • ${formatPlaylistDuration(pl.duration)}</span>
+          <div style="display:flex; gap:4px;">
+            <button class="btn-pl-append btn-icon" title="Añadir a la cola" style="padding:4px 8px; font-size:0.85rem;">
+              ➕
+            </button>
+            <button class="btn-pl-menu btn-icon" title="Opciones" style="padding:4px 8px; font-size:0.85rem;">
+              ⋮
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Reproducir inmediatamente
+    card.querySelector('.btn-pl-play')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await api.playPlaylist(pl.id, 'play_now', false);
+        showToast(`▶ Reproduciendo playlist "${pl.name}"`);
+      } catch (err) {
+        showToast(`Error: ${err.message || 'No se pudo reproducir'}`);
+      }
+    });
+
+    // Encolar al final
+    card.querySelector('.btn-pl-append')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await api.playPlaylist(pl.id, 'append', false);
+        showToast(`➕ Añadida playlist "${pl.name}" a la cola`);
+      } catch (err) {
+        showToast(`Error: ${err.message || 'No se pudo encolar'}`);
+      }
+    });
+
+    // Menú de opciones de la tarjeta
+    card.querySelector('.btn-pl-menu')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPlaylistActionMenu(pl);
+    });
+
+    // Clic en la tarjeta abre su detalle
+    card.addEventListener('click', () => {
+      openPlaylistDetail(pl.id);
+    });
+
+    grid.appendChild(card);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(grid);
+}
+
+// openPlaylistDetail muestra la pantalla completa de canciones de una playlist con controles de reproducción, orden y borrado.
+async function openPlaylistDetail(playlistId) {
+  state.ui.detailView = { type: 'playlist', id: playlistId };
+  const container = document.getElementById('libraryContent');
+  if (!container) return;
+
+  container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando canciones de la playlist...</div>';
+
+  try {
+    const detail = await api.getPlaylistDetail(playlistId);
+    const pl = detail;
+    const tracks = detail.tracks || [];
+
+    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url) : '';
+    const coverHTML = coverSrc
+      ? `<img src="${coverSrc}" alt="${escapeHtml(pl.name)}" style="width:130px; height:130px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.4);" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"/>`
+      : '';
+    const fallbackDisplay = coverSrc ? 'none' : 'flex';
+
+    container.innerHTML = `
+      <div style="margin-bottom:16px;">
+        <button id="btnBackToPlaylists" class="btn-secondary" style="margin-bottom:14px; padding:6px 14px; font-size:0.85rem; border-radius:var(--radius-full);">
+          ← Volver a Playlists
+        </button>
+
+        <div class="playlist-detail-header" style="background:linear-gradient(135deg, rgba(99,102,241,0.2) 0%, rgba(139,92,246,0.1) 100%); border:1px solid var(--border-subtle); border-radius:var(--radius-lg); padding:20px; display:flex; flex-wrap:wrap; gap:20px; align-items:center;">
+          <div style="position:relative; width:130px; height:130px; flex-shrink:0;">
+            ${coverHTML}
+            <div style="width:130px; height:130px; border-radius:var(--radius-md); background:var(--bg-surface-elevated); display:${fallbackDisplay}; align-items:center; justify-content:center; font-size:3rem; color:var(--accent-light);">
+              🎵
+            </div>
+          </div>
+
+          <div style="flex:1; min-width:220px;">
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+              <span class="badge-format" style="background:var(--accent); color:#ffffff; font-weight:700;">PLAYLIST</span>
+              <span style="font-size:0.8rem; color:var(--text-muted);">${tracks.length} canciones • ${formatPlaylistDuration(pl.duration)}</span>
+            </div>
+            <h2 style="font-size:1.6rem; font-weight:800; color:var(--text-primary); margin:0 0 6px 0;">
+              ${escapeHtml(pl.name)}
+            </h2>
+            <p style="font-size:0.9rem; color:var(--text-secondary); margin:0 0 16px 0; line-height:1.4;">
+              ${escapeHtml(pl.description || 'Lista de reproducción personalizada')}
+            </p>
+
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <button id="btnPlayAllPlaylist" class="btn-primary" style="padding:8px 18px; font-size:0.88rem; font-weight:700; border-radius:var(--radius-full);">
+                ▶ Reproducir Todo
+              </button>
+              <button id="btnShufflePlaylist" class="btn-secondary" style="padding:8px 14px; font-size:0.88rem; border-radius:var(--radius-full);">
+                🔀 Aleatorio
+              </button>
+              <button id="btnAppendPlaylist" class="btn-secondary" style="padding:8px 14px; font-size:0.88rem; border-radius:var(--radius-full);">
+                ➕ A la Cola
+              </button>
+              <button id="btnExportPlaylistM3U" class="btn-secondary" style="padding:8px 14px; font-size:0.88rem; border-radius:var(--radius-full);">
+                💾 Exportar M3U
+              </button>
+              <button id="btnEditPlaylistInfo" class="btn-secondary" style="padding:8px 12px; font-size:0.88rem; border-radius:var(--radius-full);" title="Editar nombre o descripción">
+                ✏️
+              </button>
+              <button id="btnDeletePlaylistDetail" class="btn-secondary" style="padding:8px 12px; font-size:0.88rem; border-radius:var(--radius-full); color:var(--color-danger);" title="Eliminar playlist">
+                🗑️
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="playlist-tracks-section">
+        <h3 style="font-size:1.1rem; font-weight:700; margin:16px 0 10px 0;">Canciones en la lista</h3>
+        <div id="playlistTracksList" class="playlist-tracks-list"></div>
+      </div>
+    `;
+
+    document.getElementById('btnBackToPlaylists')?.addEventListener('click', () => {
+      navigateBackFromDetail();
+    });
+
+    document.getElementById('btnPlayAllPlaylist')?.addEventListener('click', async () => {
+      try {
+        await api.playPlaylist(playlistId, 'play_now', false);
+        showToast(`▶ Reproduciendo "${pl.name}"`);
+      } catch (err) {
+        showToast(`Error: ${err.message}`);
+      }
+    });
+
+    document.getElementById('btnShufflePlaylist')?.addEventListener('click', async () => {
+      try {
+        await api.playPlaylist(playlistId, 'play_now', true);
+        showToast(`🔀 Reproduciendo "${pl.name}" en orden aleatorio`);
+      } catch (err) {
+        showToast(`Error: ${err.message}`);
+      }
+    });
+
+    document.getElementById('btnAppendPlaylist')?.addEventListener('click', async () => {
+      try {
+        await api.playPlaylist(playlistId, 'append', false);
+        showToast(`➕ Añadidas ${tracks.length} canciones a la cola`);
+      } catch (err) {
+        showToast(`Error: ${err.message}`);
+      }
+    });
+
+    document.getElementById('btnExportPlaylistM3U')?.addEventListener('click', () => {
+      window.location.href = api.exportPlaylistURL(playlistId);
+      showToast(`Descargando archivo M3U8 de "${pl.name}"`);
+    });
+
+    document.getElementById('btnEditPlaylistInfo')?.addEventListener('click', () => {
+      openEditPlaylistModal(pl);
+    });
+
+    document.getElementById('btnDeletePlaylistDetail')?.addEventListener('click', async () => {
+      if (confirm(`¿Seguro que deseas eliminar la playlist "${pl.name}"?`)) {
+        try {
+          await api.deletePlaylist(playlistId);
+          showToast(`Playlist "${pl.name}" eliminada`);
+          hasLoadedPlaylists = false;
+          navigateBackFromDetail();
+        } catch (err) {
+          showToast(`Error al eliminar: ${err.message}`);
+        }
+      }
+    });
+
+    const listEl = document.getElementById('playlistTracksList');
+    if (!listEl) return;
+
+    if (tracks.length === 0) {
+      listEl.innerHTML = `
+        <div style="text-align:center; padding:40px; color:var(--text-muted); background:var(--bg-surface); border-radius:var(--radius-md); border:1px dashed var(--border-subtle);">
+          Esta playlist aún no tiene canciones.<br/>
+          Explora la biblioteca y pulsa <b>⋮ > Añadir a Playlist...</b> en cualquier canción para incorporarla aquí.
+        </div>
+      `;
+      return;
+    }
+
+    tracks.forEach((track, idx) => {
+      const row = document.createElement('div');
+      row.className = 'track-row playlist-track-row';
+      row.style.cssText = 'display:flex; align-items:center; gap:12px; padding:10px 14px; background:var(--bg-surface); border-radius:var(--radius-sm); margin-bottom:6px; cursor:pointer;';
+
+      const isFirst = idx === 0;
+      const isLast = idx === tracks.length - 1;
+
+      row.innerHTML = `
+        <div class="pl-reorder-controls" style="display:flex; flex-direction:column; gap:2px; flex-shrink:0;" onclick="event.stopPropagation();">
+          <button class="btn-pl-up" title="Subir" ${isFirst ? 'disabled style="opacity:0.25; cursor:default;"' : 'style="cursor:pointer;"'} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1;">
+            ▲
+          </button>
+          <button class="btn-pl-down" title="Bajar" ${isLast ? 'disabled style="opacity:0.25; cursor:default;"' : 'style="cursor:pointer;"'} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1;">
+            ▼
+          </button>
+        </div>
+
+        <span class="track-number" style="min-width:24px; font-weight:700; color:var(--text-muted); font-size:0.82rem;">
+          #${idx + 1}
+        </span>
+
+        <div class="track-info" style="flex:1; min-width:0;">
+          <div class="track-title" style="font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${escapeHtml(track.title || 'Canción')}
+          </div>
+          <div class="track-artist" style="font-size:0.8rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${escapeHtml(track.artist || 'Artista desconocido')} • ${escapeHtml(track.album || '')}
+          </div>
+        </div>
+
+        <span class="track-duration" style="font-size:0.8rem; color:var(--text-muted); flex-shrink:0;">
+          ${formatTime(track.duration)}
+        </span>
+
+        <button class="btn-pl-remove btn-icon" title="Quitar de esta playlist" style="width:30px; height:30px; border:none; background:transparent; color:var(--text-muted); font-size:1rem; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation();">
+          ✕
+        </button>
+      `;
+
+      // Clic en la fila reproduce la playlist desde este punto
+      row.addEventListener('click', async () => {
+        const sliceTracks = tracks.slice(idx);
+        await api.addToQueue({ track_ids: sliceTracks.map((t) => t.id), mode: 'play_now', clear_first: true });
+        showToast(`▶ Reproduciendo desde "${track.title}"`);
+      });
+
+      // Subir posición
+      row.querySelector('.btn-pl-up')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (isFirst) return;
+        try {
+          await api.reorderPlaylistTrack(playlistId, idx, idx - 1);
+          openPlaylistDetail(playlistId);
+        } catch (err) {
+          showToast(`Error al reordenar: ${err.message}`);
+        }
+      });
+
+      // Bajar posición
+      row.querySelector('.btn-pl-down')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (isLast) return;
+        try {
+          await api.reorderPlaylistTrack(playlistId, idx, idx + 1);
+          openPlaylistDetail(playlistId);
+        } catch (err) {
+          showToast(`Error al reordenar: ${err.message}`);
+        }
+      });
+
+      // Quitar de la playlist
+      row.querySelector('.btn-pl-remove')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await api.removeTrackFromPlaylist(playlistId, idx);
+          showToast(`Pista eliminada de la playlist`);
+          openPlaylistDetail(playlistId);
+        } catch (err) {
+          showToast(`Error al retirar pista: ${err.message}`);
+        }
+      });
+
+      listEl.appendChild(row);
+    });
+  } catch (err) {
+    container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al abrir la playlist: ' + escapeHtml(err.message || '') + '</div>';
+  }
+}
+
+// openAddToPlaylistModal abre el diálogo emergente para añadir una o varias pistas a una playlist existente o nueva.
+async function openAddToPlaylistModal(trackOrTracks) {
+  const existing = document.getElementById('addToPlaylistModal');
+  if (existing) existing.remove();
+
+  let trackIDs = [];
+  let summaryTitle = '';
+  if (Array.isArray(trackOrTracks)) {
+    trackIDs = trackOrTracks.map((t) => (typeof t === 'object' ? t.id : Number(t))).filter(Boolean);
+    summaryTitle = `${trackIDs.length} canciones seleccionadas`;
+  } else if (trackOrTracks && typeof trackOrTracks === 'object') {
+    trackIDs = [trackOrTracks.id];
+    summaryTitle = `"${trackOrTracks.title || 'Canción'}" — ${trackOrTracks.artist || ''}`;
+  }
+
+  if (trackIDs.length === 0) {
+    showToast('No se seleccionaron canciones para añadir a la playlist');
+    return;
+  }
+
+  // Cargar playlists disponibles
+  let playlists = [];
+  try {
+    playlists = (await api.getPlaylists()) || [];
+  } catch {
+    playlists = [];
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'addToPlaylistModal';
+  modal.style.cssText = 'position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(10px); display:flex; align-items:flex-end; justify-content:center; padding:0;';
+
+  const plListHTML = playlists.length === 0
+    ? '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.88rem;">Aún no tienes ninguna playlist creada. ¡Escribe un nombre arriba para crear tu primera lista!</div>'
+    : playlists.map((pl) => `
+        <div class="add-pl-item" data-pl-id="${pl.id}" style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); margin-bottom:8px; cursor:pointer;">
+          <div style="min-width:0;">
+            <div style="font-weight:700; color:var(--text-primary); font-size:0.95rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              ${escapeHtml(pl.name)}
+            </div>
+            <div style="font-size:0.78rem; color:var(--text-muted);">
+              ${pl.track_count} temas • ${formatPlaylistDuration(pl.duration)}
+            </div>
+          </div>
+          <button type="button" class="btn-secondary" style="padding:6px 14px; font-size:0.8rem; pointer-events:none;">
+            + Añadir
+          </button>
+        </div>
+      `).join('');
+
+  modal.innerHTML = `
+    <div style="width:100%; max-width:540px; max-height:85vh; background:var(--bg-surface); border-top-left-radius:var(--radius-xl); border-top-right-radius:var(--radius-xl); border:1px solid var(--border-subtle); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 -10px 40px rgba(0,0,0,0.7);">
+      <div style="padding:16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h3 style="font-size:1.15rem; font-weight:800; color:var(--text-primary); margin:0 0 2px 0;">📑 Añadir a Playlist</h3>
+          <p style="font-size:0.8rem; color:var(--text-muted); margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px;">${escapeHtml(summaryTitle)}</p>
+        </div>
+        <button id="btnCloseAddToPlModal" style="background:none; border:none; color:var(--text-muted); font-size:1.3rem; cursor:pointer; padding:6px 10px;">✕</button>
+      </div>
+
+      <div style="padding:16px; overflow-y:auto; flex:1;">
+        <!-- Crear nueva y añadir inmediatamente -->
+        <div style="margin-bottom:18px; background:var(--bg-surface-elevated); padding:14px; border-radius:var(--radius-md); border:1px dashed var(--border-subtle);">
+          <label style="font-size:0.75rem; font-weight:700; color:var(--accent-light); text-transform:uppercase; display:block; margin-bottom:8px;">
+            Crear nueva playlist y añadir aquí:
+          </label>
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="inputNewPlInlineName" placeholder="Nombre de la nueva playlist..." 
+                   style="flex:1; height:42px; border-radius:var(--radius-sm); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 12px; font-size:0.9rem; outline:none;"/>
+            <button type="button" id="btnCreateAndAddInline" class="btn-primary" style="height:42px; padding:0 16px; font-size:0.85rem; font-weight:700; white-space:nowrap;">
+              Crear y Añadir
+            </button>
+          </div>
+        </div>
+
+        <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px;">
+          O elige una playlist existente:
+        </div>
+        <div id="plItemsList">${plListHTML}</div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  document.getElementById('btnCloseAddToPlModal')?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  // Manejador para crear nueva playlist y añadir
+  document.getElementById('btnCreateAndAddInline')?.addEventListener('click', async () => {
+    const input = document.getElementById('inputNewPlInlineName');
+    const name = (input ? input.value : '').trim();
+    if (!name) {
+      showToast('Por favor escribe un nombre para la playlist');
+      return;
+    }
+    try {
+      const newPL = await api.createPlaylist(name, '');
+      await api.addTracksToPlaylist(newPL.id, trackIDs);
+      showToast(`Playlist "${newPL.name}" creada y canciones añadidas`);
+      hasLoadedPlaylists = false;
+      closeModal();
+      if (state.ui.activeSubTab === 'playlists') {
+        renderPlaylistsView(document.getElementById('libraryContent'), true);
+      }
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    }
+  });
+
+  // Manejador de clic en cada playlist existente
+  modal.querySelectorAll('.add-pl-item').forEach((item) => {
+    item.addEventListener('click', async () => {
+      const plId = item.dataset.plId;
+      if (!plId) return;
+      try {
+        await api.addTracksToPlaylist(plId, trackIDs);
+        const plName = item.querySelector('div')?.firstElementChild?.textContent || 'la playlist';
+        showToast(`Añadida(s) a ${plName.trim()}`);
+        hasLoadedPlaylists = false;
+        closeModal();
+      } catch (err) {
+        showToast(`Error: ${err.message}`);
+      }
+    });
+  });
+}
+
+// openNewPlaylistModal abre un diálogo modal para crear una playlist vacía desde la vista principal.
+function openNewPlaylistModal() {
+  const existing = document.getElementById('newPlaylistModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'newPlaylistModal';
+  modal.style.cssText = 'position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(10px); display:flex; align-items:center; justify-content:center; padding:16px;';
+
+  modal.innerHTML = `
+    <div style="width:100%; max-width:440px; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-xl); overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,0.7);">
+      <div style="padding:16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="font-size:1.15rem; font-weight:800; color:var(--text-primary); margin:0;">➕ Nueva Playlist</h3>
+        <button id="btnCloseNewPlModal" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:20px;">
+        <label style="font-size:0.75rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; display:block; margin-bottom:6px;">Nombre de la lista:</label>
+        <input type="text" id="inputNewPlName" placeholder="Ej: Favoritas Rock 80s" 
+               style="width:100%; height:44px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 12px; font-size:0.95rem; outline:none; margin-bottom:14px;"/>
+
+        <label style="font-size:0.75rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; display:block; margin-bottom:6px;">Descripción (opcional):</label>
+        <textarea id="inputNewPlDesc" placeholder="Breve descripción o temática..." rows="3"
+                  style="width:100%; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:10px 12px; font-size:0.88rem; outline:none; resize:none; margin-bottom:18px;"></textarea>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button type="button" id="btnCancelNewPl" class="btn-secondary" style="padding:10px 16px;">Cancelar</button>
+          <button type="button" id="btnSaveNewPl" class="btn-primary" style="padding:10px 20px; font-weight:700;">Crear Playlist</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  document.getElementById('btnCloseNewPlModal')?.addEventListener('click', closeModal);
+  document.getElementById('btnCancelNewPl')?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  document.getElementById('btnSaveNewPl')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('inputNewPlName');
+    const descInput = document.getElementById('inputNewPlDesc');
+    const name = (nameInput ? nameInput.value : '').trim();
+    const desc = descInput ? descInput.value.trim() : '';
+
+    if (!name) {
+      showToast('Por favor escribe un nombre para la playlist');
+      return;
+    }
+
+    try {
+      const pl = await api.createPlaylist(name, desc);
+      showToast(`Playlist "${pl.name}" creada con éxito`);
+      hasLoadedPlaylists = false;
+      closeModal();
+      if (state.ui.activeSubTab === 'playlists') {
+        renderPlaylistsView(document.getElementById('libraryContent'), true);
+      }
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    }
+  });
+}
+
+// openEditPlaylistModal abre el diálogo para modificar el nombre o descripción de una lista existente.
+function openEditPlaylistModal(pl) {
+  const existing = document.getElementById('editPlaylistModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'editPlaylistModal';
+  modal.style.cssText = 'position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(10px); display:flex; align-items:center; justify-content:center; padding:16px;';
+
+  modal.innerHTML = `
+    <div style="width:100%; max-width:440px; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-xl); overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,0.7);">
+      <div style="padding:16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="font-size:1.15rem; font-weight:800; color:var(--text-primary); margin:0;">✏️ Editar Playlist</h3>
+        <button id="btnCloseEditPlModal" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:20px;">
+        <label style="font-size:0.75rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; display:block; margin-bottom:6px;">Nombre de la lista:</label>
+        <input type="text" id="inputEditPlName" value="${escapeHtml(pl.name)}" 
+               style="width:100%; height:44px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 12px; font-size:0.95rem; outline:none; margin-bottom:14px;"/>
+
+        <label style="font-size:0.75rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; display:block; margin-bottom:6px;">Descripción:</label>
+        <textarea id="inputEditPlDesc" rows="3"
+                  style="width:100%; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:10px 12px; font-size:0.88rem; outline:none; resize:none; margin-bottom:18px;">${escapeHtml(pl.description || '')}</textarea>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button type="button" id="btnCancelEditPl" class="btn-secondary" style="padding:10px 16px;">Cancelar</button>
+          <button type="button" id="btnSaveEditPl" class="btn-primary" style="padding:10px 20px; font-weight:700;">Guardar Cambios</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  document.getElementById('btnCloseEditPlModal')?.addEventListener('click', closeModal);
+  document.getElementById('btnCancelEditPl')?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  document.getElementById('btnSaveEditPl')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('inputEditPlName');
+    const descInput = document.getElementById('inputEditPlDesc');
+    const name = (nameInput ? nameInput.value : '').trim();
+    const desc = descInput ? descInput.value.trim() : '';
+
+    if (!name) {
+      showToast('El nombre de la playlist no puede estar vacío');
+      return;
+    }
+
+    try {
+      await api.updatePlaylist(pl.id, name, desc);
+      showToast('Playlist actualizada');
+      hasLoadedPlaylists = false;
+      closeModal();
+      if (state.ui.detailView && state.ui.detailView.type === 'playlist') {
+        openPlaylistDetail(pl.id);
+      } else {
+        renderPlaylistsView(document.getElementById('libraryContent'), true);
+      }
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    }
+  });
+}
+
+// openPlaylistActionMenu despliega un menú flotante con acciones contextuales para una tarjeta de playlist.
+function openPlaylistActionMenu(pl) {
+  const existing = document.getElementById('playlistActionMenuModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'playlistActionMenuModal';
+  modal.style.cssText = 'position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.8); backdrop-filter:blur(6px); display:flex; align-items:flex-end; justify-content:center;';
+
+  modal.innerHTML = `
+    <div style="width:100%; max-width:480px; background:var(--bg-surface); border-top-left-radius:var(--radius-xl); border-top-right-radius:var(--radius-xl); border:1px solid var(--border-subtle); padding:16px; box-shadow:0 -10px 30px rgba(0,0,0,0.6);">
+      <div style="font-weight:700; font-size:1.05rem; color:var(--text-primary); margin-bottom:12px; border-bottom:1px solid var(--border-subtle); padding-bottom:8px;">
+        ${escapeHtml(pl.name)}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <button id="pmenuEdit" class="context-menu-action" style="padding:12px 10px; display:flex; align-items:center; gap:10px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-primary); cursor:pointer; width:100%; text-align:left;">
+          ✏️ <span>Editar Nombre y Descripción</span>
+        </button>
+        <button id="pmenuExport" class="context-menu-action" style="padding:12px 10px; display:flex; align-items:center; gap:10px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-primary); cursor:pointer; width:100%; text-align:left;">
+          💾 <span>Exportar Archivo M3U8</span>
+        </button>
+        <button id="pmenuDelete" class="context-menu-action" style="padding:12px 10px; display:flex; align-items:center; gap:10px; border-radius:var(--radius-sm); border:none; background:none; color:var(--color-danger); cursor:pointer; width:100%; text-align:left;">
+          🗑️ <span>Eliminar Playlist</span>
+        </button>
+        <button id="pmenuCancel" class="btn-secondary" style="margin-top:10px; width:100%; padding:10px; justify-content:center;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  document.getElementById('pmenuCancel')?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  document.getElementById('pmenuEdit')?.addEventListener('click', () => {
+    closeModal();
+    openEditPlaylistModal(pl);
+  });
+
+  document.getElementById('pmenuExport')?.addEventListener('click', () => {
+    closeModal();
+    window.location.href = api.exportPlaylistURL(pl.id);
+    showToast(`Descargando M3U8 de "${pl.name}"`);
+  });
+
+  document.getElementById('pmenuDelete')?.addEventListener('click', async () => {
+    closeModal();
+    if (confirm(`¿Estás seguro de que deseas eliminar permanentemente la playlist "${pl.name}"?`)) {
+      try {
+        await api.deletePlaylist(pl.id);
+        showToast(`Playlist "${pl.name}" eliminada`);
+        hasLoadedPlaylists = false;
+        renderPlaylistsView(document.getElementById('libraryContent'), true);
+      } catch (err) {
+        showToast(`Error al eliminar: ${err.message}`);
+      }
+    }
+  });
+}
+
+// openImportM3UModal abre el cuadro de diálogo para subir o pegar archivos de lista de reproducción M3U.
+function openImportM3UModal() {
+  const existing = document.getElementById('importM3UModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'importM3UModal';
+  modal.style.cssText = 'position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(10px); display:flex; align-items:center; justify-content:center; padding:16px;';
+
+  modal.innerHTML = `
+    <div style="width:100%; max-width:480px; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-xl); overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,0.7);">
+      <div style="padding:16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="font-size:1.15rem; font-weight:800; color:var(--text-primary); margin:0;">📥 Importar Lista M3U / M3U8</h3>
+        <button id="btnCloseImportM3UModal" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:20px;">
+        <p style="font-size:0.85rem; color:var(--text-secondary); line-height:1.4; margin:0 0 16px 0;">
+          Selecciona un archivo .m3u o .m3u8 de tu dispositivo. AuraBox buscará las canciones coincidentes en tu almacenamiento local y NAS.
+        </p>
+
+        <label style="font-size:0.75rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; display:block; margin-bottom:6px;">Nombre de la lista (opcional):</label>
+        <input type="text" id="inputImportM3UName" placeholder="Dejar vacío para usar el nombre del archivo..." 
+               style="width:100%; height:44px; border-radius:var(--radius-sm); background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 12px; font-size:0.95rem; outline:none; margin-bottom:16px;"/>
+
+        <div style="border:2px dashed var(--border-subtle); border-radius:var(--radius-md); padding:24px 16px; text-align:center; background:var(--bg-surface-elevated); margin-bottom:18px;">
+          <input type="file" id="inputFileM3U" accept=".m3u,.m3u8,audio/x-mpegurl" style="display:none;"/>
+          <button type="button" class="btn-secondary" id="btnTriggerFileM3U" style="padding:8px 18px; margin:0 auto 8px auto; border-radius:var(--radius-full);">
+            📁 Seleccionar Archivo M3U
+          </button>
+          <div id="m3uSelectedFileName" style="font-size:0.82rem; color:var(--text-muted);">Ningún archivo seleccionado</div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button type="button" id="btnCancelImportM3U" class="btn-secondary" style="padding:10px 16px;">Cancelar</button>
+          <button type="button" id="btnSubmitImportM3U" class="btn-primary" style="padding:10px 20px; font-weight:700;" disabled>
+            Importar M3U
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  document.getElementById('btnCloseImportM3UModal')?.addEventListener('click', closeModal);
+  document.getElementById('btnCancelImportM3U')?.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  const fileInput = document.getElementById('inputFileM3U');
+  const triggerBtn = document.getElementById('btnTriggerFileM3U');
+  const fileNameLabel = document.getElementById('m3uSelectedFileName');
+  const submitBtn = document.getElementById('btnSubmitImportM3U');
+  let selectedFile = null;
+
+  triggerBtn?.addEventListener('click', () => {
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files[0]) {
+      selectedFile = fileInput.files[0];
+      if (fileNameLabel) fileNameLabel.textContent = selectedFile.name;
+      if (submitBtn) submitBtn.disabled = false;
+      const nameInput = document.getElementById('inputImportM3UName');
+      if (nameInput && !nameInput.value) {
+        nameInput.value = selectedFile.name.replace(/\.[^/.]+$/, '');
+      }
+    }
+  });
+
+  submitBtn?.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Importando...';
+
+    const nameInput = document.getElementById('inputImportM3UName');
+    const name = nameInput ? nameInput.value.trim() : '';
+
+    try {
+      const res = await api.importPlaylistM3U(name, selectedFile);
+      showToast(`Playlist "${res.playlist?.name || 'Importada'}" creada con ${res.matched_tracks || 0} canciones`);
+      hasLoadedPlaylists = false;
+      closeModal();
+      if (state.ui.activeSubTab === 'playlists') {
+        renderPlaylistsView(document.getElementById('libraryContent'), true);
+      }
+    } catch (err) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Importar M3U';
+      showToast(`Error al importar: ${err.message}`);
+    }
+  });
+}
+
+
 // Variables de estado del catálogo de Podcasts
 let cachedPodcasts = [];
 let hasLoadedPodcasts = false;
@@ -4011,6 +4922,13 @@ function bindContextMenu() {
     if (state.ui.contextMenuTarget) {
       api.addToQueue({ track_ids: [state.ui.contextMenuTarget.id], mode: 'append' });
       showToast('Pista encolada al final');
+    }
+    closeContextMenu();
+  });
+
+  document.getElementById('cmenuAddToPlaylist')?.addEventListener('click', () => {
+    if (state.ui.contextMenuTarget) {
+      openAddToPlaylistModal(state.ui.contextMenuTarget);
     }
     closeContextMenu();
   });

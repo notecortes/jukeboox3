@@ -135,4 +135,23 @@ type PodcastEpisode struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// Playlist representa una lista de reproducción personalizada creada por el usuario.
+type Playlist struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	TrackCount  int       `json:"track_count"`
+	Duration    float64   `json:"duration"` // Duración total acumulada en segundos
+	CoverURL    string    `json:"cover_url,omitempty"` // Carátula de la primera pista o fallback
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// PlaylistDetail engloba los metadatos de la lista junto con todas sus pistas ordenadas por posición.
+type PlaylistDetail struct {
+	Playlist
+	Tracks []Track `json:"tracks"`
+}
+
+
 

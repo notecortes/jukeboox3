@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -243,6 +244,31 @@ func (d *DB) createSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_podcast_episodes_podcast_id ON podcast_episodes(podcast_id);
 	CREATE INDEX IF NOT EXISTS idx_podcast_episodes_enclosure ON podcast_episodes(enclosure_url);
+
+	CREATE TABLE IF NOT EXISTS playlists (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+		description TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_playlists_name ON playlists(name COLLATE NOCASE);
+	CREATE INDEX IF NOT EXISTS idx_playlists_updated ON playlists(updated_at DESC);
+
+	CREATE TABLE IF NOT EXISTS playlist_tracks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		playlist_id INTEGER NOT NULL,
+		track_id INTEGER NOT NULL,
+		position INTEGER NOT NULL,
+		added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+		FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE,
+		UNIQUE(playlist_id, position)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pos ON playlist_tracks(playlist_id, position);
+	CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
 	`
 	if _, err := d.conn.Exec(schema); err != nil {
 		return err
@@ -2470,6 +2496,492 @@ func (d *DB) UpdateEpisodeProgress(id int64, progress float64) error {
 	_, err := d.conn.Exec(`UPDATE podcast_episodes SET progress = ? WHERE id = ?`, progress, id)
 	return err
 }
+
+// CreatePlaylist inserta una nueva lista de reproducción personalizada en la base de datos.
+func (d *DB) CreatePlaylist(name, description string) (*Playlist, error) {
+	cleanName := strings.TrimSpace(name)
+	if cleanName == "" {
+		return nil, fmt.Errorf("el nombre de la playlist no puede estar vacío")
+	}
+	cleanDesc := strings.TrimSpace(description)
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	// Comprobar existencia previa insensible a mayúsculas y acentos (UTF-8 case fold)
+	rows, err := d.conn.Query(`SELECT name FROM playlists`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var existingName string
+			if err := rows.Scan(&existingName); err == nil {
+				if strings.EqualFold(existingName, cleanName) {
+					return nil, fmt.Errorf("ya existe una playlist con el nombre '%s'", cleanName)
+				}
+			}
+		}
+	}
+
+	res, err := d.conn.Exec(`INSERT INTO playlists (name, description) VALUES (?, ?)`, cleanName, cleanDesc)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return nil, fmt.Errorf("ya existe una playlist con el nombre '%s'", cleanName)
+		}
+		return nil, fmt.Errorf("error al crear playlist: %w", err)
+	}
+
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	return &Playlist{
+		ID:          newID,
+		Name:        cleanName,
+		Description: cleanDesc,
+		TrackCount:  0,
+		Duration:    0,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
+// GetAllPlaylists devuelve el listado completo de playlists con conteo de temas, duración total y carátula.
+func (d *DB) GetAllPlaylists() ([]Playlist, error) {
+	query := `
+		SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+		       COUNT(pt.id) AS track_count,
+		       COALESCE(SUM(t.duration), 0) AS total_duration,
+		       COALESCE((
+		           SELECT t2.cover_url 
+		           FROM playlist_tracks pt2 
+		           JOIN tracks t2 ON pt2.track_id = t2.id 
+		           WHERE pt2.playlist_id = p.id 
+		           ORDER BY pt2.position ASC 
+		           LIMIT 1
+		       ), '') AS cover_url
+		FROM playlists p
+		LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+		LEFT JOIN tracks t ON pt.track_id = t.id
+		GROUP BY p.id
+		ORDER BY p.updated_at DESC, p.name ASC
+	`
+	rows, err := d.reader().Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar playlists: %w", err)
+	}
+	defer rows.Close()
+
+	playlists := make([]Playlist, 0)
+	for rows.Next() {
+		var pl Playlist
+		var created, updated time.Time
+		if err := rows.Scan(&pl.ID, &pl.Name, &pl.Description, &created, &updated, &pl.TrackCount, &pl.Duration, &pl.CoverURL); err != nil {
+			return nil, err
+		}
+		pl.CreatedAt = created
+		pl.UpdatedAt = updated
+		playlists = append(playlists, pl)
+	}
+	return playlists, rows.Err()
+}
+
+// GetPlaylistByID recupera una lista por su identificador único junto con todas sus pistas ordenadas.
+func (d *DB) GetPlaylistByID(id int64) (*PlaylistDetail, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("identificador de playlist inválido")
+	}
+
+	queryHeader := `
+		SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+		       COUNT(pt.id) AS track_count,
+		       COALESCE(SUM(t.duration), 0) AS total_duration,
+		       COALESCE((
+		           SELECT t2.cover_url 
+		           FROM playlist_tracks pt2 
+		           JOIN tracks t2 ON pt2.track_id = t2.id 
+		           WHERE pt2.playlist_id = p.id 
+		           ORDER BY pt2.position ASC 
+		           LIMIT 1
+		       ), '') AS cover_url
+		FROM playlists p
+		LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+		LEFT JOIN tracks t ON pt.track_id = t.id
+		WHERE p.id = ?
+		GROUP BY p.id
+	`
+	var pl Playlist
+	var created, updated time.Time
+	err := d.reader().QueryRow(queryHeader, id).Scan(
+		&pl.ID, &pl.Name, &pl.Description, &created, &updated,
+		&pl.TrackCount, &pl.Duration, &pl.CoverURL,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("playlist no encontrada")
+		}
+		return nil, fmt.Errorf("error al consultar playlist: %w", err)
+	}
+	pl.CreatedAt = created
+	pl.UpdatedAt = updated
+
+	queryTracks := `
+		SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.album_artist, t.genre,
+		       t.year, t.duration, t.track_number, t.bitrate, t.sample_rate, t.format,
+		       t.source, t.cover_url, t.favorite, t.play_count, t.bpm, t.created_at
+		FROM playlist_tracks pt
+		JOIN tracks t ON pt.track_id = t.id
+		WHERE pt.playlist_id = ?
+		ORDER BY pt.position ASC
+	`
+	rows, err := d.reader().Query(queryTracks, id)
+	if err != nil {
+		return nil, fmt.Errorf("error al obtener pistas de la playlist: %w", err)
+	}
+	defer rows.Close()
+
+	tracks, err := scanTracksFromRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PlaylistDetail{
+		Playlist: pl,
+		Tracks:   tracks,
+	}, nil
+}
+
+// UpdatePlaylist modifica el nombre y descripción de una playlist existente.
+func (d *DB) UpdatePlaylist(id int64, name, description string) error {
+	if id <= 0 {
+		return fmt.Errorf("identificador de playlist inválido")
+	}
+	cleanName := strings.TrimSpace(name)
+	if cleanName == "" {
+		return fmt.Errorf("el nombre de la playlist no puede estar vacío")
+	}
+	cleanDesc := strings.TrimSpace(description)
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	// Comprobar colisión de nombres con otras playlists
+	rows, err := d.conn.Query(`SELECT id, name FROM playlists WHERE id != ?`, id)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var otherID int64
+			var otherName string
+			if err := rows.Scan(&otherID, &otherName); err == nil {
+				if strings.EqualFold(otherName, cleanName) {
+					return fmt.Errorf("ya existe otra playlist con el nombre '%s'", cleanName)
+				}
+			}
+		}
+	}
+
+	res, err := d.conn.Exec(`
+		UPDATE playlists 
+		SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = ?
+	`, cleanName, cleanDesc, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return fmt.Errorf("ya existe otra playlist con el nombre '%s'", cleanName)
+		}
+		return fmt.Errorf("error al actualizar playlist: %w", err)
+	}
+
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return fmt.Errorf("playlist no encontrada")
+	}
+	return nil
+}
+
+// DeletePlaylist elimina una lista de reproducción y desvincula sus pistas asociadas.
+func (d *DB) DeletePlaylist(id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("identificador de playlist inválido")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ?`, id); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM playlists WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return fmt.Errorf("playlist no encontrada")
+	}
+
+	return tx.Commit()
+}
+
+// AddTracksToPlaylist añade una o más canciones al final de una lista de reproducción.
+func (d *DB) AddTracksToPlaylist(playlistID int64, trackIDs []int64) (int, error) {
+	if playlistID <= 0 {
+		return 0, fmt.Errorf("identificador de playlist inválido")
+	}
+	if len(trackIDs) == 0 {
+		return 0, nil
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Obtener la posición máxima actual en la playlist
+	var maxPos int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlist_id = ?`, playlistID).Scan(&maxPos)
+	if err != nil {
+		return 0, err
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	added := 0
+	currentPos := maxPos + 1
+	for _, trackID := range trackIDs {
+		if trackID <= 0 {
+			continue
+		}
+		if _, err := stmt.Exec(playlistID, trackID, currentPos); err != nil {
+			return added, fmt.Errorf("error al agregar pista %d: %w", trackID, err)
+		}
+		currentPos++
+		added++
+	}
+
+	if added > 0 {
+		_, _ = tx.Exec(`UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, playlistID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+// RemoveTrackFromPlaylist retira una canción de la playlist por su posición ordinal y reordena los índices posteriores.
+func (d *DB) RemoveTrackFromPlaylist(playlistID int64, position int) error {
+	if playlistID <= 0 || position < 0 {
+		return fmt.Errorf("parámetros de posición o playlist inválidos")
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ? AND position = ?`, playlistID, position)
+	if err != nil {
+		return err
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		return fmt.Errorf("no existe ninguna pista en la posición indicada")
+	}
+
+	// Decrementar las posiciones de las canciones que estaban por detrás
+	_, err = tx.Exec(`
+		UPDATE playlist_tracks 
+		SET position = position - 1 
+		WHERE playlist_id = ? AND position > ?
+	`, playlistID, position)
+	if err != nil {
+		return err
+	}
+
+	_, _ = tx.Exec(`UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, playlistID)
+	return tx.Commit()
+}
+
+// ReorderPlaylistTrack desplaza una pista de una posición de origen (fromPos) a una de destino (toPos).
+func (d *DB) ReorderPlaylistTrack(playlistID int64, fromPos, toPos int) error {
+	if playlistID <= 0 || fromPos < 0 || toPos < 0 {
+		return fmt.Errorf("posiciones o identificador de playlist inválidos")
+	}
+	if fromPos == toPos {
+		return nil
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Comprobar que existe la pista en origen
+	var idAtFrom int64
+	err = tx.QueryRow(`SELECT id FROM playlist_tracks WHERE playlist_id = ? AND position = ?`, playlistID, fromPos).Scan(&idAtFrom)
+	if err != nil {
+		return fmt.Errorf("no existe pista en la posición de origen %d", fromPos)
+	}
+
+	// Usar una posición temporal negativa (-999) para evitar colisiones con la restricción UNIQUE(playlist_id, position)
+	if _, err := tx.Exec(`UPDATE playlist_tracks SET position = -999 WHERE id = ?`, idAtFrom); err != nil {
+		return err
+	}
+
+	if fromPos < toPos {
+		// Mover hacia adelante: desplazar las intermedias hacia atrás (-1)
+		_, err = tx.Exec(`
+			UPDATE playlist_tracks 
+			SET position = position - 1 
+			WHERE playlist_id = ? AND position > ? AND position <= ?
+		`, playlistID, fromPos, toPos)
+	} else {
+		// Mover hacia atrás: desplazar las intermedias hacia adelante (+1)
+		_, err = tx.Exec(`
+			UPDATE playlist_tracks 
+			SET position = position + 1 
+			WHERE playlist_id = ? AND position >= ? AND position < ?
+		`, playlistID, toPos, fromPos)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Asignar la posición final definitiva
+	if _, err := tx.Exec(`UPDATE playlist_tracks SET position = ? WHERE id = ?`, toPos, idAtFrom); err != nil {
+		return err
+	}
+
+	_, _ = tx.Exec(`UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, playlistID)
+	return tx.Commit()
+}
+
+// ExportPlaylistM3U genera el contenido del archivo estándar M3U8 para su descarga o uso en reproductores externos.
+func (d *DB) ExportPlaylistM3U(id int64) (string, string, error) {
+	detail, err := d.GetPlaylistByID(id)
+	if err != nil {
+		return "", "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("#EXTM3U\n")
+	sb.WriteString(fmt.Sprintf("#PLAYLIST:%s\n", detail.Name))
+	if detail.Description != "" {
+		sb.WriteString(fmt.Sprintf("#COMMENT:%s\n", detail.Description))
+	}
+
+	for _, t := range detail.Tracks {
+		dur := int(t.Duration)
+		label := fmt.Sprintf("%s - %s", t.Artist, t.Title)
+		sb.WriteString(fmt.Sprintf("#EXTINF:%d,%s\n", dur, label))
+		sb.WriteString(fmt.Sprintf("%s\n", t.Path))
+	}
+
+	safeName := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, detail.Name)
+	if safeName == "" {
+		safeName = fmt.Sprintf("playlist_%d", detail.ID)
+	}
+	filename := fmt.Sprintf("%s.m3u8", safeName)
+
+	return filename, sb.String(), nil
+}
+
+// ImportPlaylistM3U analiza un archivo de lista M3U/M3U8 y añade las pistas coincidentes en una nueva playlist.
+func (d *DB) ImportPlaylistM3U(name string, m3uContent string) (*Playlist, int, error) {
+	lines := strings.Split(m3uContent, "\n")
+	extractedName := strings.TrimSpace(name)
+	var paths []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#PLAYLIST:") && extractedName == "" {
+			extractedName = strings.TrimSpace(strings.TrimPrefix(trimmed, "#PLAYLIST:"))
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		paths = append(paths, trimmed)
+	}
+
+	if extractedName == "" {
+		extractedName = fmt.Sprintf("Playlist Importada (%s)", time.Now().Format("02-01 15:04"))
+	}
+
+	if len(paths) == 0 {
+		return nil, 0, fmt.Errorf("el archivo M3U no contiene rutas de pistas reproducibles")
+	}
+
+	// Crear la nueva playlist
+	pl, err := d.CreatePlaylist(extractedName, "Importada desde archivo M3U")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Buscar las pistas en la base de datos por coincidencia exacta o por nombre de archivo
+	matchedIDs := make([]int64, 0, len(paths))
+	for _, p := range paths {
+		var trackID int64
+		// 1. Intento por coincidencia de ruta exacta
+		err := d.reader().QueryRow(`SELECT id FROM tracks WHERE path = ? LIMIT 1`, p).Scan(&trackID)
+		if err == nil && trackID > 0 {
+			matchedIDs = append(matchedIDs, trackID)
+			continue
+		}
+
+		// 2. Intento por sufijo de ruta o nombre de archivo base
+		filename := filepath.Base(p)
+		if filename != "" && filename != "." && filename != "/" {
+			err = d.reader().QueryRow(`SELECT id FROM tracks WHERE filename = ? OR path LIKE ? LIMIT 1`, filename, "%/"+filename).Scan(&trackID)
+			if err == nil && trackID > 0 {
+				matchedIDs = append(matchedIDs, trackID)
+			}
+		}
+	}
+
+	addedCount := 0
+	if len(matchedIDs) > 0 {
+		addedCount, err = d.AddTracksToPlaylist(pl.ID, matchedIDs)
+		if err != nil {
+			return pl, 0, fmt.Errorf("error al vincular canciones a la playlist: %w", err)
+		}
+	}
+
+	return pl, addedCount, nil
+}
+
 
 // Close cierra las conexiones de lectura y escritura de la base de datos de manera ordenada.
 func (d *DB) Close() error {

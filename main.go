@@ -411,6 +411,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/podcasts/opml/export", requireMethod(s.handlePodcastOPMLExport, http.MethodGet))
 	mux.HandleFunc("/api/podcasts/refresh", requireMethod(s.handlePodcastsRefresh, http.MethodPost))
 	mux.HandleFunc("/api/podcasts/progress", requireMethod(s.handlePodcastProgress, http.MethodPost))
+
+	// 11. API de Playlists Personalizadas (M3U)
+	mux.HandleFunc("/api/playlists", requireMethod(s.handlePlaylists, http.MethodGet, http.MethodPost))
+	mux.HandleFunc("/api/playlists/detail", requireMethod(s.handlePlaylistDetail, http.MethodGet))
+	mux.HandleFunc("/api/playlists/update", requireMethod(s.handlePlaylistUpdate, http.MethodPost))
+	mux.HandleFunc("/api/playlists/delete", requireMethod(s.handlePlaylistDelete, http.MethodDelete, http.MethodPost))
+	mux.HandleFunc("/api/playlists/tracks/add", requireMethod(s.handlePlaylistTracksAdd, http.MethodPost))
+	mux.HandleFunc("/api/playlists/tracks/remove", requireMethod(s.handlePlaylistTracksRemove, http.MethodPost))
+	mux.HandleFunc("/api/playlists/tracks/reorder", requireMethod(s.handlePlaylistTracksReorder, http.MethodPost))
+	mux.HandleFunc("/api/playlists/play", requireMethod(s.handlePlaylistPlay, http.MethodPost))
+	mux.HandleFunc("/api/playlists/export", requireMethod(s.handlePlaylistExport, http.MethodGet))
+	mux.HandleFunc("/api/playlists/import", requireMethod(s.handlePlaylistImport, http.MethodPost))
 }
 
 // noCacheMiddleware previene que el navegador almacene en caché HTML, JS o CSS desactualizados.
@@ -3051,3 +3063,425 @@ func getEnv(key, defaultVal string) string {
 	}
 	return defaultVal
 }
+
+// handlePlaylists gestiona el listado general (GET) y la creación de una nueva playlist (POST).
+func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		playlists, err := s.database.GetAllPlaylists()
+		if err != nil {
+			log.Printf("[Playlists] Error listando playlists: %v", err)
+			http.Error(w, "error al consultar playlists", http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, http.StatusOK, playlists)
+		return
+	}
+
+	// Creación de nueva playlist
+	var payload struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		payload.Name = r.FormValue("name")
+		payload.Description = r.FormValue("description")
+	}
+
+	cleanName := strings.TrimSpace(payload.Name)
+	if cleanName == "" {
+		http.Error(w, "el nombre de la playlist no puede estar vacío", http.StatusBadRequest)
+		return
+	}
+
+	pl, err := s.database.CreatePlaylist(cleanName, payload.Description)
+	if err != nil {
+		log.Printf("[Playlists] Error creando playlist %q: %v", cleanName, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "create",
+			"playlist_id": pl.ID,
+			"name":        pl.Name,
+		})
+	}
+
+	jsonResponse(w, http.StatusCreated, pl)
+}
+
+// handlePlaylistDetail devuelve la información detallada de una playlist y su listado ordenado de canciones.
+func (s *Server) handlePlaylistDetail(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "identificador de playlist inválido", http.StatusBadRequest)
+		return
+	}
+
+	detail, err := s.database.GetPlaylistByID(id)
+	if err != nil {
+		log.Printf("[Playlists] Error consultando playlist %d: %v", id, err)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, detail)
+}
+
+// handlePlaylistUpdate actualiza el nombre y la descripción de una playlist existente.
+func (s *Server) handlePlaylistUpdate(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+		payload.ID = id
+		payload.Name = r.FormValue("name")
+		payload.Description = r.FormValue("description")
+	}
+
+	if payload.ID <= 0 {
+		idStr := r.URL.Query().Get("id")
+		payload.ID, _ = strconv.ParseInt(idStr, 10, 64)
+	}
+
+	if payload.ID <= 0 {
+		http.Error(w, "identificador de playlist inválido", http.StatusBadRequest)
+		return
+	}
+
+	cleanName := strings.TrimSpace(payload.Name)
+	if cleanName == "" {
+		http.Error(w, "el nombre de la playlist no puede estar vacío", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.database.UpdatePlaylist(payload.ID, cleanName, payload.Description); err != nil {
+		log.Printf("[Playlists] Error actualizando playlist %d: %v", payload.ID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "update",
+			"playlist_id": payload.ID,
+			"name":        cleanName,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePlaylistDelete elimina definitivamente una lista de reproducción.
+func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		if errJSON := decodeJSONBody(w, r, &payload); errJSON == nil && payload.ID > 0 {
+			id = payload.ID
+		}
+	}
+
+	if id <= 0 {
+		http.Error(w, "identificador de playlist inválido", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.database.DeletePlaylist(id); err != nil {
+		log.Printf("[Playlists] Error eliminando playlist %d: %v", id, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "delete",
+			"playlist_id": id,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePlaylistTracksAdd añade una o varias pistas a una lista de reproducción.
+func (s *Server) handlePlaylistTracksAdd(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		PlaylistID int64   `json:"playlist_id"`
+		TrackID    int64   `json:"track_id"`
+		TrackIDs   []int64 `json:"track_ids"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		http.Error(w, "cuerpo de petición JSON inválido", http.StatusBadRequest)
+		return
+	}
+
+	if payload.PlaylistID <= 0 {
+		http.Error(w, "identificador de playlist requerido", http.StatusBadRequest)
+		return
+	}
+
+	trackIDs := payload.TrackIDs
+	if payload.TrackID > 0 {
+		trackIDs = append(trackIDs, payload.TrackID)
+	}
+
+	if len(trackIDs) == 0 {
+		http.Error(w, "no se han indicado pistas para agregar", http.StatusBadRequest)
+		return
+	}
+
+	added, err := s.database.AddTracksToPlaylist(payload.PlaylistID, trackIDs)
+	if err != nil {
+		log.Printf("[Playlists] Error agregando pistas a playlist %d: %v", payload.PlaylistID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "add_tracks",
+			"playlist_id": payload.PlaylistID,
+			"added":       added,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status": "ok",
+		"added":  added,
+	})
+}
+
+// handlePlaylistTracksRemove retira una canción de la lista según su posición ordinal.
+func (s *Server) handlePlaylistTracksRemove(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		PlaylistID int64 `json:"playlist_id"`
+		Position   int   `json:"position"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		plID, _ := strconv.ParseInt(r.URL.Query().Get("playlist_id"), 10, 64)
+		pos, _ := strconv.Atoi(r.URL.Query().Get("position"))
+		payload.PlaylistID = plID
+		payload.Position = pos
+	}
+
+	if payload.PlaylistID <= 0 || payload.Position < 0 {
+		http.Error(w, "parámetros de playlist o posición inválidos", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.database.RemoveTrackFromPlaylist(payload.PlaylistID, payload.Position); err != nil {
+		log.Printf("[Playlists] Error eliminando pista en pos %d de playlist %d: %v", payload.Position, payload.PlaylistID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "remove_track",
+			"playlist_id": payload.PlaylistID,
+			"position":    payload.Position,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePlaylistTracksReorder modifica el orden de una canción trasladándola de una posición a otra.
+func (s *Server) handlePlaylistTracksReorder(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		PlaylistID int64 `json:"playlist_id"`
+		From       int   `json:"from"`
+		To         int   `json:"to"`
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		plID, _ := strconv.ParseInt(r.URL.Query().Get("playlist_id"), 10, 64)
+		from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+		to, _ := strconv.Atoi(r.URL.Query().Get("to"))
+		payload.PlaylistID = plID
+		payload.From = from
+		payload.To = to
+	}
+
+	if payload.PlaylistID <= 0 || payload.From < 0 || payload.To < 0 {
+		http.Error(w, "parámetros de reordenación inválidos", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.database.ReorderPlaylistTrack(payload.PlaylistID, payload.From, payload.To); err != nil {
+		log.Printf("[Playlists] Error reordenando pista en playlist %d (%d -> %d): %v", payload.PlaylistID, payload.From, payload.To, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":      "reorder",
+			"playlist_id": payload.PlaylistID,
+			"from":        payload.From,
+			"to":          payload.To,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePlaylistPlay carga y reproduce inmediatamente (o anexa a la cola) las canciones de una playlist.
+func (s *Server) handlePlaylistPlay(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		ID      int64  `json:"id"`
+		Mode    string `json:"mode"`    // "play_now" o "append"
+		Shuffle bool   `json:"shuffle"` // true para barajar aleatoriamente
+	}
+	if err := decodeJSONBody(w, r, &payload); err != nil {
+		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		payload.ID = id
+		payload.Mode = r.URL.Query().Get("mode")
+		payload.Shuffle = (r.URL.Query().Get("shuffle") == "true")
+	}
+
+	if payload.ID <= 0 {
+		idStr := r.URL.Query().Get("id")
+		payload.ID, _ = strconv.ParseInt(idStr, 10, 64)
+	}
+
+	if payload.ID <= 0 {
+		http.Error(w, "identificador de playlist inválido", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Mode == "" {
+		payload.Mode = "play_now"
+	}
+
+	detail, err := s.database.GetPlaylistByID(payload.ID)
+	if err != nil {
+		log.Printf("[Playlists] Error al cargar canciones de la playlist %d: %v", payload.ID, err)
+		http.Error(w, "playlist no encontrada", http.StatusNotFound)
+		return
+	}
+
+	if len(detail.Tracks) == 0 {
+		http.Error(w, "la playlist seleccionada no contiene ninguna canción", http.StatusBadRequest)
+		return
+	}
+
+	tracksToPlay := make([]db.Track, len(detail.Tracks))
+	copy(tracksToPlay, detail.Tracks)
+
+	if payload.Shuffle {
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		rnd.Shuffle(len(tracksToPlay), func(i, j int) {
+			tracksToPlay[i], tracksToPlay[j] = tracksToPlay[j], tracksToPlay[i]
+		})
+	}
+
+	if payload.Mode == "play_now" {
+		s.player.ReplaceQueue(tracksToPlay, true)
+	} else {
+		s.player.EnqueueTracks(tracksToPlay, "append")
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"status":  "ok",
+		"count":   len(tracksToPlay),
+		"mode":    payload.Mode,
+		"shuffle": payload.Shuffle,
+	})
+}
+
+// handlePlaylistExport genera la descarga del archivo estándar M3U8 con la lista de pistas.
+func (s *Server) handlePlaylistExport(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "identificador de playlist requerido", http.StatusBadRequest)
+		return
+	}
+
+	filename, content, err := s.database.ExportPlaylistM3U(id)
+	if err != nil {
+		log.Printf("[Playlists] Error exportando playlist %d a M3U: %v", id, err)
+		http.Error(w, "error al generar archivo M3U", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	_, _ = w.Write([]byte(content))
+}
+
+// handlePlaylistImport procesa un archivo M3U/M3U8 subido por multipart o JSON y crea una nueva playlist.
+func (s *Server) handlePlaylistImport(w http.ResponseWriter, r *http.Request) {
+	var name string
+	var m3uContent string
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.Contains(contentType, "multipart/form-data") {
+		// Límite de 10 MB para archivos de lista M3U
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "error al procesar formulario multipart", http.StatusBadRequest)
+			return
+		}
+		name = r.FormValue("name")
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "archivo M3U no proporcionado en campo 'file'", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		rawBytes, err := io.ReadAll(file)
+		if err != nil {
+			http.Error(w, "error leyendo el archivo M3U", http.StatusInternalServerError)
+			return
+		}
+		m3uContent = string(rawBytes)
+	} else {
+		var payload struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		}
+		if err := decodeJSONBody(w, r, &payload); err != nil {
+			http.Error(w, "cuerpo de petición JSON inválido", http.StatusBadRequest)
+			return
+		}
+		name = payload.Name
+		m3uContent = payload.Content
+	}
+
+	if strings.TrimSpace(m3uContent) == "" {
+		http.Error(w, "el contenido del archivo M3U no puede estar vacío", http.StatusBadRequest)
+		return
+	}
+
+	pl, matchedCount, err := s.database.ImportPlaylistM3U(name, m3uContent)
+	if err != nil {
+		log.Printf("[Playlists] Error importando M3U: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.eventsHub != nil {
+		s.eventsHub.Broadcast("playlists_updated", map[string]interface{}{
+			"action":         "import",
+			"playlist_id":    pl.ID,
+			"name":           pl.Name,
+			"matched_tracks": matchedCount,
+		})
+	}
+
+	jsonResponse(w, http.StatusCreated, map[string]interface{}{
+		"status":         "ok",
+		"playlist":       pl,
+		"matched_tracks": matchedCount,
+	})
+}
+
