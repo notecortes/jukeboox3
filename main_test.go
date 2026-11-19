@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -969,6 +971,61 @@ func TestPodcastPlayResumeAndProgress(t *testing.T) {
 		t.Fatalf("from_start falló, esperado resumed=false pos=0, obtenida: %+v", resStart)
 	}
 }
+
+// TestCoverThumbnailGenerationAndCache valida la creación, escalado a 240px y caché en disco de miniaturas.
+func TestCoverThumbnailGenerationAndCache(t *testing.T) {
+	coversDir := t.TempDir()
+	s := &Server{coversDir: coversDir}
+
+	// 1. Crear imagen original de 500x300 en coversDir
+	srcImg := image.NewRGBA(image.Rect(0, 0, 500, 300))
+	origPath := filepath.Join(coversDir, "test_cover.jpg")
+	f, err := os.Create(origPath)
+	if err != nil {
+		t.Fatalf("Error al crear archivo de prueba: %v", err)
+	}
+	if err := jpeg.Encode(f, srcImg, &jpeg.Options{Quality: 90}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Error codificando imagen original: %v", err)
+	}
+	_ = f.Close()
+
+	// 2. Solicitar miniatura con ?thumb=1
+	req := httptest.NewRequest(http.MethodGet, "/api/covers/test_cover.jpg?thumb=1", nil)
+	rec := httptest.NewRecorder()
+	s.handleCovers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Código esperado 200 para thumbnail, obtenido %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Fatalf("Content-Type esperado image/jpeg, obtenido %s", ct)
+	}
+
+	// 3. Comprobar que la miniatura se persistió físicamente en coversDir/thumb/
+	thumbPath := filepath.Join(coversDir, "thumb", "test_cover.jpg")
+	if _, err := os.Stat(thumbPath); err != nil {
+		t.Fatalf("El archivo de miniatura en disco no existe: %v", err)
+	}
+
+	// 4. Decodificar la miniatura y comprobar que sus dimensiones no superan 240px
+	thumbDecoded, err := jpeg.Decode(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("Error al decodificar miniatura generada: %v", err)
+	}
+	b := thumbDecoded.Bounds()
+	if b.Dx() > 240 || b.Dy() > 240 {
+		t.Fatalf("Dimensiones de miniatura superan 240px: %dx%d", b.Dx(), b.Dy())
+	}
+
+	// 5. Segunda petición debe servirse desde caché instantáneamente
+	rec2 := httptest.NewRecorder()
+	s.handleCovers(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("Segunda petición de miniatura falló con %d", rec2.Code)
+	}
+}
+
 
 
 

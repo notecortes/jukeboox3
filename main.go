@@ -6,6 +6,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"math/rand"
@@ -326,8 +330,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	fs := http.FileServer(http.Dir("./web"))
 	mux.Handle("/", noCacheMiddleware(fs))
 
-	// 2. Caché de carátulas locales con cabeceras de persistencia inmutables (30 días)
-	mux.Handle("/api/covers/", coversCacheMiddleware(http.StripPrefix("/api/covers/", http.FileServer(http.Dir(s.coversDir)))))
+	// 2. Caché de carátulas locales y miniaturas optimizadas (240x240) con cabeceras de persistencia inmutables
+	mux.HandleFunc("/api/covers/", s.handleCovers)
 
 	// 3. Flujo en tiempo real Server-Sent Events (SSE)
 	mux.HandleFunc("/api/events", requireMethod(s.eventsHub.ServeHTTP, http.MethodGet))
@@ -595,12 +599,161 @@ func compressionAndSecurityMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// coversCacheMiddleware aplica cabeceras de caché persistente (30 días) para carátulas.
-func coversCacheMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
-		next.ServeHTTP(w, r)
-	})
+// resizeToThumbnail escala proporcionalmente una imagen para que quepa en maxDim x maxDim usando interpolación bilineal.
+func resizeToThumbnail(src image.Image, maxDim int) image.Image {
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return src
+	}
+	if w <= maxDim && h <= maxDim {
+		return src
+	}
+
+	var newW, newH int
+	if w >= h {
+		newW = maxDim
+		newH = int(float64(h) * float64(maxDim) / float64(w))
+	} else {
+		newH = maxDim
+		newW = int(float64(w) * float64(maxDim) / float64(h))
+	}
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	xRatio := float64(w) / float64(newW)
+	yRatio := float64(h) / float64(newH)
+
+	for y := 0; y < newH; y++ {
+		srcY := float64(y) * yRatio
+		yFloor := int(srcY)
+		yDiff := srcY - float64(yFloor)
+		yCeil := yFloor + 1
+		if yCeil >= h {
+			yCeil = h - 1
+		}
+
+		for x := 0; x < newW; x++ {
+			srcX := float64(x) * xRatio
+			xFloor := int(srcX)
+			xDiff := srcX - float64(xFloor)
+			xCeil := xFloor + 1
+			if xCeil >= w {
+				xCeil = w - 1
+			}
+
+			r1, g1, b1, a1 := src.At(bounds.Min.X+xFloor, bounds.Min.Y+yFloor).RGBA()
+			r2, g2, b2, a2 := src.At(bounds.Min.X+xCeil, bounds.Min.Y+yFloor).RGBA()
+			r3, g3, b3, a3 := src.At(bounds.Min.X+xFloor, bounds.Min.Y+yCeil).RGBA()
+			r4, g4, b4, a4 := src.At(bounds.Min.X+xCeil, bounds.Min.Y+yCeil).RGBA()
+
+			topR := float64(r1)*(1-xDiff) + float64(r2)*xDiff
+			topG := float64(g1)*(1-xDiff) + float64(g2)*xDiff
+			topB := float64(b1)*(1-xDiff) + float64(b2)*xDiff
+			topA := float64(a1)*(1-xDiff) + float64(a2)*xDiff
+
+			botR := float64(r3)*(1-xDiff) + float64(r4)*xDiff
+			botG := float64(g3)*(1-xDiff) + float64(g4)*xDiff
+			botB := float64(b3)*(1-xDiff) + float64(b4)*xDiff
+			botA := float64(a3)*(1-xDiff) + float64(a4)*xDiff
+
+			finR := uint8((topR*(1-yDiff) + botR*yDiff) / 257)
+			finG := uint8((topG*(1-yDiff) + botG*yDiff) / 257)
+			finB := uint8((topB*(1-yDiff) + botB*yDiff) / 257)
+			finA := uint8((topA*(1-yDiff) + botA*yDiff) / 257)
+
+			dst.SetRGBA(x, y, color.RGBA{R: finR, G: finG, B: finB, A: finA})
+		}
+	}
+
+	return dst
+}
+
+// handleCovers sirve carátulas locales originales o miniaturas cacheadas en disco (240x240) para máximo rendimiento móvil.
+func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
+	relPath := strings.TrimPrefix(r.URL.Path, "/api/covers/")
+	relPath = filepath.Clean(relPath)
+	if relPath == "." || relPath == "/" || strings.Contains(relPath, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+
+	isThumb := r.URL.Query().Get("thumb") == "1" ||
+		r.URL.Query().Get("size") == "thumb" ||
+		strings.HasPrefix(relPath, "thumb/")
+
+	rawFilename := filepath.Base(relPath)
+	if rawFilename == "." || rawFilename == "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	origPath := filepath.Join(s.coversDir, rawFilename)
+
+	if !isThumb || strings.HasSuffix(strings.ToLower(rawFilename), ".svg") {
+		http.ServeFile(w, r, origPath)
+		return
+	}
+
+	// Directorio de almacenamiento en caché para miniaturas
+	thumbDir := filepath.Join(s.coversDir, "thumb")
+	_ = os.MkdirAll(thumbDir, 0755)
+	thumbPath := filepath.Join(thumbDir, rawFilename)
+
+	// 1. Si la miniatura ya existe en disco, servirla al instante sin CPU adicional
+	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+		w.Header().Set("Content-Type", "image/jpeg")
+		http.ServeFile(w, r, thumbPath)
+		return
+	}
+
+	// 2. Comprobar que existe la imagen original
+	origFile, err := os.Open(origPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer origFile.Close()
+
+	// 3. Decodificar la imagen original
+	img, _, err := image.Decode(origFile)
+	if err != nil {
+		http.ServeFile(w, r, origPath)
+		return
+	}
+
+	// 4. Escalar mediante muestreo bilineal a un máximo de 240x240 píxeles
+	thumbImg := resizeToThumbnail(img, 240)
+
+	// 5. Persistir en disco en formato JPEG calidad 80 (peso ligero 8-15KB)
+	tmpFile, err := os.CreateTemp(thumbDir, "thumb_*.tmp")
+	if err == nil {
+		tmpPath := tmpFile.Name()
+		if encErr := jpeg.Encode(tmpFile, thumbImg, &jpeg.Options{Quality: 80}); encErr == nil {
+			_ = tmpFile.Close()
+			_ = os.Rename(tmpPath, thumbPath)
+		} else {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}
+
+	// 6. Servir archivo de miniatura si se guardó, o escribir en flujo directamente
+	if _, err := os.Stat(thumbPath); err == nil {
+		w.Header().Set("Content-Type", "image/jpeg")
+		http.ServeFile(w, r, thumbPath)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	_ = jpeg.Encode(w, thumbImg, &jpeg.Options{Quality: 80})
 }
 
 // resolvePathThroughSymlinks resuelve rutas absolutas siguiendo symlinks incluso cuando el último nodo aún no existe en disco.

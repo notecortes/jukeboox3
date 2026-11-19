@@ -17,7 +17,7 @@ export function escapeHtml(str) {
 }
 
 // sanitizeCoverURL valida que una URL de carátula o logotipo sea relativa segura (/assets/, /api/covers/) o http(s) pública sin caracteres peligrosos.
-export function sanitizeCoverURL(rawURL, fallback = DEFAULT_COVER_URL) {
+export function sanitizeCoverURL(rawURL, fallback = DEFAULT_COVER_URL, thumb = false) {
   if (!rawURL || typeof rawURL !== 'string') {
     return fallback;
   }
@@ -26,7 +26,11 @@ export function sanitizeCoverURL(rawURL, fallback = DEFAULT_COVER_URL) {
     return fallback;
   }
   if (clean.startsWith('/assets/') || clean.startsWith('/api/covers/')) {
-    return clean.includes('..') ? fallback : clean;
+    if (clean.includes('..')) return fallback;
+    if (thumb && clean.startsWith('/api/covers/') && !clean.endsWith('.svg')) {
+      return clean.includes('?') ? `${clean}&thumb=1` : `${clean}?thumb=1`;
+    }
+    return clean;
   }
   try {
     const parsed = new URL(clean, window.location.origin);
@@ -37,6 +41,11 @@ export function sanitizeCoverURL(rawURL, fallback = DEFAULT_COVER_URL) {
     return fallback;
   }
   return fallback;
+}
+
+// sanitizeThumbnailURL devuelve la URL de carátula con solicitud de miniatura optimizada (?thumb=1) para rejillas y listados.
+export function sanitizeThumbnailURL(rawURL, fallback = DEFAULT_COVER_URL) {
+  return sanitizeCoverURL(rawURL, fallback, true);
 }
 
 // sanitizeHTTPSRedirectURL valida que una URL de acceso HTTPS devuelta por la API use exclusivamente esquema https:.

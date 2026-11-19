@@ -8,11 +8,11 @@ RUN apk add --no-cache gcc musl-dev
 # Cache de dependencias y precompilación de SQLite C (evita recompilar 250k líneas C en cada cambio)
 COPY go.mod go.sum ./
 RUN go mod download
-RUN CGO_ENABLED=1 GOOS=linux go build -p 2 github.com/mattn/go-sqlite3
+RUN CGO_ENABLED=1 GOOS=linux go build -tags "sqlite_fts5" -p 2 github.com/mattn/go-sqlite3
 
 # Copiar código fuente y compilar binario optimizado (límite -p 2 para proteger la RAM de la RPi)
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -p 2 -ldflags="-s -w" -o /app/aurabox main.go
+RUN CGO_ENABLED=1 GOOS=linux go build -tags "sqlite_fts5" -p 2 -ldflags="-s -w" -o /app/aurabox main.go
 
 # Imagen de producción ultraligera
 FROM alpine:latest

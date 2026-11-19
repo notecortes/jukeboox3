@@ -884,6 +884,65 @@ func TestPlaylistM3UExportImport(t *testing.T) {
 	}
 }
 
+// TestFTS5Search verifica la búsqueda ultrarrápida a texto completo y sincronización de índices.
+func TestFTS5Search(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_fts5.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	// Insertar pistas
+	t1 := &Track{
+		Path:     "/music/local/queen_bohemian.flac",
+		Filename: "queen_bohemian.flac",
+		Title:    "Bohemian Rhapsody",
+		Artist:   "Queen",
+		Album:    "A Night at the Opera",
+		Genre:    "Rock",
+	}
+	t2 := &Track{
+		Path:     "/music/local/queen_dont_stop.flac",
+		Filename: "queen_dont_stop.flac",
+		Title:    "Don't Stop Me Now",
+		Artist:   "Queen",
+		Album:    "Jazz",
+		Genre:    "Rock",
+	}
+	t3 := &Track{
+		Path:     "/music/local/daft_punk_around.flac",
+		Filename: "daft_punk_around.flac",
+		Title:    "Around the World",
+		Artist:   "Daft Punk",
+		Album:    "Homework",
+		Genre:    "Electronic",
+	}
+
+	_ = database.UpsertTrack(t1)
+	_ = database.UpsertTrack(t2)
+	_ = database.UpsertTrack(t3)
+
+	// Búsqueda por prefijo de título "Bohem"
+	tracks, _, _, err := database.Search("Bohem")
+	if err != nil {
+		t.Fatalf("Search('Bohem') falló: %v", err)
+	}
+	if len(tracks) != 1 || tracks[0].Title != "Bohemian Rhapsody" {
+		t.Fatalf("Se esperaba 1 resultado para 'Bohem', obtenidos %d (%+v)", len(tracks), tracks)
+	}
+
+	// Búsqueda por artista "Queen"
+	qTracks, _, _, err := database.Search("Queen")
+	if err != nil {
+		t.Fatalf("Search('Queen') falló: %v", err)
+	}
+	if len(qTracks) != 2 {
+		t.Fatalf("Se esperaban 2 canciones de Queen, obtenidas %d", len(qTracks))
+	}
+}
+
+
 
 
 

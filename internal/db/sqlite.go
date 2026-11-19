@@ -24,6 +24,7 @@ type DB struct {
 	conn     *sql.DB
 	readConn *sql.DB
 	writeMu  sync.Mutex
+	hasFTS5  bool
 }
 
 // isMemorySQLiteDSN detecta si la ruta de SQLite apunta a una base de datos efímera en memoria.
@@ -285,6 +286,39 @@ func (d *DB) createSchema() error {
 	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_podcasts_favorite ON podcasts(favorite)`)
 	_, _ = d.conn.Exec(`ALTER TABLE podcast_episodes ADD COLUMN favorite INTEGER DEFAULT 0`)
 	_, _ = d.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_podcast_episodes_favorite ON podcast_episodes(favorite)`)
+
+	// Inicialización del motor de búsqueda SQLite FTS5 y triggers de sincronización
+	ftsSchema := `
+	CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
+		title,
+		artist,
+		album,
+		genre,
+		content='tracks',
+		content_rowid='id'
+	);
+
+	CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks BEGIN
+		INSERT INTO tracks_fts(rowid, title, artist, album, genre) VALUES (new.id, new.title, new.artist, new.album, new.genre);
+	END;
+	CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
+		INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre) VALUES('delete', old.id, old.title, old.artist, old.album, old.genre);
+	END;
+	CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
+		INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre) VALUES('delete', old.id, old.title, old.artist, old.album, old.genre);
+		INSERT INTO tracks_fts(rowid, title, artist, album, genre) VALUES (new.id, new.title, new.artist, new.album, new.genre);
+	END;
+	`
+	if _, ftsErr := d.conn.Exec(ftsSchema); ftsErr == nil {
+		d.hasFTS5 = true
+		var ftsCount int
+		_ = d.conn.QueryRow("SELECT COUNT(*) FROM tracks_fts").Scan(&ftsCount)
+		if ftsCount == 0 {
+			_, _ = d.conn.Exec("INSERT OR IGNORE INTO tracks_fts(rowid, title, artist, album, genre) SELECT id, title, artist, album, genre FROM tracks")
+		}
+	} else {
+		d.hasFTS5 = false
+	}
 
 	return nil
 }
@@ -1129,23 +1163,67 @@ func (d *DB) GetTracksByIDs(ids []int64) ([]Track, error) {
 	return tracks, nil
 }
 
-// Search efectúa búsquedas instantáneas en pistas, álbumes y artistas con coincidencia parcial.
-func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
-	pattern := "%" + escapeLikePattern(strings.TrimSpace(query)) + "%"
-	rDB := d.reader()
+// buildFTS5Query sanitiza y estructura los términos de búsqueda como prefijos FTS5.
+func buildFTS5Query(raw string) string {
+	terms := strings.Fields(strings.TrimSpace(raw))
+	if len(terms) == 0 {
+		return ""
+	}
+	var clean []string
+	for _, term := range terms {
+		t := strings.Map(func(r rune) rune {
+			if r == '"' || r == '*' || r == ':' || r == '^' || r == '(' || r == ')' || r == '{' || r == '}' || r == '[' || r == ']' {
+				return -1
+			}
+			return r
+		}, term)
+		t = strings.TrimSpace(t)
+		if t != "" {
+			clean = append(clean, `"`+t+`"*`)
+		}
+	}
+	return strings.Join(clean, " ")
+}
 
-	// Pistas
-	tRows, err := rDB.Query(`
-		SELECT id, path, filename, title, artist, album, album_artist, genre,
-		       year, duration, track_number, bitrate, sample_rate, format,
-		       source, cover_url, favorite, play_count, bpm, created_at
-		FROM tracks
-		WHERE title LIKE ? ESCAPE '\' OR artist LIKE ? ESCAPE '\' OR album LIKE ? ESCAPE '\' OR genre LIKE ? ESCAPE '\'
-		ORDER BY play_count DESC, title ASC
-		LIMIT 25
-	`, pattern, pattern, pattern, pattern)
-	if err != nil {
-		return nil, nil, nil, err
+// Search efectúa búsquedas instantáneas en pistas, álbumes y artistas con motor FTS5 y respaldo LIKE.
+func (d *DB) Search(query string) ([]Track, []Album, []Artist, error) {
+	rDB := d.reader()
+	var tRows *sql.Rows
+	var err error
+
+	// 1. Intento de búsqueda ultrarrápida indexada mediante FTS5 (si no contiene comodines literales % o _)
+	ftsQuery := buildFTS5Query(query)
+	if d.hasFTS5 && ftsQuery != "" && !strings.ContainsAny(query, "%_") {
+		tRows, err = rDB.Query(`
+			SELECT t.id, t.path, t.filename, t.title, t.artist, t.album, t.album_artist, t.genre,
+			       t.year, t.duration, t.track_number, t.bitrate, t.sample_rate, t.format,
+			       t.source, t.cover_url, t.favorite, t.play_count, t.bpm, t.created_at
+			FROM tracks t
+			JOIN tracks_fts f ON t.id = f.rowid
+			WHERE tracks_fts MATCH ?
+			ORDER BY bm25(tracks_fts), t.play_count DESC, t.title ASC
+			LIMIT 25
+		`, ftsQuery)
+		if err != nil {
+			tRows = nil
+		}
+	}
+
+	// 2. Fallback a búsqueda LIKE si FTS5 no está disponible o la consulta falló
+	pattern := "%" + escapeLikePattern(strings.TrimSpace(query)) + "%"
+	if tRows == nil {
+		tRows, err = rDB.Query(`
+			SELECT id, path, filename, title, artist, album, album_artist, genre,
+			       year, duration, track_number, bitrate, sample_rate, format,
+			       source, cover_url, favorite, play_count, bpm, created_at
+			FROM tracks
+			WHERE title LIKE ? ESCAPE '\' OR artist LIKE ? ESCAPE '\' OR album LIKE ? ESCAPE '\' OR genre LIKE ? ESCAPE '\'
+			ORDER BY play_count DESC, title ASC
+			LIMIT 25
+		`, pattern, pattern, pattern, pattern)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
 	tracks := make([]Track, 0)

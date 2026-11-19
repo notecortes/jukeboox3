@@ -5,7 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe, notifyListeners, updatePlayerState } from './state.js';
-import { escapeHtml, sanitizeCoverURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
+import { escapeHtml, sanitizeCoverURL, sanitizeThumbnailURL, sanitizeHTTPSRedirectURL } from './sanitize.js';
 import { formatTime, renderSleepTimerUI, showToast, parseDSPBands, formatEQPresetString, renderEQSliders, syncSettingsAudioControls } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
@@ -488,7 +488,7 @@ function renderAlbumCardsChunked(container, albums, isList, initialBatchSize = 4
     for (let i = currentIndex; i < end; i++) {
       const album = albums[i];
       const isSelected = selectedAlbumIds.has(album.id);
-      const cover = sanitizeCoverURL(album.cover_url);
+      const cover = sanitizeThumbnailURL(album.cover_url);
       const displayTitle = cleanDisplayAlbumTitle(album.title);
 
       if (!isList) {
@@ -854,7 +854,7 @@ async function openArtistDetail(artistName, options = {}) {
       albums.forEach((alb) => {
         const card = document.createElement('div');
         card.className = 'album-card';
-        const cover = sanitizeCoverURL(alb.cover_url);
+        const cover = sanitizeThumbnailURL(alb.cover_url);
         const displayTitle = cleanDisplayAlbumTitle(alb.title);
         card.innerHTML = `
           <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
@@ -886,7 +886,7 @@ async function openArtistDetail(artistName, options = {}) {
 function buildGenreCategoryCard(cat) {
   const card = document.createElement('div');
   card.className = 'genre-card';
-  const cover = sanitizeCoverURL(cat.cover_url);
+  const cover = sanitizeThumbnailURL(cat.cover_url);
   const albumCount = Number(cat.album_count || 0);
   const trackCount = Number(cat.track_count || 0);
   const albumLabel = albumCount === 1 ? '1 álbum' : `${albumCount.toLocaleString()} álbumes`;
@@ -1113,7 +1113,7 @@ async function openGenreDetail(catType, catValue, label = '', options = {}) {
         albums.forEach((alb) => {
           const card = document.createElement('div');
           card.className = 'album-card';
-          const cover = sanitizeCoverURL(alb.cover_url);
+          const cover = sanitizeThumbnailURL(alb.cover_url);
           const displayTitle = cleanDisplayAlbumTitle(alb.title);
           card.innerHTML = `
             <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(displayTitle)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
@@ -1752,7 +1752,7 @@ function renderSearchResults(container, data) {
     data.albums.forEach((album) => {
       const card = document.createElement('div');
       card.className = 'album-card';
-      const cover = sanitizeCoverURL(album.cover_url);
+      const cover = sanitizeThumbnailURL(album.cover_url);
       card.innerHTML = `
         <img class="album-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(album.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
         <div class="album-card-title">${escapeHtml(album.title)}</div>
@@ -1977,7 +1977,7 @@ function renderMixResultsCard(resultsArea, res, titleLabel, subtitleLabel) {
         ${res.tracks.map((t, idx) => `
           <div class="track-row" style="padding:6px 10px;">
             <span class="track-number" style="font-size:0.75rem;">${idx + 1}</span>
-            <img src="${escapeHtml(sanitizeCoverURL(t.cover_url))}" alt="" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
+            <img src="${escapeHtml(sanitizeThumbnailURL(t.cover_url))}" alt="" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg" style="width:32px; height:32px; border-radius:4px; object-fit:cover; margin-right:8px;"/>
             <div class="track-info">
               <div class="track-title" style="font-size:0.85rem;">${escapeHtml(t.title)}</div>
               <div class="track-artist" style="font-size:0.72rem;">${escapeHtml(t.artist)} • ${escapeHtml(t.album)}</div>
