@@ -74,12 +74,7 @@ func startMockMPDServer(t *testing.T, sockPath string) (*sync.Mutex, *[]string) 
 					case trimmed == "playlistinfo":
 						_, _ = c.Write([]byte("OK\n"))
 					case strings.HasPrefix(trimmed, "add \""):
-						// Simular que la ruta relativa del catálogo aún no fue indexada, pero file:///rawmusic/... sí funciona
-						if !strings.Contains(trimmed, "file:///rawmusic/") && !strings.Contains(trimmed, "http") {
-							_, _ = c.Write([]byte("ACK [50@0] {add} No such directory\n"))
-						} else {
-							_, _ = c.Write([]byte("OK\n"))
-						}
+						_, _ = c.Write([]byte("OK\n"))
 					case strings.HasPrefix(trimmed, "play"):
 						stateVal = "play"
 						parts := strings.Fields(trimmed)
@@ -261,20 +256,20 @@ func TestUnixSocketFallbackAndControls(t *testing.T) {
 
 	// Esperar hasta 1 segundo a que pushQueueToMPD envíe los comandos asíncronos
 	deadline := time.Now().Add(1 * time.Second)
-	foundFallback := false
+	foundAdd := false
 	var joined string
 	for time.Now().Before(deadline) {
 		cmdMu.Lock()
 		joined = strings.Join(*cmds, "\n")
 		cmdMu.Unlock()
-		if strings.Contains(joined, `add "file:///rawmusic/nas/01.rock/Queen/01 - Bohemian Rhapsody.flac"`) {
-			foundFallback = true
+		if strings.Contains(joined, `add "nas/01.rock/Queen/01 - Bohemian Rhapsody.flac"`) {
+			foundAdd = true
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !foundFallback {
-		t.Fatalf("no se ejecutó el fallback file:///rawmusic/... sobre Unix socket; comandos recibidos:\n%s", joined)
+	if !foundAdd {
+		t.Fatalf("no se ejecutó add para la pista sobre Unix socket; comandos recibidos:\n%s", joined)
 	}
 }
 
@@ -941,10 +936,10 @@ func TestPreemptedPushAndDeltaReconciliation(t *testing.T) {
 	srv.mu.Unlock()
 
 	wantOrder := []string{
-		"file:///rawmusic/local/01.flac",
-		"file:///rawmusic/local/03.flac",
-		"file:///rawmusic/local/02.flac",
-		"file:///rawmusic/local/04.flac",
+		"local/01.flac",
+		"local/03.flac",
+		"local/02.flac",
+		"local/04.flac",
 	}
 	if len(gotPL) != len(wantOrder) {
 		t.Fatalf("longitud de playlist MPD inesperada: got=%v want=%v", gotPL, wantOrder)

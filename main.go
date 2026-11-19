@@ -2109,8 +2109,28 @@ func (s *Server) handleAudioStream(w http.ResponseWriter, r *http.Request) {
 	if client == nil {
 		client = newAudioStreamClient()
 	}
-	resp, err := client.Do(req)
-	if err != nil {
+
+	var resp *http.Response
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, lastErr = client.Do(req)
+		if lastErr == nil && resp != nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+			resp = nil
+		}
+		if attempt < 2 {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(150 * time.Millisecond):
+			}
+		}
+	}
+
+	if resp == nil {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("El stream de audio no está activo actualmente. Inicia una pista en AuraBox para escuchar."))

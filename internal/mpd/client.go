@@ -647,9 +647,7 @@ func (c *Client) sendRawCommand(cmd string) ([]string, error) {
 
 	isUnix := c.isUsingUnixSocketLocked()
 	c.usingUnixSocket.Store(isUnix)
-	if !isUnix {
-		cmd = sanitizeCommandForTCP(cmd)
-	}
+	cmd = sanitizeCommandForTCP(cmd)
 
 	deadlineDur := mpdCommandDeadline(cmd)
 	execCmd := func() ([]string, error) {
@@ -725,7 +723,7 @@ func isMPDAckError(err error) bool {
 	return err != nil && strings.HasPrefix(err.Error(), "mpd ack error:")
 }
 
-// addTrackToMPD añade una pista priorizando file:///rawmusic/... en socket Unix para evitar latencia de base MPD.
+// addTrackToMPD añade una pista a MPD usando su ruta relativa y actualizando el directorio en MPD si no ha sido indexado.
 func (c *Client) addTrackToMPD(t db.Track) error {
 	if strings.HasPrefix(t.Path, "http://") || strings.HasPrefix(t.Path, "https://") {
 		resolvedURLs, err := ResolveStreamURLs(t.Path)
@@ -743,37 +741,25 @@ func (c *Client) addTrackToMPD(t db.Track) error {
 		return lastErr
 	}
 
-	relPath, rawURI := localMPDURIs(t.Path)
+	relPath, _ := localMPDURIs(t.Path)
 	if relPath == "" {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
-	isUnix := c.isUsingUnixSocketLocked()
-	if !isUnix && c.socketPath != "" {
-		c.tryUpgradeToUnixSocket()
-		isUnix = c.isUsingUnixSocketLocked()
-	}
-	c.usingUnixSocket.Store(isUnix)
-
-	var rawErr error
-	if isUnix && rawURI != "" {
-		_, rawErr = c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(rawURI)))
-		if rawErr == nil {
-			return nil
-		}
-		if !isMPDAckError(rawErr) {
-			return rawErr
-		}
-	}
-
 	_, err := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
-	if err != nil {
-		if rawErr != nil && strings.Contains(err.Error(), "No such directory") && !strings.Contains(rawErr.Error(), "via TCP") {
-			return rawErr
+	if err != nil && isMPDAckError(err) && (strings.Contains(err.Error(), "No such directory") || strings.Contains(err.Error(), "Not found")) {
+		// MPD puede no haber indexado aún esta subcarpeta; forzar actualización rápida del directorio padre y reintentar
+		dir := filepath.Dir(relPath)
+		if dir != "" && dir != "." {
+			_, _ = c.sendRawCommand(fmt.Sprintf("update %s\n", mpdQuote(dir)))
+			time.Sleep(120 * time.Millisecond)
+			_, retryErr := c.sendRawCommand(fmt.Sprintf("add %s\n", mpdQuote(relPath)))
+			if retryErr == nil {
+				return nil
+			}
 		}
-		return err
 	}
-	return nil
+	return err
 }
 
 // addTrackToMPDAt inserta una pista en una posición concreta usando addid para saltos instantáneos en play_now.
@@ -799,37 +785,25 @@ func (c *Client) addTrackToMPDAt(t db.Track, pos int) error {
 		return lastErr
 	}
 
-	relPath, rawURI := localMPDURIs(t.Path)
+	relPath, _ := localMPDURIs(t.Path)
 	if relPath == "" {
 		return fmt.Errorf("ruta de pista vacía")
 	}
 
-	isUnix := c.isUsingUnixSocketLocked()
-	if !isUnix && c.socketPath != "" {
-		c.tryUpgradeToUnixSocket()
-		isUnix = c.isUsingUnixSocketLocked()
-	}
-	c.usingUnixSocket.Store(isUnix)
-
-	var rawErr error
-	if isUnix && rawURI != "" {
-		_, rawErr = c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(rawURI), posSuffix))
-		if rawErr == nil {
-			return nil
-		}
-		if !isMPDAckError(rawErr) {
-			return rawErr
-		}
-	}
-
 	_, err := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
-	if err != nil {
-		if rawErr != nil && strings.Contains(err.Error(), "No such directory") && !strings.Contains(rawErr.Error(), "via TCP") {
-			return rawErr
+	if err != nil && isMPDAckError(err) && (strings.Contains(err.Error(), "No such directory") || strings.Contains(err.Error(), "Not found")) {
+		// MPD puede no haber indexado aún esta subcarpeta; forzar actualización rápida del directorio padre y reintentar
+		dir := filepath.Dir(relPath)
+		if dir != "" && dir != "." {
+			_, _ = c.sendRawCommand(fmt.Sprintf("update %s\n", mpdQuote(dir)))
+			time.Sleep(120 * time.Millisecond)
+			_, retryErr := c.sendRawCommand(fmt.Sprintf("addid %s%s\n", mpdQuote(relPath), posSuffix))
+			if retryErr == nil {
+				return nil
+			}
 		}
-		return err
 	}
-	return nil
+	return err
 }
 
 // TriggerLibraryUpdate solicita de forma asíncrona a MPD reindexar su base de datos interna como respaldo para sesiones TCP.
