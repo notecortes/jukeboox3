@@ -2688,11 +2688,13 @@ func (s *Server) handlePodcastEpisodePlayed(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handlePodcastPlay encola o reproduce inmediatamente un episodio en el motor MPD.
+// handlePodcastPlay encola o reproduce inmediatamente un episodio en el motor MPD con reanudación de posición.
 func (s *Server) handlePodcastPlay(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		EpisodeID int64  `json:"episode_id"`
-		Mode      string `json:"mode"` // "replace" (por defecto), "next", "append"
+		EpisodeID int64   `json:"episode_id"`
+		Mode      string  `json:"mode"` // "replace" (por defecto), "next", "append"
+		FromStart bool    `json:"from_start,omitempty"`
+		Position  float64 `json:"position,omitempty"`
 	}
 	if err := decodeJSONBody(w, r, &payload); err != nil || payload.EpisodeID <= 0 {
 		http.Error(w, "episode_id inválido o faltante", http.StatusBadRequest)
@@ -2741,7 +2743,24 @@ func (s *Server) handlePodcastPlay(w http.ResponseWriter, r *http.Request) {
 	} else if mode == "append" {
 		enqueueMode = "append"
 	}
+
+	// Calcular punto de reanudación automática si no se solicitó iniciar de cero
+	seekPos := 0.0
+	if payload.Position > 0 {
+		seekPos = payload.Position
+	} else if !payload.FromStart && ep.Progress > 5 && (!ep.Played || (ep.Duration > 0 && ep.Progress < ep.Duration-15)) {
+		seekPos = ep.Progress
+	}
+
 	s.player.EnqueueTracks([]db.Track{tr}, enqueueMode)
+
+	// Desplazar reproducción de forma no bloqueante tras el encolado
+	if seekPos > 0 && enqueueMode == "replace" {
+		go func(targetSec float64) {
+			time.Sleep(350 * time.Millisecond)
+			s.player.Seek(targetSec)
+		}(seekPos)
+	}
 
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"status":     "playing",
@@ -2749,6 +2768,8 @@ func (s *Server) handlePodcastPlay(w http.ResponseWriter, r *http.Request) {
 		"title":      ep.Title,
 		"podcast":    pod.Title,
 		"stream_url": ep.EnclosureURL,
+		"resumed":    seekPos > 0,
+		"position":   seekPos,
 	})
 }
 

@@ -1882,6 +1882,22 @@
   display: block;
 }
 
+.podcast-episode-progress {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 6px 0 10px 0;
+}
+
+.podcast-episode-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, #10b981 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
 .podcast-episode-actions {
   display: flex;
   flex-wrap: wrap;

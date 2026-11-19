@@ -28,6 +28,50 @@ let swallowAmbientWakeClick = false;
 let lastAutoFetchKey = '';
 let autoFetchTimer = null;
 
+// Velocidades de reproducción para podcasts
+const PODCAST_SPEEDS = [1.0, 1.25, 1.5, 2.0, 0.8];
+let activePodcastSpeed = (() => {
+  if (typeof localStorage === 'undefined') return 1.0;
+  const stored = parseFloat(localStorage.getItem('aurabox_podcast_speed') || '1.0');
+  return PODCAST_SPEEDS.includes(stored) ? stored : 1.0;
+})();
+let lastPodcastProgressSync = 0;
+let lastSyncedPodcastTrackId = null;
+
+// cyclePodcastPlaybackSpeed avanza al siguiente paso de velocidad para podcasts y lo guarda en almacenamiento local.
+export function cyclePodcastPlaybackSpeed() {
+  const currentIdx = PODCAST_SPEEDS.indexOf(activePodcastSpeed);
+  const nextIdx = (currentIdx + 1) % PODCAST_SPEEDS.length;
+  activePodcastSpeed = PODCAST_SPEEDS[nextIdx];
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('aurabox_podcast_speed', String(activePodcastSpeed));
+  }
+  applyPodcastPlaybackSpeed(activePodcastSpeed);
+  showToast(`Velocidad de podcast: ${activePodcastSpeed}x`);
+}
+
+// applyPodcastPlaybackSpeed aplica la velocidad seleccionada al elemento de audio web preservando el tono.
+export function applyPodcastPlaybackSpeed(speed = null) {
+  if (speed !== null) {
+    activePodcastSpeed = Number(speed);
+  }
+  const audio = document.getElementById('webAudioPlayer');
+  if (audio) {
+    audio.playbackRate = activePodcastSpeed;
+    if ('preservesPitch' in audio) {
+      audio.preservesPitch = true;
+    } else if ('mozPreservesPitch' in audio) {
+      audio.mozPreservesPitch = true;
+    } else if ('webkitPreservesPitch' in audio) {
+      audio.webkitPreservesPitch = true;
+    }
+  }
+  const btn = document.getElementById('npBtnSpeed');
+  if (btn) {
+    btn.textContent = `${activePodcastSpeed}x`;
+  }
+}
+
 // isLiveStreamTrack determina si una pista corresponde a una radio web o flujo HTTP en directo sin duración finita.
 export function isLiveStreamTrack(track) {
   if (!track) return false;
@@ -236,6 +280,15 @@ function bindNowPlayingControls() {
   const badgeLyrics = document.getElementById('npBadgeLyrics');
   if (badgeLyrics) {
     badgeLyrics.addEventListener('click', toggleLyricsView);
+  }
+
+  // Selector cíclico de velocidad de reproducción para Podcasts (0.8x, 1.0x, 1.25x, 1.5x, 2.0x)
+  const btnSpeed = document.getElementById('npBtnSpeed');
+  if (btnSpeed) {
+    btnSpeed.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cyclePodcastPlaybackSpeed();
+    });
   }
 
   const artContainer = document.getElementById('npArtworkContainer');
@@ -940,6 +993,16 @@ export function renderNowPlaying() {
     }
   }
 
+  // Control de velocidad cíclica para episodios de podcast (0.8x a 2.0x)
+  const isPodcast = (track && track.source === 'podcast');
+  const speedBtn = document.getElementById('npBtnSpeed');
+  if (speedBtn) {
+    speedBtn.classList.toggle('hidden', !isPodcast);
+    if (isPodcast) {
+      speedBtn.textContent = `${activePodcastSpeed}x`;
+    }
+  }
+
   // Ocultar corazón en emisoras en directo (no tienen ID de pista en tabla tracks)
   const btnFav = document.getElementById('npBtnFav');
   if (btnFav) {
@@ -1031,6 +1094,18 @@ export function tickProgress() {
       lastSleepSyncAt += dec * 1000;
       state.player.sleep_timer_sec = Math.max(0, state.player.sleep_timer_sec - dec);
       renderSleepTimerUI();
+    }
+  }
+
+  // Sincronización periódica de avance en episodios de podcast (cada 5 segundos)
+  const currentTrack = state.player.current_track;
+  if (state.player.status === 'play' && currentTrack && currentTrack.source === 'podcast' && currentTrack.id > 0) {
+    const nowMs = Date.now();
+    if (nowMs - lastPodcastProgressSync >= 5000) {
+      lastPodcastProgressSync = nowMs;
+      lastSyncedPodcastTrackId = currentTrack.id;
+      const isFinished = (dur > 0 && elapsed >= (dur - 15));
+      api.updatePodcastProgress(currentTrack.id, Math.floor(elapsed), isFinished ? true : null).catch(() => {});
     }
   }
 }

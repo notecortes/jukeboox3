@@ -456,11 +456,19 @@ export function toggleEpisodePlayed(episodeId, played = null) {
   });
 }
 
-// playPodcastEpisode reproduce o encola un episodio en el motor MPD.
-export function playPodcastEpisode(episodeId, mode = 'replace') {
+// playPodcastEpisode reproduce o encola un episodio en el motor MPD con soporte para reanudación de posición.
+export function playPodcastEpisode(episodeId, mode = 'replace', fromStart = false, position = 0) {
+  const payload = {
+    episode_id: Number(episodeId),
+    mode,
+    from_start: Boolean(fromStart)
+  };
+  if (position > 0) {
+    payload.position = Number(position);
+  }
   return requestHelper('/podcasts/play', {
     method: 'POST',
-    body: JSON.stringify({ episode_id: episodeId, mode })
+    body: JSON.stringify(payload)
   });
 }
 

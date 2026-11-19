@@ -871,5 +871,105 @@ func TestPlaylistAPIEndpoints(t *testing.T) {
 	}
 }
 
+// TestPodcastPlayResumeAndProgress verifica la reanudación de podcasts y la sincronización de progreso.
+func TestPodcastPlayResumeAndProgress(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	hub := events.NewHub()
+	player := mpd.NewClient(filepath.Join(t.TempDir(), "missing.sock"), "127.0.0.1", "0", hub, database)
+	srv := &Server{
+		database:  database,
+		player:    player,
+		eventsHub: hub,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/podcasts/play", srv.handlePodcastPlay)
+	mux.HandleFunc("/api/podcasts/progress", srv.handlePodcastProgress)
+
+	// Guardar podcast de prueba
+	podID, err := database.SavePodcast(&db.Podcast{
+		Title:    "Podcast de Prueba",
+		Author:   "Autor Prueba",
+		FeedURL:  "https://ejemplo.com/feed.xml",
+		CoverURL: "https://ejemplo.com/cover.jpg",
+	})
+	if err != nil {
+		t.Fatalf("SavePodcast falló: %v", err)
+	}
+
+	err = database.SavePodcastEpisodes(podID, []db.PodcastEpisode{
+		{
+			GUID:         "ep-resume-1",
+			Title:        "Episodio Con Progreso",
+			EnclosureURL: "https://ejemplo.com/audio/ep.mp3",
+			Duration:     1800,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SavePodcastEpisodes falló: %v", err)
+	}
+
+	ep, _, err := database.GetPodcastEpisodeByEnclosureURL("https://ejemplo.com/audio/ep.mp3")
+	if err != nil || ep == nil {
+		t.Fatalf("GetPodcastEpisodeByEnclosureURL falló: %v", err)
+	}
+
+	// 1. Guardar progreso previo de 125 segundos
+	progBody := fmt.Sprintf(`{"episode_id":%d,"progress":125.0}`, ep.ID)
+	progReq := httptest.NewRequest(http.MethodPost, "/api/podcasts/progress", bytes.NewBufferString(progBody))
+	progReq.Header.Set("Content-Type", "application/json")
+	progRec := httptest.NewRecorder()
+	mux.ServeHTTP(progRec, progReq)
+	if progRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/podcasts/progress falló con %d", progRec.Code)
+	}
+
+	// 2. Reproducir sin from_start: debe reanudar en segundo 125
+	playBody := fmt.Sprintf(`{"episode_id":%d,"mode":"replace"}`, ep.ID)
+	playReq := httptest.NewRequest(http.MethodPost, "/api/podcasts/play", bytes.NewBufferString(playBody))
+	playReq.Header.Set("Content-Type", "application/json")
+	playRec := httptest.NewRecorder()
+	mux.ServeHTTP(playRec, playReq)
+	if playRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/podcasts/play falló con %d", playRec.Code)
+	}
+
+	var resPlay struct {
+		Status   string  `json:"status"`
+		Resumed  bool    `json:"resumed"`
+		Position float64 `json:"position"`
+	}
+	if err := json.Unmarshal(playRec.Body.Bytes(), &resPlay); err != nil {
+		t.Fatalf("JSON inválido: %v", err)
+	}
+	if !resPlay.Resumed || resPlay.Position != 125.0 {
+		t.Fatalf("Reanudación fallida, esperada resumed=true pos=125, obtenida: %+v", resPlay)
+	}
+
+	// 3. Reproducir con from_start=true: debe iniciar desde cero
+	fromStartBody := fmt.Sprintf(`{"episode_id":%d,"mode":"replace","from_start":true}`, ep.ID)
+	startReq := httptest.NewRequest(http.MethodPost, "/api/podcasts/play", bytes.NewBufferString(fromStartBody))
+	startReq.Header.Set("Content-Type", "application/json")
+	startRec := httptest.NewRecorder()
+	mux.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/podcasts/play con from_start falló con %d", startRec.Code)
+	}
+	var resStart struct {
+		Resumed  bool    `json:"resumed"`
+		Position float64 `json:"position"`
+	}
+	_ = json.Unmarshal(startRec.Body.Bytes(), &resStart)
+	if resStart.Resumed || resStart.Position != 0.0 {
+		t.Fatalf("from_start falló, esperado resumed=false pos=0, obtenida: %+v", resStart)
+	}
+}
+
+
 
 

@@ -3752,6 +3752,11 @@ async function openPodcastDetail(podcastId) {
         item.className = `podcast-episode-item ${ep.played ? 'played' : ''}`;
         const durFormatted = ep.duration > 0 ? formatTime(ep.duration) : '';
         const dateStr = ep.pub_date ? ep.pub_date.substring(0, 16) : '';
+        const hasProgress = (ep.progress > 5 && !ep.played);
+        const progressFormatted = hasProgress ? formatTime(ep.progress) : '';
+        const dur = ep.duration || 0;
+        const progressPct = (hasProgress && dur > 0) ? Math.min(100, Math.round((ep.progress / dur) * 100)) : 0;
+        const remainingFormatted = (hasProgress && dur > ep.progress) ? formatTime(dur - ep.progress) : '';
 
         item.innerHTML = `
           <div class="podcast-episode-top">
@@ -3762,11 +3767,17 @@ async function openPodcastDetail(podcastId) {
               <div class="podcast-episode-meta">
                 ${dateStr ? `<span>📅 ${escapeHtml(dateStr)}</span>` : ''}
                 ${durFormatted ? `<span>⏱️ ${durFormatted}</span>` : ''}
+                ${hasProgress ? `<span style="color:#38bdf8; font-weight:600;">⏱️ En ${progressFormatted}${remainingFormatted ? ` (restan ${remainingFormatted})` : ''}</span>` : ''}
                 ${ep.played ? '<span style="color:#10b981; font-weight:600;">✓ Escuchado</span>' : ''}
                 ${ep.favorite ? '<span style="color:#ff4b72; font-weight:600;">❤️ Favorito</span>' : ''}
               </div>
             </div>
           </div>
+          ${hasProgress ? `
+            <div class="podcast-episode-progress" title="Progreso: ${progressPct}%">
+              <div class="podcast-episode-progress-fill" style="width: ${progressPct}%;"></div>
+            </div>
+          ` : ''}
           ${ep.description ? `
             <div class="podcast-episode-desc" id="epDesc-${ep.id}">
               ${escapeHtml(ep.description)}
@@ -3774,8 +3785,13 @@ async function openPodcastDetail(podcastId) {
           ` : ''}
           <div class="podcast-episode-actions">
             <button type="button" class="btn-secondary btn-play-ep" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700; height:32px; padding:0 12px; font-size:0.78rem;">
-              ▶ Reproducir
+              ${hasProgress ? `▶ Reanudar (${progressFormatted})` : '▶ Reproducir'}
             </button>
+            ${hasProgress && ep.progress > 15 ? `
+              <button type="button" class="btn-secondary btn-restart-ep" style="height:32px; padding:0 8px; font-size:0.75rem;" title="Reproducir desde el inicio">
+                ↺ Inicio
+              </button>
+            ` : ''}
             <button type="button" class="btn-secondary btn-queue-next" style="height:32px; padding:0 10px; font-size:0.75rem;">
               + Siguiente
             </button>
@@ -3798,8 +3814,12 @@ async function openPodcastDetail(podcastId) {
 
         // Reproducir / encolar
         item.querySelector('.btn-play-ep')?.addEventListener('click', () => {
-          api.playPodcastEpisode(ep.id, 'replace');
-          showToast(`Reproduciendo: ${ep.title}`);
+          api.playPodcastEpisode(ep.id, 'replace', false);
+          showToast(hasProgress ? `Reanudando: ${ep.title} (${progressFormatted})` : `Reproduciendo: ${ep.title}`);
+        });
+        item.querySelector('.btn-restart-ep')?.addEventListener('click', () => {
+          api.playPodcastEpisode(ep.id, 'replace', true);
+          showToast(`Reproduciendo desde el inicio: ${ep.title}`);
         });
         item.querySelector('.btn-queue-next')?.addEventListener('click', () => {
           api.playPodcastEpisode(ep.id, 'next');
