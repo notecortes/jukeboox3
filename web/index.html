@@ -79,6 +79,10 @@
           </span>
           <span class="dock-label">Ajustes</span>
         </button>
+        <button class="dock-item" id="btnDesktopShortcuts" title="Atajos de teclado (?)" type="button">
+          <span class="desktop-dock-icon">⌨️</span>
+          <span class="dock-label">Atajos</span>
+        </button>
       </nav>
 
       <div class="header-badges">
@@ -882,6 +886,70 @@
         <button class="btn-secondary" id="btnCloseContextMenu" style="width:100%; height:44px; margin-top:12px; justify-content:center;">
           Cancelar
         </button>
+      </div>
+    </div>
+
+    <!-- Modal de Atajos de Teclado y Control Remoto (?) -->
+    <div class="shortcuts-modal hidden" id="shortcutsModal" role="dialog" aria-labelledby="shortcutsModalTitle" aria-modal="true">
+      <div class="shortcuts-sheet">
+        <div class="shortcuts-header">
+          <div class="shortcuts-title" id="shortcutsModalTitle">⌨️ Atajos de Teclado y Control Remoto</div>
+          <button type="button" class="btn-close-modal" id="btnCloseShortcuts" title="Cerrar (Esc)">✕</button>
+        </div>
+        <div class="shortcuts-body">
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Reproducir / Pausar</span>
+            <span class="shortcut-keys"><kbd>Espacio</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Pista siguiente</span>
+            <span class="shortcut-keys"><kbd>K</kbd> / <kbd>→</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Pista anterior</span>
+            <span class="shortcut-keys"><kbd>J</kbd> / <kbd>←</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Subir volumen (+5%)</span>
+            <span class="shortcut-keys"><kbd>+</kbd> / <kbd>↑</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Bajar volumen (-5%)</span>
+            <span class="shortcut-keys"><kbd>-</kbd> / <kbd>↓</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Silenciar / Restaurar (Mute)</span>
+            <span class="shortcut-keys"><kbd>M</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Expandir Now Playing</span>
+            <span class="shortcut-keys"><kbd>F</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Ver / Ocultar Letras</span>
+            <span class="shortcut-keys"><kbd>L</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Reproducción aleatoria (Shuffle)</span>
+            <span class="shortcut-keys"><kbd>S</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Repetir pista</span>
+            <span class="shortcut-keys"><kbd>R</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Buscar en biblioteca</span>
+            <span class="shortcut-keys"><kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Ver esta ayuda de atajos</span>
+            <span class="shortcut-keys"><kbd>?</kbd></span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Cerrar ventanas y modales</span>
+            <span class="shortcut-keys"><kbd>Esc</kbd></span>
+          </div>
+        </div>
       </div>
     </div>
   </div>

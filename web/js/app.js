@@ -7,7 +7,7 @@ import * as api from './api.js';
 import { state, updatePlayerState, updateQueueState, notifyListeners } from './state.js';
 import { installImageFallbackListener } from './sanitize.js';
 import { initPlayer, showToast } from './player.js';
-import { initGestures } from './gestures.js';
+import { initGestures, openNowPlaying, closeNowPlaying } from './gestures.js';
 import { initQueue } from './queue.js';
 import { initLyrics } from './lyrics.js';
 import { initViews } from './views.js';
@@ -372,10 +372,33 @@ function initHistoryHandling() {
   });
 }
 
-// initKeyboardShortcuts habilita controles desde teclado físico / mandos multimedia y atajo Cmd+K.
+let preMuteVolume = null;
+
+// toggleShortcutsModal abre o cierra la ventana de ayuda con la guía de atajos de teclado y mando a distancia.
+export function toggleShortcutsModal(forceState = null) {
+  const modal = document.getElementById('shortcutsModal');
+  if (!modal) return;
+  const shouldOpen = (forceState !== null) ? Boolean(forceState) : modal.classList.contains('hidden');
+  modal.classList.toggle('hidden', !shouldOpen);
+}
+
+// initKeyboardShortcuts habilita controles desde teclado físico, mandos multimedia y control remoto por infrarrojos.
 function initKeyboardShortcuts() {
+  document.getElementById('btnCloseShortcuts')?.addEventListener('click', () => {
+    toggleShortcutsModal(false);
+  });
+  document.getElementById('btnDesktopShortcuts')?.addEventListener('click', () => {
+    toggleShortcutsModal(true);
+  });
+  const modal = document.getElementById('shortcutsModal');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) toggleShortcutsModal(false);
+    });
+  }
+
   window.addEventListener('keydown', (e) => {
-    // Atajo universal Cmd+K / Ctrl+K para abrir buscador omnibox
+    // 1. Atajo universal Cmd+K / Ctrl+K para abrir buscador omnibox
     if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       activateDockTab('search');
@@ -389,26 +412,150 @@ function initKeyboardShortcuts() {
       return;
     }
 
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // 2. Tecla Escape: deseleccionar campos o cerrar modales activos
+    if (e.key === 'Escape') {
+      const shortcutsModal = document.getElementById('shortcutsModal');
+      if (shortcutsModal && !shortcutsModal.classList.contains('hidden')) {
+        e.preventDefault();
+        toggleShortcutsModal(false);
+        return;
+      }
+      const npModal = document.getElementById('nowPlayingModal');
+      if (npModal && npModal.classList.contains('active')) {
+        e.preventDefault();
+        closeNowPlaying();
+        return;
+      }
+      const cMenu = document.getElementById('contextMenuModal');
+      if (cMenu && cMenu.classList.contains('active')) {
+        e.preventDefault();
+        cMenu.classList.remove('active');
+        return;
+      }
+      if (e.target && typeof e.target.blur === 'function') {
+        e.target.blur();
+      }
+      return;
+    }
 
-    switch (e.code) {
-      case 'Space':
+    // 3. Ignorar atajos cuando el foco está en un campo de texto o elemento editable
+    const tag = (e.target?.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
+      return;
+    }
+
+    // 4. Mapeo completo de controles de reproducción y volumen
+    switch (e.key) {
+      case ' ':
+      case 'Spacebar':
         e.preventDefault();
         api.toggle();
         break;
-      case 'ArrowRight':
-        api.next();
+
+      case 'k':
+      case 'K':
+        if (!e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          api.next();
+        }
         break;
-      case 'ArrowLeft':
+
+      case 'j':
+      case 'J':
+        e.preventDefault();
         api.prev();
         break;
+
+      case 'ArrowRight':
+        e.preventDefault();
+        api.next();
+        break;
+
+      case 'ArrowLeft':
+        e.preventDefault();
+        api.prev();
+        break;
+
+      case '+':
+      case '=':
       case 'ArrowUp':
         e.preventDefault();
         api.stepVolume(5);
         break;
+
+      case '-':
+      case '_':
       case 'ArrowDown':
         e.preventDefault();
         api.stepVolume(-5);
+        break;
+
+      case 'm':
+      case 'M': {
+        e.preventDefault();
+        const currentVol = Number(state.player.volume) || 0;
+        if (currentVol > 0) {
+          preMuteVolume = currentVol;
+          api.setVolume(0);
+          showToast('Silenciado (Mute)');
+        } else {
+          const restoreVol = preMuteVolume && preMuteVolume > 0 ? preMuteVolume : 40;
+          preMuteVolume = null;
+          api.setVolume(restoreVol);
+          showToast(`Volumen restaurado: ${restoreVol}%`);
+        }
+        break;
+      }
+
+      case 'f':
+      case 'F': {
+        e.preventDefault();
+        const npModal = document.getElementById('nowPlayingModal');
+        if (npModal?.classList.contains('active')) {
+          closeNowPlaying();
+        } else {
+          openNowPlaying();
+        }
+        break;
+      }
+
+      case 'l':
+      case 'L': {
+        e.preventDefault();
+        const npModal = document.getElementById('nowPlayingModal');
+        if (!npModal?.classList.contains('active')) {
+          openNowPlaying();
+        }
+        const badgeLyrics = document.getElementById('npBadgeLyrics');
+        if (badgeLyrics) badgeLyrics.click();
+        break;
+      }
+
+      case 's':
+      case 'S': {
+        e.preventDefault();
+        const btnShuffle = document.getElementById('npBtnShuffle');
+        if (btnShuffle) {
+          btnShuffle.click();
+        } else {
+          api.shuffleQueue().then(() => showToast('Cola barajada')).catch(() => {});
+        }
+        break;
+      }
+
+      case 'r':
+      case 'R': {
+        e.preventDefault();
+        const btnRepeat = document.getElementById('npBtnRepeat');
+        if (btnRepeat) {
+          btnRepeat.click();
+        }
+        break;
+      }
+
+      case '?':
+        e.preventDefault();
+        toggleShortcutsModal();
         break;
     }
   });

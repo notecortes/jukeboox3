@@ -1041,3 +1041,93 @@
     align-self: start;
   }
 }
+
+/* ==========================================================================
+   MODAL DE ATAJOS DE TECLADO Y CONTROL REMOTO
+   ========================================================================== */
+
+.shortcuts-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.shortcuts-modal.hidden {
+  display: none !important;
+}
+
+.shortcuts-sheet {
+  background: var(--bg-surface-elevated, #1a1a2e);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-lg, 16px);
+  width: min(520px, 94vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.shortcuts-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+}
+
+.shortcuts-body {
+  padding: 12px 20px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.shortcut-row:last-child {
+  border-bottom: none;
+}
+
+.shortcut-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary, #cbd5e1);
+}
+
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut-keys kbd, .shortcut-row kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: #38bdf8;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+}
