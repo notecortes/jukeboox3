@@ -27,6 +27,8 @@ let ambientInactivityTimer = null;
 let swallowAmbientWakeClick = false;
 let lastAutoFetchKey = '';
 let autoFetchTimer = null;
+let playerRenderFramePending = false;
+let lastAppliedBgCover = '';
 
 // Velocidades de reproducción para podcasts
 const PODCAST_SPEEDS = [1.0, 1.25, 1.5, 2.0, 0.8];
@@ -110,6 +112,20 @@ function formatLiveSubtitle(track, streamTitle, includeStation = true) {
   return `📡 ${stationArtist}`;
 }
 
+// schedulePlayerRender agrupa las actualizaciones visuales del reproductor en el siguiente cuadro de animación para evitar renderizados redundantes al despertar la pantalla.
+function schedulePlayerRender() {
+  if (playerRenderFramePending) return;
+  if (document.visibilityState === 'hidden') return;
+  playerRenderFramePending = true;
+  requestAnimationFrame(() => {
+    playerRenderFramePending = false;
+    renderMiniPlayer();
+    renderNowPlaying();
+    syncWakeLockWithPlayback();
+    updateMediaSession();
+  });
+}
+
 // initPlayer inicializa los escuchadores de controles, scrubber y MediaSession.
 export function initPlayer() {
   bindMiniPlayerControls();
@@ -130,16 +146,24 @@ export function initPlayer() {
       } else if (!errMsg) {
         lastShownPlayerError = '';
       }
-      renderMiniPlayer();
-      renderNowPlaying();
-      syncWakeLockWithPlayback();
-      updateMediaSession();
+      if (document.visibilityState === 'hidden') {
+        updateMediaSession();
+      } else {
+        schedulePlayerRender();
+      }
     } else if (event === 'now_playing_toggled') {
       if (payload) {
         resetAmbientTimer();
       } else {
         exitAmbientMode(false);
       }
+    }
+  });
+
+  // Al volver a primer plano (pantalla encendida), agrupar y actualizar la interfaz una sola vez
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      schedulePlayerRender();
     }
   });
 
@@ -834,9 +858,12 @@ export function renderMiniPlayer() {
 
   const coverImg = document.getElementById('miniCover');
   if (coverImg) {
-    coverImg.removeAttribute('data-fallback-applied');
-    coverImg.dataset.fallback = '/assets/default-cover.svg';
-    coverImg.src = sanitizeCoverURL(track.cover_url);
+    const targetCover = sanitizeCoverURL(track.cover_url);
+    if (coverImg.getAttribute('src') !== targetCover) {
+      coverImg.removeAttribute('data-fallback-applied');
+      coverImg.dataset.fallback = '/assets/default-cover.svg';
+      coverImg.src = targetCover;
+    }
   }
   checkAutoFetchMissingCover(track);
 
@@ -966,7 +993,7 @@ export function renderNowPlaying() {
 
   const coverSrc = sanitizeCoverURL(track.cover_url);
   const npCover = document.getElementById('npCover');
-  if (npCover) {
+  if (npCover && npCover.getAttribute('src') !== coverSrc) {
     npCover.removeAttribute('data-fallback-applied');
     npCover.dataset.fallback = '/assets/default-cover.svg';
     npCover.src = coverSrc;
@@ -975,7 +1002,8 @@ export function renderNowPlaying() {
 
   // Fondo adaptativo con desenfoque basado en la carátula validada sin riesgo de inyección CSS
   const bg = document.getElementById('npAmbientBg');
-  if (bg) {
+  if (bg && lastAppliedBgCover !== coverSrc) {
+    lastAppliedBgCover = coverSrc;
     bg.style.backgroundImage = `url("${coverSrc}")`;
   }
 
@@ -1051,6 +1079,9 @@ export function tickProgress() {
     const calculated = (state.player.base_elapsed_time || 0) + deltaSec;
     state.player.elapsed_time = dur > 0 ? Math.min(dur, calculated) : calculated;
   }
+
+  // Si la pestaña está oculta o pantalla apagada, omitir manipulaciones DOM
+  if (document.visibilityState === 'hidden') return;
 
   const elapsed = state.player.elapsed_time || 0;
   const pct = dur > 0

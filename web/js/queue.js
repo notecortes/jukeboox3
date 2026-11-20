@@ -9,6 +9,20 @@ import { escapeHtml, sanitizeCoverURL } from './sanitize.js';
 import { formatTime, isLiveStreamTrack, showToast } from './player.js';
 import { openNowPlaying } from './gestures.js';
 
+// Variable para evitar renderizados continuos de cola
+let queueRenderFramePending = false;
+
+// scheduleQueueRender agrupa la renderización de la lista de cola en el siguiente cuadro de animación para no bloquear el hilo principal.
+function scheduleQueueRender() {
+  if (queueRenderFramePending) return;
+  if (document.visibilityState === 'hidden') return;
+  queueRenderFramePending = true;
+  requestAnimationFrame(() => {
+    queueRenderFramePending = false;
+    renderQueueList();
+  });
+}
+
 // initQueue configura los escuchadores de la vista de cola.
 export function initQueue() {
   const btnClear = document.getElementById('btnQueueClear');
@@ -30,9 +44,17 @@ export function initQueue() {
 
   subscribe((event, payload) => {
     if (event === 'queue_updated' || event === 'player_updated') {
-      renderQueueList();
+      scheduleQueueRender();
     } else if (event === 'tab_changed' && payload === 'queue') {
+      scheduleQueueRender();
       requestAnimationFrame(() => scrollActiveQueueTrackIntoView());
+    }
+  });
+
+  // Al volver a ser visible la pantalla, actualizar la cola si estaba pausada
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      scheduleQueueRender();
     }
   });
 }
@@ -47,6 +69,7 @@ function scrollActiveQueueTrackIntoView() {
 
 // renderQueueList dibuja las canciones encoladas con indicadores de tiempo y manejadores de arrastre.
 export function renderQueueList() {
+  if (document.visibilityState === 'hidden') return;
   const container = document.getElementById('queueList');
   const totalCountEl = document.getElementById('queueTotalCount');
   if (!container) return;

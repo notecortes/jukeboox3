@@ -104,7 +104,18 @@ function initLifecycleRecovery() {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (pageUnloading || document.visibilityState !== 'visible') return;
+    if (pageUnloading) return;
+
+    if (document.visibilityState === 'hidden') {
+      // Si la pantalla se apaga o pasa a segundo plano y no se está transmitiendo audio web al navegador,
+      // cerramos la conexión SSE para ahorrar batería y evitar acumulación de eventos en el buffer TCP.
+      if (!streamDesired) {
+        closeSSEConnection();
+      }
+      return;
+    }
+
+    // Al volver a primer plano (pantalla encendida y visible)
     if (!activeEventSource || activeEventSource.readyState === EventSource.CLOSED) {
       sseRetryAttempt = 0;
       connectSSE();

@@ -96,6 +96,19 @@ function switchToLibrarySubTab(subtab) {
   });
 }
 
+let outputsRenderFramePending = false;
+
+// scheduleOutputsRender agrupa el renderizado de salidas de audio en el siguiente cuadro de animación para no bloquear el hilo principal.
+function scheduleOutputsRender() {
+  if (outputsRenderFramePending) return;
+  if (document.visibilityState === 'hidden') return;
+  outputsRenderFramePending = true;
+  requestAnimationFrame(() => {
+    outputsRenderFramePending = false;
+    renderAudioOutputs();
+  });
+}
+
 // initViews inicializa sub-pestañas, índice A-Z, buscador y panel de ajustes.
 export function initViews() {
   bindSubTabs();
@@ -149,7 +162,7 @@ export function initViews() {
         }
       }
     } else if (event === 'player_updated') {
-      renderAudioOutputs();
+      scheduleOutputsRender();
     } else if (event === 'trigger_artist_mix' && payload) {
       triggerSmartMix(payload);
     } else if (event === 'navigate_to_artist' && payload) {
@@ -157,6 +170,13 @@ export function initViews() {
       openArtistDetail(payload);
     } else if (event === 'navigate_back_detail') {
       navigateBackFromDetail();
+    }
+  });
+
+  // Al volver a ser visible la pantalla, sincronizar salidas de audio
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      scheduleOutputsRender();
     }
   });
 }
@@ -4312,6 +4332,7 @@ async function ensureAudioDiagnosticsLoaded(outputs) {
 
 // renderAudioOutputs dibuja dinámicamente las tarjetas de hardware real reportado por MPD sin IDs fijos.
 function renderAudioOutputs(force = false) {
+  if (document.visibilityState === 'hidden') return;
   const container = document.getElementById('audioOutputsList');
   if (!container) return;
 

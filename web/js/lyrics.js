@@ -18,6 +18,14 @@ export function initLyrics() {
     }
   });
 
+  // Al volver la pantalla a primer plano, sincronizar letras si están visibles
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkAndFetchLyrics();
+      syncActiveLyricLine(true);
+    }
+  });
+
   // Ticker de refresco frecuente para coincidencia exacta con el segundo actual
   setInterval(() => syncActiveLyricLine(false), 250);
 }
@@ -329,6 +337,7 @@ function renderLyricsLines() {
 
 // syncActiveLyricLine detecta la línea correspondiente al segundo actual y realiza auto-scroll suave.
 function syncActiveLyricLine(forceAmbientRefresh = false) {
+  if (document.visibilityState === 'hidden') return;
   if (!state.lyrics.found || state.lyrics.synced.length === 0) {
     updateAmbientLyricDisplay(-1, []);
     return;
