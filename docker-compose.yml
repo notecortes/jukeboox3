@@ -112,6 +112,7 @@ services:
       - ./music/local:/music/local:ro
       - nas_music:/music/nas:ro
       - ./music/usb:/music/usb:ro
+      - ${PULSE_DIR:-/tmp}:/tmp/pulse-dir:ro
       - ${PULSE_SOCKET:-/dev/null}:/tmp/pulse-socket:ro
       - ${PULSE_COOKIE:-/dev/null}:/root/.config/pulse/cookie:ro
     networks:

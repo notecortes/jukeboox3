@@ -18,6 +18,7 @@ ALSA_DIAG_FILE="/run/mpd/alsa_cards.txt"
 DSP_CONFIG_FILE="/run/mpd/dsp_config"
 ENABLE_HTTPD="yes"
 LAST_CARDS_SIG=""
+LAST_PULSE_INODE=""
 MPD_PID=""
 STOP_REQUESTED=0
 
@@ -145,8 +146,16 @@ volume_normalization    "yes"
 EOF
 
     HAS_PULSE=0
-    if [ -S /tmp/pulse-socket ]; then
+    PULSE_SOCK_PATH=""
+    if [ -S /tmp/pulse-dir/native ]; then
         HAS_PULSE=1
+        PULSE_SOCK_PATH="unix:/tmp/pulse-dir/native"
+    elif [ -S /tmp/pulse-socket ]; then
+        HAS_PULSE=1
+        PULSE_SOCK_PATH="unix:/tmp/pulse-socket"
+    fi
+
+    if [ "$HAS_PULSE" -eq 1 ]; then
         PULSE_NAME="Altavoces del Sistema (PipeWire / PulseAudio)"
         PULSE_DSP=$(read_dsp_preset "$PULSE_NAME")
         if [ "$PULSE_DSP" != "flat" ] && command -v sox >/dev/null 2>&1; then
@@ -162,11 +171,11 @@ audio_output {
 
 EOF
         else
-            cat << 'EOF' >> "$CONF_OUT"
+            cat << EOF >> "$CONF_OUT"
 audio_output {
     type        "pulse"
     name        "Altavoces del Sistema (PipeWire / PulseAudio)"
-    server      "unix:/tmp/pulse-socket"
+    server      "${PULSE_SOCK_PATH}"
     mixer_type  "software"
     enabled     "yes"
 }
@@ -364,6 +373,9 @@ EOF
 # start_mpd lanza MPD en segundo plano supervisado para permitir recarga en caliente de DACs.
 start_mpd() {
     generate_conf
+    if [ -d /tmp/pulse-dir ]; then
+        LAST_PULSE_INODE=$(ls -i /tmp/pulse-dir/native 2>/dev/null | awk '{print $1}')
+    fi
     mpd --no-daemon --stdout "$CONF_OUT" &
     MPD_PID=$!
 }
@@ -401,6 +413,25 @@ while [ "$STOP_REQUESTED" -eq 0 ]; do
         sleep 1
         start_mpd
         continue
+    fi
+
+    # Detectar reinicio del servidor PipeWire/PulseAudio del host sin requerir recrear el contenedor
+    if [ -d /tmp/pulse-dir ]; then
+        CUR_PULSE_INODE=$(ls -i /tmp/pulse-dir/native 2>/dev/null | awk '{print $1}')
+        if [ -n "$CUR_PULSE_INODE" ] && [ -n "$LAST_PULSE_INODE" ] && [ "$CUR_PULSE_INODE" != "$LAST_PULSE_INODE" ]; then
+            echo "[AuraBox MPD] Reinicio detectado en PipeWire/PulseAudio del host (nuevo inode: $CUR_PULSE_INODE); recargando salidas..."
+            LAST_PULSE_INODE="$CUR_PULSE_INODE"
+            stop_mpd
+            start_mpd
+            continue
+        elif [ -n "$CUR_PULSE_INODE" ] && [ -z "$LAST_PULSE_INODE" ]; then
+            echo "[AuraBox MPD] Servidor PipeWire/PulseAudio del host ahora disponible; activando salidas..."
+            LAST_PULSE_INODE="$CUR_PULSE_INODE"
+            stop_mpd
+            start_mpd
+            continue
+        fi
+        [ -n "$CUR_PULSE_INODE" ] && LAST_PULSE_INODE="$CUR_PULSE_INODE"
     fi
 
     # Detectar conexión o encendido posterior de DACs USB sin reiniciar el contenedor

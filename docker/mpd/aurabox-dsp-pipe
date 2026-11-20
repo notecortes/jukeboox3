@@ -24,7 +24,16 @@ esac
 
 # run_dsp aplica la cadena de filtros SoX y envía el flujo PCM 48kHz 32-bit al dispositivo de audio
 run_dsp() {
-    PULSE_SOCK="${PULSE_SERVER:-unix:/tmp/pulse-socket}"
+    PULSE_SOCK="${PULSE_SERVER:-}"
+    if [ -z "$PULSE_SOCK" ]; then
+        if [ -S /tmp/pulse-dir/native ]; then
+            PULSE_SOCK="unix:/tmp/pulse-dir/native"
+        elif [ -S /tmp/pulse-socket ]; then
+            PULSE_SOCK="unix:/tmp/pulse-socket"
+        else
+            PULSE_SOCK="unix:/tmp/pulse-dir/native"
+        fi
+    fi
     if [ "$IS_PULSE" -eq 1 ]; then
         if [ $# -eq 0 ]; then
             exec paplay --raw --server="${PULSE_SOCK}" --rate=48000 --format=s32le --channels=2
