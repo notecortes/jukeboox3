@@ -3,9 +3,8 @@
 // Swipe-Up, Swipe-Down, Swipe-Horizontal & Queue Drag-and-Drop
 // =====================================================================
 
-import * as api from './api.js';
 import { state, notifyListeners } from './state.js';
-import { renderNowPlaying } from './player.js';
+import { renderNowPlaying, optimisticNext, optimisticPrev } from './player.js';
 
 // initGestures configura los detectores de gestos táctiles para el Mini-Player y Now Playing.
 export function initGestures() {
@@ -117,7 +116,7 @@ export function closeNowPlaying() {
   }
 }
 
-// triggerNextWithFeedback dispara canción siguiente con animación optimista en el mini-player.
+// triggerNextWithFeedback dispara canción siguiente con animación y estado optimista en el mini-player.
 function triggerNextWithFeedback(el) {
   el.style.transform = 'translateX(-20px)';
   el.style.opacity = '0.7';
@@ -125,10 +124,10 @@ function triggerNextWithFeedback(el) {
     el.style.transform = 'translateX(0)';
     el.style.opacity = '1';
   }, 180);
-  api.next();
+  optimisticNext();
 }
 
-// triggerPrevWithFeedback dispara canción anterior con animación optimista en el mini-player.
+// triggerPrevWithFeedback dispara canción anterior con animación y estado optimista en el mini-player.
 function triggerPrevWithFeedback(el) {
   el.style.transform = 'translateX(20px)';
   el.style.opacity = '0.7';
@@ -136,6 +135,6 @@ function triggerPrevWithFeedback(el) {
     el.style.transform = 'translateX(0)';
     el.style.opacity = '1';
   }, 180);
-  api.prev();
+  optimisticPrev();
 }
 

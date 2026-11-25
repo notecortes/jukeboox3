@@ -1669,6 +1669,124 @@ func TestAutoplayProviderAndTriggers(t *testing.T) {
 	}
 }
 
+// TestCoalescedNextSkipsIntermediateTracks verifica que múltiples saltos Next() rápidos colapsan hacia la pista final sin bloquear.
+func TestCoalescedNextSkipsIntermediateTracks(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "coalesce_mpd.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/nas/01.flac", Title: "FLAC 1", Artist: "Band"},
+		{ID: 2, Path: "/music/nas/02.flac", Title: "FLAC 2", Artist: "Band"},
+		{ID: 3, Path: "/music/nas/03.flac", Title: "FLAC 3", Artist: "Band"},
+		{ID: 4, Path: "/music/nas/04.flac", Title: "FLAC 4", Artist: "Band"},
+	}
+	c.ReplaceQueue(tracks, true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for (!c.mpdQueueSynced.Load() || c.syncedVersion.Load() != c.queueVersion.Load()) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	start := time.Now()
+	c.Next()
+	c.Next()
+	c.Next()
+	elapsed := time.Since(start)
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("Next() debería responder de forma no bloqueante, tardó %v", elapsed)
+	}
+
+	deadline2 := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline2) {
+		srv.mu.Lock()
+		song := srv.song
+		st := srv.state
+		srv.mu.Unlock()
+		if song == 3 && st == "play" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	finalSong := srv.song
+	finalState := srv.state
+	srv.mu.Unlock()
+	if finalSong != 3 || finalState != "play" {
+		t.Fatalf("se esperaba reproducción final en índice 3 tras colapso, obtenido song=%d state=%q", finalSong, finalState)
+	}
+}
+
+// TestNextDuringPhase2PlaysImmediately verifica que pulsar Next hacia una pista durante Phase 2 del encolado no espera al final del álbum.
+func TestNextDuringPhase2PlaysImmediately(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "phase2_jump.sock")
+	srv := startStatefulMockMPDServer(t, sockPath)
+
+	srv.mu.Lock()
+	srv.addDelay = 90 * time.Millisecond
+	srv.mu.Unlock()
+
+	c := NewClient(sockPath, "127.0.0.1", "0", nil, nil)
+	t.Cleanup(c.Close)
+	c.tryConnect()
+
+	tracks := []db.Track{
+		{ID: 1, Path: "/music/nas/01.flac", Title: "FLAC 1", Artist: "Band"},
+		{ID: 2, Path: "/music/nas/02.flac", Title: "FLAC 2", Artist: "Band"},
+		{ID: 3, Path: "/music/nas/03.flac", Title: "FLAC 3", Artist: "Band"},
+		{ID: 4, Path: "/music/nas/04.flac", Title: "FLAC 4", Artist: "Band"},
+		{ID: 5, Path: "/music/nas/05.flac", Title: "FLAC 5", Artist: "Band"},
+		{ID: 6, Path: "/music/nas/06.flac", Title: "FLAC 6", Artist: "Band"},
+	}
+	c.ReplaceQueue(tracks, true)
+
+	// Esperar a que track 0 arranque (~90ms) mientras 1..5 siguen añadiéndose (~450ms restantes)
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		plLen := len(srv.playlist)
+		song := srv.song
+		srv.mu.Unlock()
+		if plLen >= 1 && song == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c.Next() // Saltar a índice 1 inmediatamente
+
+	// Debe empezar a sonar índice 1 ANTES de que terminen los 6 FLACs de añadirse (plLen < 6)
+	jumpedEarly := false
+	deadline2 := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline2) {
+		srv.mu.Lock()
+		song := srv.song
+		plLen := len(srv.playlist)
+		st := srv.state
+		srv.mu.Unlock()
+		if song == 1 && st == "play" {
+			if plLen < 6 {
+				jumpedEarly = true
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !jumpedEarly {
+		srv.mu.Lock()
+		t.Fatalf("se esperaba saltar a pista 1 antes de terminar los 6 adds (song=%d, plLen=%d)", srv.song, len(srv.playlist))
+		srv.mu.Unlock()
+	}
+}
+
+
 
 
 

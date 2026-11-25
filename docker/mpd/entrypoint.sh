@@ -133,15 +133,20 @@ log_level               "default"
 zeroconf_enabled        "no"
 auto_update             "no"
 
-audio_buffer_size       "8192"
-buffer_before_play      "10%"
-max_output_buffer_size  "32768"
+audio_buffer_size       "4096"
+max_output_buffer_size  "8192"
 connection_timeout      "300"
 max_connections         "30"
 
 replaygain              "auto"
 replaygain_preamp       "0"
-volume_normalization    "yes"
+volume_normalization    "no"
+
+resampler {
+    plugin  "soxr"
+    quality "medium"
+    threads "1"
+}
 
 EOF
 
@@ -361,7 +366,7 @@ audio_output {
     bitrate         "320"
     format          "44100:16:2"
     max_clients     "10"
-    always_on       "yes"
+    always_on       "no"
     tags            "no"
     enabled         "${ENABLE_HTTPD}"
 }
@@ -393,12 +398,14 @@ trap 'STOP_REQUESTED=1; stop_mpd; exit 0' TERM INT
 
 rm -f "$RELOAD_FLAG"
 start_mpd
+LOOP_TICK=0
 
 while [ "$STOP_REQUESTED" -eq 0 ]; do
     sleep 2 &
     SLEEP_PID=$!
     wait "$SLEEP_PID" 2>/dev/null || true
     [ "$STOP_REQUESTED" -eq 1 ] && break
+    LOOP_TICK=$((LOOP_TICK + 1))
 
     if [ -f "$RELOAD_FLAG" ]; then
         echo "[AuraBox MPD] Recargando salidas de audio bajo demanda..."
@@ -434,7 +441,8 @@ while [ "$STOP_REQUESTED" -eq 0 ]; do
         [ -n "$CUR_PULSE_INODE" ] && LAST_PULSE_INODE="$CUR_PULSE_INODE"
     fi
 
-    # Detectar conexión o encendido posterior de DACs USB sin reiniciar el contenedor
+    # Detectar conexión o encendido posterior de DACs USB cada 4s para reducir carga en Raspberry Pi
+    [ $((LOOP_TICK % 2)) -ne 0 ] && continue
     CUR_RAW=$(LC_ALL=C aplay -l 2>&1 || true)
     CUR_SIG=$(printf '%s\n' "$CUR_RAW" | grep '^card ' || true)
     if [ "$CUR_SIG" != "$LAST_CARDS_SIG" ]; then

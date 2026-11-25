@@ -13,9 +13,12 @@ let mediaSourceNode = null;
 let isAudioContextInitialized = false;
 
 let cachedBars = [];
+let lastBarScales = new Int16Array(32).fill(-1);
 let animFrameId = null;
+let lastFrameTimeMs = 0;
 let freqDataBuffer = null;
 let currentHeights = new Float32Array(32).fill(0.08);
+const VISUALIZER_FRAME_INTERVAL_MS = 50; // ~20 FPS: suave a la vista y ligero para CPU/GPU en Raspberry Pi
 
 let isAudible = false;
 let isVisualizerStreaming = false;
@@ -112,9 +115,17 @@ export function setVisualizerAudible(audible) {
   }
 }
 
-// startVisualizerLoop arranca el ciclo de animación de alta velocidad (requestAnimationFrame) si no está activo.
+// prefersReducedMotion comprueba si el sistema solicita animaciones reducidas para ahorrar recursos.
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+// startVisualizerLoop arranca el ciclo de animación regulado si no está activo y la vista está abierta.
 function startVisualizerLoop() {
   if (animFrameId !== null) return;
+  if (prefersReducedMotion()) return;
   animFrameId = requestAnimationFrame(renderFrame);
 }
 
@@ -126,29 +137,38 @@ function stopVisualizerLoop() {
   }
   for (let i = 0; i < TOTAL_BARS; i++) {
     currentHeights[i] = RESTING_HEIGHT;
-    if (cachedBars[i]) {
+    const restingScale = Math.round(RESTING_HEIGHT * 1000);
+    if (cachedBars[i] && lastBarScales[i] !== restingScale) {
+      lastBarScales[i] = restingScale;
       cachedBars[i].style.transform = `scaleY(${RESTING_HEIGHT})`;
     }
   }
 }
 
-// renderFrame lee en cada frame las magnitudes FFT reales y actualiza la transformación CSS de cada barra.
-function renderFrame() {
+// renderFrame lee magnitudes FFT reales (si el audio web está activo) o aplica síntesis ligera regulada a ~20 FPS.
+function renderFrame(timestamp) {
   animFrameId = null;
 
   const isPlaying = (state.player.status === 'play');
   const isModalOpen = Boolean(state.ui.isNowPlayingOpen);
   const container = document.getElementById('npSpectrumVisualizer');
 
-  if (!container || !isModalOpen) {
+  if (!container || !isModalOpen || document.visibilityState === 'hidden') {
     stopVisualizerLoop();
     return;
   }
 
+  const nowMs = timestamp || performance.now();
+  if (nowMs - lastFrameTimeMs < VISUALIZER_FRAME_INTERVAL_MS) {
+    animFrameId = requestAnimationFrame(renderFrame);
+    return;
+  }
+  lastFrameTimeMs = nowMs;
+
   let hasRealSignal = false;
   let freqData = null;
 
-  if (analyserNode && isAudioContextInitialized) {
+  if (isAudible && analyserNode && isAudioContextInitialized) {
     if (!freqDataBuffer) {
       freqDataBuffer = new Uint8Array(analyserNode.frequencyBinCount);
     }
@@ -166,7 +186,7 @@ function renderFrame() {
     }
   }
 
-  const nowSec = performance.now() / 1000;
+  const nowSec = nowMs / 1000;
   let allResting = true;
 
   for (let i = 0; i < TOTAL_BARS; i++) {
@@ -186,7 +206,7 @@ function renderFrame() {
         const normalized = (avg / 255.0) * TILT_FACTORS[i];
         target = Math.max(RESTING_HEIGHT, Math.min(1.0, normalized));
       } else {
-        // 2. Síntesis rítmica orgánica de respaldo si el flujo de audio aún está conectando
+        // 2. Síntesis rítmica orgánica sin streaming oculto para no cargar CPU de Raspberry Pi
         const bassWave = Math.sin(nowSec * 5.2 + i * 0.18) * 0.5 + 0.5;
         const midWave = Math.cos(nowSec * 7.8 - i * 0.32) * 0.5 + 0.5;
         const kickPulse = (i < 8) ? Math.max(0, Math.sin(nowSec * 8.6)) * 0.48 : 0;
@@ -196,19 +216,21 @@ function renderFrame() {
       }
     }
 
-    // 3. Inercia de caída analógica profesional (Attack instantáneo / Decay suave a 0.86)
+    // 3. Inercia de caída analógica (compensada para 20 FPS)
     if (target >= currentHeights[i]) {
       currentHeights[i] = target;
     } else {
-      currentHeights[i] = Math.max(RESTING_HEIGHT, currentHeights[i] * 0.86);
+      currentHeights[i] = Math.max(RESTING_HEIGHT, currentHeights[i] * 0.72);
     }
 
     if (Math.abs(currentHeights[i] - RESTING_HEIGHT) > 0.005) {
       allResting = false;
     }
 
-    if (cachedBars[i]) {
-      cachedBars[i].style.transform = `scaleY(${currentHeights[i].toFixed(3)})`;
+    const quantized = Math.round(currentHeights[i] * 100);
+    if (cachedBars[i] && lastBarScales[i] !== quantized) {
+      lastBarScales[i] = quantized;
+      cachedBars[i].style.transform = `scaleY(${(quantized / 100).toFixed(2)})`;
     }
   }
 
@@ -218,39 +240,46 @@ function renderFrame() {
   }
 }
 
-// syncVisualizerState sincroniza la captura de audio y la animación según la visibilidad del modal y el estado de reproducción.
+// syncVisualizerState sincroniza animación y audio web evitando abrir /api/stream en segundo plano si no es audible.
 export function syncVisualizerState() {
   const isPlaying = (state.player.status === 'play');
   const isModalOpen = Boolean(state.ui.isNowPlayingOpen);
   const audioElement = document.getElementById('webAudioPlayer');
 
-  if (isPlaying && isModalOpen) {
-    ensureAudioContextRunning();
-    if (audioElement && (!audioElement.src || audioElement.paused)) {
-      if (!audioElement.hasAttribute('src') || !audioElement.src.includes('/api/stream')) {
-        audioElement.src = `/api/stream?_t=${Date.now()}`;
-        audioElement.load();
+  // Nunca abrir ni mantener un stream MP3 silencioso en /api/stream cuando el audio suena por la salida física de la RPi
+  if (!isAudible && isVisualizerStreaming && audioElement) {
+    audioElement.pause();
+    audioElement.removeAttribute('src');
+    audioElement.load();
+    isVisualizerStreaming = false;
+  }
+
+  if (isPlaying && isModalOpen && document.visibilityState !== 'hidden') {
+    if (isAudible) {
+      ensureAudioContextRunning();
+      if (audioElement && (!audioElement.src || audioElement.paused)) {
+        if (!audioElement.hasAttribute('src') || !audioElement.src.includes('/api/stream')) {
+          audioElement.src = `/api/stream?_t=${Date.now()}`;
+          audioElement.load();
+        }
+        const p = audioElement.play();
+        if (p !== undefined) {
+          p.catch(() => {});
+        }
+        isVisualizerStreaming = true;
       }
-      const p = audioElement.play();
-      if (p !== undefined) {
-        p.catch(() => {});
-      }
-      isVisualizerStreaming = true;
     }
     startVisualizerLoop();
   } else {
-    // Si Now Playing está cerrado y el usuario no deseaba audio en el móvil, pausar stream para ahorrar datos y CPU
-    if (!isAudible && isVisualizerStreaming && audioElement && !isModalOpen) {
-      audioElement.pause();
-      isVisualizerStreaming = false;
-    }
     if (!isPlaying && audioElement && !isAudible && !audioElement.paused) {
       audioElement.pause();
       isVisualizerStreaming = false;
     }
-    if (!isPlaying) {
-      // Permitir decaimiento suave a 0 de las barras
+    if (!isPlaying && isModalOpen) {
+      // Permitir decaimiento suave a 0 de las barras solo si el modal sigue abierto
       startVisualizerLoop();
+    } else if (!isModalOpen) {
+      stopVisualizerLoop();
     }
   }
 }

@@ -413,8 +413,8 @@
   right: 12px;
   bottom: calc(var(--dock-height) + var(--safe-bottom) + 8px);
   background: rgba(22, 27, 46, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
   padding: 10px 14px;

@@ -69,6 +69,14 @@ type PlayerState struct {
 // AutoplayProvider define la función callback encargada de generar pistas recomendadas cuando finaliza la cola de reproducción.
 type AutoplayProvider func(lastTrack db.Track) ([]db.Track, error)
 
+// playCommand representa una orden colapsable de salto o reproducción hacia MPD.
+type playCommand struct {
+	seq         uint64
+	ver         uint64
+	index       int
+	resumePause bool
+}
+
 // Client gestiona la comunicación por socket Unix/TCP con MPD y mantiene el estado en memoria sin bloqueos.
 type Client struct {
 	socketPath        string
@@ -105,13 +113,20 @@ type Client struct {
 	sleepEndsAt       time.Time
 	sleepTrackIdx     int
 	sleepTrackPath    string
-	reconnectCh       chan struct{}
-	persistCh         chan func()
-	stopCh            chan struct{}
-	persistWg         sync.WaitGroup
-	fadeWg            sync.WaitGroup
+	reconnectCh        chan struct{}
+	persistCh          chan func()
+	playCh             chan playCommand
+	stopCh             chan struct{}
+	persistWg          sync.WaitGroup
+	playWg             sync.WaitGroup
+	fadeWg             sync.WaitGroup
 	fadeEpoch          atomic.Int64
 	fadeActive         atomic.Bool
+	restoreFadePending atomic.Bool
+	playSeq            atomic.Uint64
+	pushVer            atomic.Uint64
+	pushIdxMu          sync.Mutex
+	pushOrigToMPD      []int
 	fadeDuration       time.Duration
 	softFadeMs         atomic.Int64
 	dspBootSynced      atomic.Bool
@@ -202,6 +217,7 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		queue:       make([]db.Track, 0),
 		reconnectCh:   make(chan struct{}, 1),
 		persistCh:     make(chan func(), 256),
+		playCh:        make(chan playCommand, 1),
 		stopCh:        make(chan struct{}),
 		sleepTrackIdx: -1,
 		state: PlayerState{
@@ -288,6 +304,8 @@ func NewClient(socketPath, host, port string, hub *events.Hub, database *db.DB) 
 		go c.persistWorker()
 	}
 
+	c.playWg.Add(1)
+	go c.playDispatchWorker()
 	go c.connectionSupervisor()
 	go c.progressTicker()
 
@@ -300,6 +318,7 @@ func (c *Client) Close() {
 		c.closed.Store(true)
 		c.cancelFade()
 		close(c.stopCh)
+		c.playWg.Wait()
 		c.fadeWg.Wait()
 		c.persistWg.Wait()
 
@@ -1657,7 +1676,13 @@ func (c *Client) progressTicker() {
 
 		syncCounter++
 		if c.isConnected() {
-			c.syncStatusFromMPD()
+			c.mu.RLock()
+			curPlaying := (c.state.Status == "play")
+			c.mu.RUnlock()
+			// En reposo/pausa consultar MPD cada 2s reduce IPC/CPU en Raspberry Pi manteniendo reactividad al reproducir
+			if curPlaying || syncCounter%2 == 0 {
+				c.syncStatusFromMPD()
+			}
 		} else {
 			c.mu.Lock()
 			advanceNext := false
@@ -1730,7 +1755,8 @@ func (c *Client) progressTicker() {
 			continue
 		}
 
-		if syncCounter%2 == 0 && isPlaying {
+		// Heartbeat SSE cada 5s (el cliente interpola el progreso localmente y los cambios reales se emiten al instante)
+		if syncCounter%5 == 0 && isPlaying {
 			c.broadcastState()
 		}
 	}
@@ -2040,6 +2066,72 @@ func (c *Client) SetSoftFadeDuration(ms int) {
 	c.broadcastState()
 }
 
+// playDispatchWorker serializa y colapsa saltos de pista (Next/Prev/PlayIndex) hacia MPD para que pulsaciones rápidas salten directamente al último tema sin bloquear HTTP.
+func (c *Client) playDispatchWorker() {
+	defer c.playWg.Done()
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case cmd := <-c.playCh:
+			if c.closed.Load() || c.playSeq.Load() != cmd.seq {
+				continue
+			}
+			if c.restoreFadePending.Swap(false) {
+				c.restoreTargetVolumeIfNeeded(true)
+			}
+			if c.closed.Load() || c.playSeq.Load() != cmd.seq {
+				continue
+			}
+			c.playIndexOrRetry(cmd.ver, cmd.index, cmd.resumePause)
+		}
+	}
+}
+
+// enqueuePlayCommand programa de forma no bloqueante la reproducción de un índice descartando saltos intermedios obsoletos.
+func (c *Client) enqueuePlayCommand(ver uint64, index int, resumePause, restoreVol bool) {
+	if restoreVol {
+		c.restoreFadePending.Store(true)
+	}
+	if c.closed.Load() || c.playCh == nil {
+		return
+	}
+	seq := c.playSeq.Add(1)
+	cmd := playCommand{
+		seq:         seq,
+		ver:         ver,
+		index:       index,
+		resumePause: resumePause,
+	}
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case c.playCh <- cmd:
+			return
+		default:
+			select {
+			case <-c.playCh:
+			default:
+			}
+		}
+	}
+}
+
+// lookupPushedMPDIndex consulta si una pista de una versión en curso ya fue añadida a MPD para saltar sin esperar al resto del álbum.
+func (c *Client) lookupPushedMPDIndex(ver uint64, origIdx int) (int, bool) {
+	if c.pushVer.Load() != ver || origIdx < 0 {
+		return -1, false
+	}
+	c.pushIdxMu.Lock()
+	defer c.pushIdxMu.Unlock()
+	if c.pushVer.Load() != ver || origIdx >= len(c.pushOrigToMPD) {
+		return -1, false
+	}
+	mpdIdx := c.pushOrigToMPD[origIdx]
+	return mpdIdx, mpdIdx >= 0
+}
+
 // Play reanuda o arranca la reproducción en MPD con Fade In suave si estaba en pausa.
 func (c *Client) Play() {
 	c.mu.Lock()
@@ -2075,8 +2167,10 @@ func (c *Client) Play() {
 
 	wasFading := c.fadeActive.Load()
 	epoch := c.cancelFade()
+	c.playSeq.Add(1)
 
 	if prevStatus == "pause" && softFade && targetVol > 5 && c.isConnected() {
+		c.restoreFadePending.Store(false)
 		c.fadeActive.Store(true)
 		c.broadcastState()
 		c.fadeWg.Add(1)
@@ -2084,8 +2178,7 @@ func (c *Client) Play() {
 		return
 	}
 
-	c.restoreTargetVolumeIfNeeded(wasFading)
-	c.playIndexOrRetry(ver, idx, prevStatus == "pause")
+	c.enqueuePlayCommand(ver, idx, prevStatus == "pause", wasFading || c.restoreFadePending.Load())
 
 	if prevStatus == "stop" && trackID > 0 {
 		id := trackID
@@ -2113,6 +2206,8 @@ func (c *Client) Pause() {
 	c.mu.Unlock()
 
 	epoch := c.cancelFade()
+	c.playSeq.Add(1)
+	c.restoreFadePending.Store(false)
 	if !c.isConnected() {
 		c.broadcastState()
 		return
@@ -2172,9 +2267,7 @@ func (c *Client) PlayIndex(index int) {
 
 	wasFading := c.fadeActive.Load()
 	c.cancelFade()
-	c.restoreTargetVolumeIfNeeded(wasFading)
-
-	c.playIndexOrRetry(ver, index, false)
+	c.enqueuePlayCommand(ver, index, false, wasFading)
 
 	if trackID > 0 {
 		id := trackID
@@ -2194,6 +2287,14 @@ func (c *Client) playIndexOrRetry(ver uint64, index int, resumePause bool) {
 	}
 
 	if !c.mpdQueueSynced.Load() || c.pendingMPDSync.Load() || c.syncingQueue.Load() || c.syncedVersion.Load() != ver {
+		if !c.pendingMPDSync.Load() {
+			if mpdIdx, ok := c.lookupPushedMPDIndex(ver, index); ok {
+				if _, err := c.sendRawCommand(fmt.Sprintf("play %d\n", mpdIdx)); err == nil {
+					c.markControlUpdate()
+					return
+				}
+			}
+		}
 		go c.retryPlayIndexAfterSync(ver, index)
 		return
 	}
@@ -2335,9 +2436,7 @@ func (c *Client) Next() {
 
 	wasFading := c.fadeActive.Load()
 	c.cancelFade()
-	c.restoreTargetVolumeIfNeeded(wasFading)
-
-	c.playIndexOrRetry(ver, nextIdx, false)
+	c.enqueuePlayCommand(ver, nextIdx, false, wasFading)
 
 	if trackID > 0 {
 		id := trackID
@@ -2362,11 +2461,14 @@ func (c *Client) Prev() {
 		c.state.ElapsedTime = 0
 		c.markControlUpdate()
 		c.mu.Unlock()
+		c.playSeq.Add(1)
 		if c.isConnected() {
-			if _, err := c.sendRawCommand("seekcur 0\n"); err != nil && (!c.mpdQueueSynced.Load() || isMPDAckError(err)) {
-				go c.retryPlayIndexAfterSync(ver, currIdx)
-			}
-			c.markControlUpdate()
+			go func(targetVer uint64, idx int) {
+				if _, err := c.sendRawCommand("seekcur 0\n"); err != nil && (!c.mpdQueueSynced.Load() || isMPDAckError(err)) {
+					c.retryPlayIndexAfterSync(targetVer, idx)
+				}
+				c.markControlUpdate()
+			}(ver, currIdx)
 		} else {
 			c.pendingMPDSync.Store(true)
 			c.triggerReconnect()
@@ -2401,9 +2503,7 @@ func (c *Client) Prev() {
 
 	wasFading := c.fadeActive.Load()
 	c.cancelFade()
-	c.restoreTargetVolumeIfNeeded(wasFading)
-
-	c.playIndexOrRetry(ver, prevIdx, false)
+	c.enqueuePlayCommand(ver, prevIdx, false, wasFading)
 
 	if trackID > 0 {
 		id := trackID
@@ -2536,6 +2636,8 @@ func (c *Client) ReplaceQueue(tracks []db.Track, autoPlay bool) {
 
 	wasFading := c.fadeActive.Load()
 	c.cancelFade()
+	c.playSeq.Add(1)
+	c.restoreFadePending.Store(false)
 	c.restoreTargetVolumeIfNeeded(wasFading)
 
 	c.mu.Lock()
@@ -2675,6 +2777,8 @@ func (c *Client) EnqueueTracks(tracks []db.Track, mode string) {
 	if needPlay {
 		wasFading := c.fadeActive.Load()
 		c.cancelFade()
+		c.playSeq.Add(1)
+		c.restoreFadePending.Store(false)
 		c.restoreTargetVolumeIfNeeded(wasFading)
 	}
 
@@ -2821,6 +2925,17 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 		origToValidIdx[i] = -1
 	}
 
+	c.pushIdxMu.Lock()
+	c.pushOrigToMPD = make([]int, len(tracks))
+	for i := range c.pushOrigToMPD {
+		c.pushOrigToMPD[i] = -1
+	}
+	c.pushVer.Store(ver)
+	c.pushIdxMu.Unlock()
+	defer func() {
+		c.pushVer.Store(0)
+	}()
+
 	validTracks := make([]db.Track, 0, len(tracks))
 	droppedAny := false
 	mpdPlayIdx := -1
@@ -2856,6 +2971,11 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 			newIdx := len(validTracks)
 			validTracks = append(validTracks, tracks[i])
 			origToValidIdx[i] = newIdx
+			c.pushIdxMu.Lock()
+			if c.pushVer.Load() == ver && i < len(c.pushOrigToMPD) {
+				c.pushOrigToMPD[i] = newIdx
+			}
+			c.pushIdxMu.Unlock()
 			if i >= startIdx && mpdPlayIdx < 0 {
 				mpdPlayIdx = newIdx
 				actualStartOrigIdx = i
@@ -2929,8 +3049,25 @@ func (c *Client) pushQueueToMPDLocked(ver uint64, tracks []db.Track, startIdx in
 			}
 			droppedAny = true
 		} else {
-			origToValidIdx[i] = len(validTracks)
+			newIdx := len(validTracks)
+			origToValidIdx[i] = newIdx
 			validTracks = append(validTracks, tracks[i])
+			c.pushIdxMu.Lock()
+			if c.pushVer.Load() == ver && i < len(c.pushOrigToMPD) {
+				c.pushOrigToMPD[i] = newIdx
+			}
+			c.pushIdxMu.Unlock()
+
+			// Si el usuario pulsó Siguiente/PlayIndex hacia esta pista mientras se encolaba el álbum, reproducir al instante sin esperar al resto
+			c.mu.RLock()
+			urgentJump := (c.queueVersion.Load() == ver && c.state.Status == "play" && c.state.CurrentIndex == i)
+			c.mu.RUnlock()
+			if urgentJump && newIdx != mpdPlayIdx {
+				if _, playErr := c.sendRawCommand(fmt.Sprintf("play %d\n", newIdx)); playErr == nil {
+					mpdPlayIdx = newIdx
+					c.markControlUpdate()
+				}
+			}
 		}
 	}
 
@@ -3329,6 +3466,8 @@ func (c *Client) RemoveFromQueue(index int) {
 func (c *Client) ClearQueue() {
 	wasFading := c.fadeActive.Load()
 	c.cancelFade()
+	c.playSeq.Add(1)
+	c.restoreFadePending.Store(false)
 	c.restoreTargetVolumeIfNeeded(wasFading)
 
 	c.mu.Lock()

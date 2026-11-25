@@ -5,7 +5,7 @@
 
 import * as api from './api.js';
 import { state, subscribe, notifyListeners } from './state.js';
-import { sanitizeCoverURL } from './sanitize.js';
+import { sanitizeCoverURL, sanitizeThumbnailURL } from './sanitize.js';
 import { openNowPlaying, closeNowPlaying } from './gestures.js';
 
 // Estado de interacción con el scrubber para no interrumpir el arrastre táctil
@@ -29,6 +29,9 @@ let lastAutoFetchKey = '';
 let autoFetchTimer = null;
 let playerRenderFramePending = false;
 let lastAppliedBgCover = '';
+let lastElapsedLabelText = '';
+let lastDurationLabelText = '';
+let lastProgressScale = '';
 
 // Velocidades de reproducción para podcasts
 const PODCAST_SPEEDS = [1.0, 1.25, 1.5, 2.0, 0.8];
@@ -223,8 +226,8 @@ function bindNowPlayingControls() {
 
   if (btnClose) btnClose.addEventListener('click', closeNowPlaying);
   if (btnPlay) btnPlay.addEventListener('click', optimisticTogglePlay);
-  if (btnNext) btnNext.addEventListener('click', () => api.next());
-  if (btnPrev) btnPrev.addEventListener('click', () => api.prev());
+  if (btnNext) btnNext.addEventListener('click', optimisticNext);
+  if (btnPrev) btnPrev.addEventListener('click', optimisticPrev);
   if (btnShuffle) btnShuffle.addEventListener('click', () => api.shuffleQueue());
   if (btnRepeat) btnRepeat.addEventListener('click', toggleRepeat);
 
@@ -250,7 +253,11 @@ function bindNowPlayingControls() {
       if (elapsedLabel) elapsedLabel.textContent = formatTime(val);
       const dur = state.player.duration || 1;
       const miniFill = document.getElementById('miniProgressFill');
-      if (miniFill) miniFill.style.width = `${Math.min(100, (val / dur) * 100)}%`;
+      if (miniFill) {
+        const ratio = Math.min(1, Math.max(0, val / dur));
+        lastProgressScale = ratio.toFixed(4);
+        miniFill.style.transform = `scaleX(${lastProgressScale})`;
+      }
     });
 
     scrubber.addEventListener('change', () => {
@@ -831,6 +838,55 @@ function optimisticTogglePlay() {
   api.toggle();
 }
 
+// applyOptimisticTrackJump actualiza inmediatamente la interfaz con la pista destino en cola mientras MPD cambia de canción.
+function applyOptimisticTrackJump(targetIdx) {
+  const queue = Array.isArray(state.queue) ? state.queue : [];
+  if (targetIdx >= 0 && targetIdx < queue.length) {
+    const nextTrack = queue[targetIdx];
+    state.player.current_index = targetIdx;
+    state.player.current_track = { ...nextTrack };
+    state.player.duration = nextTrack.duration || 0;
+    state.player.elapsed_time = 0;
+    state.player.base_elapsed_time = 0;
+    state.player.last_sync_timestamp = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    state.player.status = 'play';
+    state.player.stream_title = '';
+    schedulePlayerRender();
+  }
+}
+
+// optimisticNext salta visualmente a la siguiente pista de inmediato y dispara la orden al servidor sin esperar.
+export function optimisticNext() {
+  const queue = Array.isArray(state.queue) ? state.queue : [];
+  if (queue.length > 0) {
+    let nextIdx = (Number.isInteger(state.player.current_index) ? state.player.current_index : -1) + 1;
+    if (nextIdx >= queue.length && state.player.repeat) {
+      nextIdx = 0;
+    }
+    if (nextIdx >= 0 && nextIdx < queue.length) {
+      applyOptimisticTrackJump(nextIdx);
+    }
+  }
+  api.next().catch(() => {});
+}
+
+// optimisticPrev reinicia visualmente la pista si supera 3s o retrocede a la anterior de forma instantánea.
+export function optimisticPrev() {
+  if ((state.player.elapsed_time || 0) > 3.0) {
+    state.player.elapsed_time = 0;
+    state.player.base_elapsed_time = 0;
+    state.player.last_sync_timestamp = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    tickProgress();
+  } else {
+    const queue = Array.isArray(state.queue) ? state.queue : [];
+    if (queue.length > 0) {
+      const prevIdx = Math.max(0, (Number.isInteger(state.player.current_index) ? state.player.current_index : 0) - 1);
+      applyOptimisticTrackJump(prevIdx);
+    }
+  }
+  api.prev().catch(() => {});
+}
+
 // renderMiniPlayer actualiza el widget flotante dockeado en el tercio inferior.
 export function renderMiniPlayer() {
   const mini = document.getElementById('miniPlayer');
@@ -858,7 +914,7 @@ export function renderMiniPlayer() {
 
   const coverImg = document.getElementById('miniCover');
   if (coverImg) {
-    const targetCover = sanitizeCoverURL(track.cover_url);
+    const targetCover = sanitizeThumbnailURL(track.cover_url);
     if (coverImg.getAttribute('src') !== targetCover) {
       coverImg.removeAttribute('data-fallback-applied');
       coverImg.dataset.fallback = '/assets/default-cover.svg';
@@ -1000,11 +1056,12 @@ export function renderNowPlaying() {
   }
   checkAutoFetchMissingCover(track);
 
-  // Fondo adaptativo con desenfoque basado en la carátula validada sin riesgo de inyección CSS
+  // Fondo adaptativo ligero usando miniatura 240x240 para evitar desenfoques pesados de GPU en Raspberry Pi
+  const ambientSrc = sanitizeThumbnailURL(track.cover_url);
   const bg = document.getElementById('npAmbientBg');
-  if (bg && lastAppliedBgCover !== coverSrc) {
-    lastAppliedBgCover = coverSrc;
-    bg.style.backgroundImage = `url("${coverSrc}")`;
+  if (bg && lastAppliedBgCover !== ambientSrc) {
+    lastAppliedBgCover = ambientSrc;
+    bg.style.backgroundImage = `url("${ambientSrc}")`;
   }
 
   // Badge Hi-Fi técnico o transmisión en directo
@@ -1084,14 +1141,18 @@ export function tickProgress() {
   if (document.visibilityState === 'hidden') return;
 
   const elapsed = state.player.elapsed_time || 0;
-  const pct = dur > 0
-    ? Math.min(100, Math.max(0, (elapsed / dur) * 100))
-    : (isLive && state.player.status === 'play' ? 100 : 0);
+  const ratio = dur > 0
+    ? Math.min(1, Math.max(0, elapsed / dur))
+    : (isLive && state.player.status === 'play' ? 1 : 0);
 
-  const miniFill = document.getElementById('miniProgressFill');
-  if (miniFill) miniFill.style.width = `${pct}%`;
+  const scaleStr = ratio.toFixed(4);
+  if (scaleStr !== lastProgressScale) {
+    lastProgressScale = scaleStr;
+    const miniFill = document.getElementById('miniProgressFill');
+    if (miniFill) miniFill.style.transform = `scaleX(${scaleStr})`;
+  }
 
-  if (!isScrubbing) {
+  if (!isScrubbing && state.ui.isNowPlayingOpen) {
     const scrubber = document.getElementById('npTimelineScrubber');
     const elapsedLabel = document.getElementById('npTimeElapsed');
     const durationLabel = document.getElementById('npTimeDuration');
@@ -1101,19 +1162,19 @@ export function tickProgress() {
         scrubber.max = 1;
         scrubber.value = 1;
       } else {
-        if (dur > 0) scrubber.max = dur;
+        if (dur > 0 && Number(scrubber.max) !== dur) scrubber.max = dur;
         scrubber.value = elapsed;
       }
     }
-    if (elapsedLabel) elapsedLabel.textContent = formatTime(elapsed);
-    if (durationLabel) {
-      if (dur > 0) {
-        durationLabel.textContent = formatTime(dur);
-      } else if (isLive) {
-        durationLabel.textContent = 'EN VIVO';
-      } else {
-        durationLabel.textContent = '0:00';
-      }
+    const nextElapsedText = formatTime(elapsed);
+    if (elapsedLabel && nextElapsedText !== lastElapsedLabelText) {
+      lastElapsedLabelText = nextElapsedText;
+      elapsedLabel.textContent = nextElapsedText;
+    }
+    const nextDurationText = dur > 0 ? formatTime(dur) : (isLive ? 'EN VIVO' : '0:00');
+    if (durationLabel && nextDurationText !== lastDurationLabelText) {
+      lastDurationLabelText = nextDurationText;
+      durationLabel.textContent = nextDurationText;
     }
   }
 

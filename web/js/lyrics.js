@@ -346,7 +346,8 @@ function syncActiveLyricLine(forceAmbientRefresh = false) {
 
   const container = document.getElementById('npLyricsContainer');
   const lyricsOpen = Boolean(container && container.classList.contains('active'));
-  if (!lyricsOpen && !state.ui.isNowPlayingOpen) return;
+  const isAmbient = Boolean(state.ui.isAmbientMode);
+  if (!lyricsOpen && !isAmbient) return;
 
   const currentTime = state.player.elapsed_time || 0;
   const lines = state.lyrics.synced;

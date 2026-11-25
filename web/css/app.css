@@ -216,8 +216,8 @@ html, body {
   align-items: center;
   justify-content: space-between;
   background: var(--bg-header);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-subtle);
   z-index: 30;
   transition: var(--transition-theme);
@@ -481,8 +481,8 @@ html, body {
   height: calc(var(--dock-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   background: var(--bg-dock);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-top: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
