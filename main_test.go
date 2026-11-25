@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1023,6 +1024,71 @@ func TestCoverThumbnailGenerationAndCache(t *testing.T) {
 	s.handleCovers(rec2, req)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("Segunda petición de miniatura falló con %d", rec2.Code)
+	}
+}
+
+// TestPodcastSSRFBlocked verifica que las suscripciones RSS de podcast rechacen IPs privadas, loopback o metadatos SSRF.
+func TestPodcastSSRFBlocked(t *testing.T) {
+	s := &Server{
+		httpClient: mpd.NewSafeExternalHTTPClient(5 * time.Second),
+	}
+
+	targets := []string{
+		"http://127.0.0.1:4081/metrics",
+		"http://localhost:4080/api/status",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://192.168.1.1/feed.xml",
+		"http://10.0.0.5/rss.xml",
+	}
+
+	for _, rawURL := range targets {
+		body := strings.NewReader(fmt.Sprintf(`{"feed_url":%q}`, rawURL))
+		req := httptest.NewRequest(http.MethodPost, "/api/podcasts/subscribe", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.handlePodcastSubscribe(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("URL SSRF %q debía ser rechazada con 400, obtenido %d (%s)", rawURL, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestCoverThumbnailConcurrentDeduplication verifica que peticiones simultáneas de miniatura no causan carreras ni picos de RAM.
+func TestCoverThumbnailConcurrentDeduplication(t *testing.T) {
+	coversDir := t.TempDir()
+	s := &Server{coversDir: coversDir}
+
+	srcImg := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	origPath := filepath.Join(coversDir, "concurrent.jpg")
+	f, err := os.Create(origPath)
+	if err != nil {
+		t.Fatalf("Error creando imagen: %v", err)
+	}
+	if err := jpeg.Encode(f, srcImg, &jpeg.Options{Quality: 85}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Error codificando imagen: %v", err)
+	}
+	_ = f.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan string, 10)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/api/covers/concurrent.jpg?thumb=1", nil)
+			rec := httptest.NewRecorder()
+			s.handleCovers(rec, req)
+			if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+				errs <- fmt.Sprintf("código=%d bytes=%d", rec.Code, rec.Body.Len())
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for e := range errs {
+		t.Fatalf("Fallo en petición concurrente de miniatura: %s", e)
 	}
 }
 

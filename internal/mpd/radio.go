@@ -53,6 +53,11 @@ func isLocalOrInternalHostname(host string) bool {
 		strings.HasSuffix(lower, ".internal")
 }
 
+// NewSafeExternalHTTPClient crea un cliente HTTP seguro anti-SSRF/DNS-rebinding para consultar APIs y feeds externos.
+func NewSafeExternalHTTPClient(timeout time.Duration) *http.Client {
+	return newSafeExternalHTTPClient(timeout)
+}
+
 // newSafeExternalHTTPClient crea un cliente HTTP con verificación de IP tras DNS (anti-SSRF/rebinding) y límite de redirecciones.
 func newSafeExternalHTTPClient(timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{

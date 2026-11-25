@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -201,11 +202,23 @@ func ParseFeedXML(data []byte, feedURL string) (*Podcast, []Episode, error) {
 
 // FetchAndParseFeed descarga un feed RSS desde la red y extrae los datos completos del podcast y sus episodios.
 func FetchAndParseFeed(ctx context.Context, client *http.Client, feedURL string) (*Podcast, []Episode, error) {
+	cleanURL := strings.TrimSpace(feedURL)
+	if cleanURL == "" || strings.ContainsAny(cleanURL, "\r\n\x00") {
+		return nil, nil, fmt.Errorf("URL de feed inválida")
+	}
+	parsedURL, uErr := url.ParseRequestURI(cleanURL)
+	if uErr != nil {
+		return nil, nil, fmt.Errorf("URL de feed malformada: %w", uErr)
+	}
+	scheme := strings.ToLower(parsedURL.Scheme)
+	if (scheme != "http" && scheme != "https") || parsedURL.Host == "" || parsedURL.User != nil {
+		return nil, nil, fmt.Errorf("protocolo o autoridad de feed no permitida")
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cleanURL, nil)
 	if err != nil {
 		return nil, nil, err
 	}

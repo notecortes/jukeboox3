@@ -59,6 +59,10 @@ type Server struct {
 	httpsPublicPort string
 	forceHTTPS      bool
 	startTime       time.Time
+	thumbOnce       sync.Once
+	thumbSem        chan struct{}
+	thumbMu         sync.Mutex
+	thumbFlight     map[string]chan struct{}
 }
 
 // newAudioStreamClient crea un cliente HTTP reutilizable para el proxy de stream MPD con timeouts seguros de conexión.
@@ -188,9 +192,7 @@ func main() {
 		player.SetCoverFetcher(coversService.FetchAndCacheTrackCover)
 	}
 
-	generalHTTPClient := &http.Client{
-		Timeout: 15 * time.Second,
-	}
+	generalHTTPClient := mpd.NewSafeExternalHTTPClient(15 * time.Second)
 
 	srv := &Server{
 		database:        database,
@@ -674,7 +676,15 @@ func resizeToThumbnail(src image.Image, maxDim int) image.Image {
 	return dst
 }
 
-// handleCovers sirve carátulas locales originales o miniaturas cacheadas en disco (240x240) para máximo rendimiento móvil.
+// initThumbSync inicializa de forma segura el semáforo de concurrencia y mapa de deduplicación para miniaturas.
+func (s *Server) initThumbSync() {
+	s.thumbOnce.Do(func() {
+		s.thumbSem = make(chan struct{}, 2)
+		s.thumbFlight = make(map[string]chan struct{})
+	})
+}
+
+// handleCovers sirve carátulas locales originales o miniaturas cacheadas en disco (240x240) protegiendo la RAM de la RPi.
 func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
 	relPath := strings.TrimPrefix(r.URL.Path, "/api/covers/")
 	relPath = filepath.Clean(relPath)
@@ -714,7 +724,65 @@ func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Comprobar que existe la imagen original
+	// 1b. Evitar que múltiples peticiones simultáneas decodifiquen la misma carátula grande en paralelo
+	s.initThumbSync()
+	for {
+		s.thumbMu.Lock()
+		waitCh, inFlight := s.thumbFlight[rawFilename]
+		if !inFlight {
+			waitCh = make(chan struct{})
+			s.thumbFlight[rawFilename] = waitCh
+			s.thumbMu.Unlock()
+			break
+		}
+		s.thumbMu.Unlock()
+
+		select {
+		case <-waitCh:
+			if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+				w.Header().Set("Content-Type", "image/jpeg")
+				http.ServeFile(w, r, thumbPath)
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+	defer func() {
+		s.thumbMu.Lock()
+		if ch, ok := s.thumbFlight[rawFilename]; ok {
+			delete(s.thumbFlight, rawFilename)
+			close(ch)
+		}
+		s.thumbMu.Unlock()
+	}()
+
+	// Re-comprobar caché tras adquirir turno exclusivo para este archivo
+	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+		w.Header().Set("Content-Type", "image/jpeg")
+		http.ServeFile(w, r, thumbPath)
+		return
+	}
+
+	// Limitar decodificaciones simultáneas (máx. 2) para evitar picos OOM en Raspberry Pi
+	select {
+	case s.thumbSem <- struct{}{}:
+		defer func() { <-s.thumbSem }()
+	case <-r.Context().Done():
+		return
+	}
+
+	// 2. Comprobar que existe la imagen original y no excede tamaño seguro (15 MiB)
+	origInfo, err := os.Stat(origPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if origInfo.Size() > 15<<20 {
+		http.ServeFile(w, r, origPath)
+		return
+	}
+
 	origFile, err := os.Open(origPath)
 	if err != nil {
 		http.NotFound(w, r)
@@ -722,14 +790,25 @@ func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
 	}
 	defer origFile.Close()
 
-	// 3. Decodificar la imagen original
+	// 3. Validar dimensiones antes de decodificar píxeles (protección anti-bomba de descompresión)
+	cfg, _, cfgErr := image.DecodeConfig(origFile)
+	if cfgErr != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 6000 || cfg.Height > 6000 || int64(cfg.Width)*int64(cfg.Height) > 25_000_000 {
+		http.ServeFile(w, r, origPath)
+		return
+	}
+	if _, seekErr := origFile.Seek(0, io.SeekStart); seekErr != nil {
+		http.ServeFile(w, r, origPath)
+		return
+	}
+
+	// 4. Decodificar la imagen original ya validada
 	img, _, err := image.Decode(origFile)
 	if err != nil {
 		http.ServeFile(w, r, origPath)
 		return
 	}
 
-	// 4. Escalar mediante muestreo bilineal a un máximo de 240x240 píxeles
+	// 5. Escalar mediante muestreo bilineal a un máximo de 240x240 píxeles
 	thumbImg := resizeToThumbnail(img, 240)
 
 	// 5. Persistir en disco en formato JPEG calidad 80 (peso ligero 8-15KB)
@@ -2626,11 +2705,19 @@ func (s *Server) handlePodcastSubscribe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cleanURL := strings.TrimSpace(payload.FeedURL)
+	cleanURL, urlErr := mpd.ValidateHTTPStreamURL(payload.FeedURL)
+	if urlErr != nil {
+		http.Error(w, urlErr.Error(), http.StatusBadRequest)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	pod, episodes, err := podcasts.FetchAndParseFeed(ctx, s.httpClient, cleanURL)
+	client := s.httpClient
+	if client == nil {
+		client = mpd.NewSafeExternalHTTPClient(15 * time.Second)
+	}
+	pod, episodes, err := podcasts.FetchAndParseFeed(ctx, client, cleanURL)
 	if err != nil {
 		log.Printf("[Podcasts] Error descargando feed %s: %v", cleanURL, err)
 		http.Error(w, fmt.Sprintf("no se pudo descargar el feed: %v", err), http.StatusBadRequest)
@@ -2949,6 +3036,7 @@ func (s *Server) handlePodcastSearch(w http.ResponseWriter, r *http.Request) {
 
 // handlePodcastOPMLImport procesa archivos o texto OPML y suscribe en segundo plano los podcasts descubiertos.
 func (s *Server) handlePodcastOPMLImport(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 11<<20)
 	var opmlData []byte
 
 	// 1. Intentar como subida de archivo multipart
@@ -2992,16 +3080,17 @@ func (s *Server) handlePodcastOPMLImport(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Procesar importación en segundo plano para no bloquear la interfaz web
+	// Procesar importación en segundo plano con cliente HTTP anti-SSRF
 	go func(feeds []podcasts.OPMLOutline) {
 		imported := 0
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := mpd.NewSafeExternalHTTPClient(15 * time.Second)
 		for _, item := range feeds {
-			if item.XMLURL == "" {
+			safeFeedURL, urlErr := mpd.ValidateHTTPStreamURL(item.XMLURL)
+			if urlErr != nil {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			pod, episodes, pErr := podcasts.FetchAndParseFeed(ctx, client, item.XMLURL)
+			pod, episodes, pErr := podcasts.FetchAndParseFeed(ctx, client, safeFeedURL)
 			cancel()
 			if pErr != nil || pod == nil {
 				continue
@@ -3140,11 +3229,15 @@ func (s *Server) handlePodcastsRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func(list []db.Podcast) {
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := mpd.NewSafeExternalHTTPClient(15 * time.Second)
 		refreshed := 0
 		for _, p := range list {
+			safeFeedURL, urlErr := mpd.ValidateHTTPStreamURL(p.FeedURL)
+			if urlErr != nil {
+				continue
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			_, episodes, err := podcasts.FetchAndParseFeed(ctx, client, p.FeedURL)
+			_, episodes, err := podcasts.FetchAndParseFeed(ctx, client, safeFeedURL)
 			cancel()
 			if err != nil {
 				continue
@@ -3619,7 +3712,8 @@ func (s *Server) handlePlaylistImport(w http.ResponseWriter, r *http.Request) {
 
 	contentType := r.Header.Get("Content-Type")
 	if strings.Contains(contentType, "multipart/form-data") {
-		// Límite de 10 MB para archivos de lista M3U
+		// Límite estricto de 11 MB para formularios M3U protegiendo RAM en Raspberry Pi
+		r.Body = http.MaxBytesReader(w, r.Body, 11<<20)
 		if err := r.ParseMultipartForm(10 << 20); err != nil {
 			http.Error(w, "error al procesar formulario multipart", http.StatusBadRequest)
 			return
@@ -3632,7 +3726,7 @@ func (s *Server) handlePlaylistImport(w http.ResponseWriter, r *http.Request) {
 		}
 		defer file.Close()
 
-		rawBytes, err := io.ReadAll(file)
+		rawBytes, err := io.ReadAll(io.LimitReader(file, 10<<20))
 		if err != nil {
 			http.Error(w, "error leyendo el archivo M3U", http.StatusInternalServerError)
 			return
