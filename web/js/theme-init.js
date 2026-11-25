@@ -10,6 +10,9 @@
     var savedTheme = localStorage.getItem('aurabox_theme');
     var theme = savedTheme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
     document.documentElement.setAttribute('data-theme', theme);
+    if (localStorage.getItem('aurabox_ultra_lite') === 'true') {
+      document.documentElement.setAttribute('data-lite', 'true');
+    }
     var metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) {
       metaTheme.setAttribute('content', theme === 'light' ? '#f8fafc' : '#090a0f');

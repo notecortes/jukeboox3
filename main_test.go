@@ -1092,6 +1092,33 @@ func TestCoverThumbnailConcurrentDeduplication(t *testing.T) {
 	}
 }
 
+// TestPrewarmCoverThumbnails verifica la pre-generación pausada de miniaturas tras el escaneo omitiendo SVGs y temporales.
+func TestPrewarmCoverThumbnails(t *testing.T) {
+	coversDir := t.TempDir()
+	s := &Server{coversDir: coversDir}
+
+	srcImg := image.NewRGBA(image.Rect(0, 0, 500, 500))
+	f, err := os.Create(filepath.Join(coversDir, "album_01.jpg"))
+	if err != nil {
+		t.Fatalf("Error creando imagen: %v", err)
+	}
+	if err := jpeg.Encode(f, srcImg, &jpeg.Options{Quality: 85}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Error codificando imagen: %v", err)
+	}
+	_ = f.Close()
+	_ = os.WriteFile(filepath.Join(coversDir, "logo.svg"), []byte("<svg></svg>"), 0644)
+
+	s.PrewarmCoverThumbnails(context.Background())
+
+	if info, err := os.Stat(filepath.Join(coversDir, "thumb", "album_01.jpg")); err != nil || info.Size() == 0 {
+		t.Fatalf("se esperaba miniatura pre-generada en disco: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(coversDir, "thumb", "logo.svg")); err == nil {
+		t.Fatalf("no debe generarse miniatura para archivos SVG")
+	}
+}
+
 
 
 

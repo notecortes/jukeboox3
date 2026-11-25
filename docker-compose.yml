@@ -51,7 +51,7 @@ services:
       - NAS_SHARE=${NAS_SHARE:-music}
       - NAS_USER=${NAS_USER:-guest}
       - NAS_PASS=${NAS_PASS:-}
-      - NAS_OPTIONS=${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8}
+      - NAS_OPTIONS=${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8,rsize=65536}
     volumes:
       # Puntos de montaje de almacenamiento de música y bus ALSA dinámico (hotplug USB DAC)
       - /dev/snd:/dev/snd
@@ -125,7 +125,7 @@ volumes:
     driver_opts:
       type: cifs
       device: "//${NAS_HOST:-192.168.1.100}/${NAS_SHARE:-music}"
-      o: "username=${NAS_USER:-guest},password=${NAS_PASS:-},${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8}"
+      o: "username=${NAS_USER:-guest},password=${NAS_PASS:-},${NAS_OPTIONS:-vers=3.0,sec=ntlmssp,ro,iocharset=utf8,rsize=65536}"
 
 networks:
   aurabox-net:

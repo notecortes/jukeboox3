@@ -700,3 +700,30 @@ html, body {
   opacity: 1;
   pointer-events: auto;
 }
+
+/* ---------------------------------------------------------------------
+   14. Modo Ultra-Ligero (Raspberry Pi 3B+ / Tablets con GPU limitada)
+   --------------------------------------------------------------------- */
+[data-lite="true"] .app-header,
+[data-lite="true"] .bottom-dock,
+[data-lite="true"] .mini-player,
+[data-lite="true"] .np-sleep-popover,
+[data-lite="true"] .np-lyrics-container,
+[data-lite="true"] .shortcuts-modal,
+[data-lite="true"] .multi-select-bar,
+[data-lite="true"] .az-index-slider,
+[data-lite="true"] .context-menu-modal {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-color: var(--bg-surface-elevated);
+}
+
+[data-lite="true"] .np-ambient-bg,
+[data-lite="true"] .np-spectrum-visualizer {
+  display: none !important;
+}
+
+[data-lite="true"] .mini-player.playing,
+[data-lite="true"] .np-artwork-container {
+  box-shadow: var(--shadow-card) !important;
+}

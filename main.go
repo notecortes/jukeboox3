@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -63,6 +64,7 @@ type Server struct {
 	thumbSem        chan struct{}
 	thumbMu         sync.Mutex
 	thumbFlight     map[string]chan struct{}
+	prewarmRunning  atomic.Bool
 }
 
 // newAudioStreamClient crea un cliente HTTP reutilizable para el proxy de stream MPD con timeouts seguros de conexión.
@@ -155,7 +157,6 @@ func main() {
 
 	// Inicializar escáner de biblioteca musical y mantener el índice MPD sincronizado tras cada barrido
 	libScanner := scanner.NewLibraryScanner(database, hub, musicLocal, musicNas, musicUsb, coversDir)
-	libScanner.SetOnScanComplete(player.TriggerLibraryUpdate)
 
 	// Inicializar motor Smart Mix
 	smService := smartmix.NewSmartMixService(database)
@@ -183,8 +184,9 @@ func main() {
 		return database.GetRandomTracks(12)
 	})
 
-	// Inicializar servicio de letras LRCLIB
+	// Inicializar servicio de letras LRCLIB con caché persistente SQLite
 	lyrService := lyrics.NewService()
+	lyrService.SetStore(database)
 
 	// Inicializar servicio de búsqueda de carátulas Cover Art Archive / MusicBrainz / iTunes / Deezer
 	coversService := covers.NewService(coversDir)
@@ -214,6 +216,13 @@ func main() {
 		forceHTTPS:      forceHTTPS,
 		startTime:       time.Now(),
 	}
+
+	prewarmCtx, prewarmCancel := context.WithCancel(context.Background())
+	defer prewarmCancel()
+	libScanner.SetOnScanComplete(func() {
+		player.TriggerLibraryUpdate()
+		go srv.PrewarmCoverThumbnails(prewarmCtx)
+	})
 
 	// Ejecutar escaneo incremental inicial (la reparación de duraciones corre tras indexar)
 	libScanner.ScanLibraryAll()
@@ -684,6 +693,168 @@ func (s *Server) initThumbSync() {
 	})
 }
 
+// ensureThumbnail genera (de forma deduplicada y acotada en RAM) o reutiliza la miniatura 240x240 de una carátula.
+// Devuelve la ruta del archivo a servir, si es miniatura JPEG y si el archivo existe en disco.
+func (s *Server) ensureThumbnail(ctx context.Context, rawFilename string) (servePath string, isThumbFile bool, exists bool) {
+	origPath := filepath.Join(s.coversDir, rawFilename)
+	if strings.HasSuffix(strings.ToLower(rawFilename), ".svg") {
+		if _, err := os.Stat(origPath); err != nil {
+			return "", false, false
+		}
+		return origPath, false, true
+	}
+
+	thumbDir := filepath.Join(s.coversDir, "thumb")
+	_ = os.MkdirAll(thumbDir, 0755)
+	thumbPath := filepath.Join(thumbDir, rawFilename)
+
+	// 1. Si la miniatura ya existe en disco, devolverla al instante sin CPU adicional
+	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+		return thumbPath, true, true
+	}
+
+	// 2. Evitar que múltiples peticiones decodifiquen la misma carátula grande en paralelo
+	s.initThumbSync()
+	for {
+		s.thumbMu.Lock()
+		waitCh, inFlight := s.thumbFlight[rawFilename]
+		if !inFlight {
+			waitCh = make(chan struct{})
+			s.thumbFlight[rawFilename] = waitCh
+			s.thumbMu.Unlock()
+			break
+		}
+		s.thumbMu.Unlock()
+
+		select {
+		case <-waitCh:
+			if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+				return thumbPath, true, true
+			}
+		case <-ctx.Done():
+			return "", false, false
+		}
+	}
+	defer func() {
+		s.thumbMu.Lock()
+		if ch, ok := s.thumbFlight[rawFilename]; ok {
+			delete(s.thumbFlight, rawFilename)
+			close(ch)
+		}
+		s.thumbMu.Unlock()
+	}()
+
+	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+		return thumbPath, true, true
+	}
+
+	// Limitar decodificaciones simultáneas (máx. 2) para evitar picos OOM en Raspberry Pi
+	select {
+	case s.thumbSem <- struct{}{}:
+		defer func() { <-s.thumbSem }()
+	case <-ctx.Done():
+		return "", false, false
+	}
+
+	origInfo, err := os.Stat(origPath)
+	if err != nil {
+		return "", false, false
+	}
+	if origInfo.Size() > 15<<20 {
+		return origPath, false, true
+	}
+
+	origFile, err := os.Open(origPath)
+	if err != nil {
+		return "", false, false
+	}
+	defer origFile.Close()
+
+	// Validar dimensiones antes de decodificar píxeles (protección anti-bomba de descompresión)
+	cfg, _, cfgErr := image.DecodeConfig(origFile)
+	if cfgErr != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 6000 || cfg.Height > 6000 || int64(cfg.Width)*int64(cfg.Height) > 25_000_000 {
+		return origPath, false, true
+	}
+	if _, seekErr := origFile.Seek(0, io.SeekStart); seekErr != nil {
+		return origPath, false, true
+	}
+
+	img, _, err := image.Decode(origFile)
+	if err != nil {
+		return origPath, false, true
+	}
+
+	thumbImg := resizeToThumbnail(img, 240)
+	tmpFile, err := os.CreateTemp(thumbDir, "thumb_*.tmp")
+	if err == nil {
+		tmpPath := tmpFile.Name()
+		if encErr := jpeg.Encode(tmpFile, thumbImg, &jpeg.Options{Quality: 80}); encErr == nil {
+			_ = tmpFile.Close()
+			_ = os.Rename(tmpPath, thumbPath)
+		} else {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}
+
+	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
+		return thumbPath, true, true
+	}
+	return origPath, false, true
+}
+
+// PrewarmCoverThumbnails genera de forma pausada en segundo plano las miniaturas faltantes tras un escaneo.
+func (s *Server) PrewarmCoverThumbnails(ctx context.Context) {
+	if s.coversDir == "" || !s.prewarmRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.prewarmRunning.Store(false)
+
+	entries, err := os.ReadDir(s.coversDir)
+	if err != nil {
+		return
+	}
+
+	thumbDir := filepath.Join(s.coversDir, "thumb")
+	generated := 0
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".tmp") || strings.HasSuffix(lower, ".svg") {
+			continue
+		}
+		if !(strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")) {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(thumbDir, name)); err == nil && info.Size() > 0 {
+			continue
+		}
+
+		if _, isThumb, exists := s.ensureThumbnail(ctx, name); exists && isThumb {
+			generated++
+		}
+
+		// Pausa corta para no saturar la CPU ni la tarjeta SD/USB de la Raspberry Pi
+		timer := time.NewTimer(60 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+
+	if generated > 0 {
+		log.Printf("[Covers] Pre-generadas %d miniaturas 240x240 en segundo plano", generated)
+	}
+}
+
 // handleCovers sirve carátulas locales originales o miniaturas cacheadas en disco (240x240) protegiendo la RAM de la RPi.
 func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
 	relPath := strings.TrimPrefix(r.URL.Path, "/api/covers/")
@@ -706,133 +877,20 @@ func (s *Server) handleCovers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	origPath := filepath.Join(s.coversDir, rawFilename)
-
 	if !isThumb || strings.HasSuffix(strings.ToLower(rawFilename), ".svg") {
 		http.ServeFile(w, r, origPath)
 		return
 	}
 
-	// Directorio de almacenamiento en caché para miniaturas
-	thumbDir := filepath.Join(s.coversDir, "thumb")
-	_ = os.MkdirAll(thumbDir, 0755)
-	thumbPath := filepath.Join(thumbDir, rawFilename)
-
-	// 1. Si la miniatura ya existe en disco, servirla al instante sin CPU adicional
-	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
-		w.Header().Set("Content-Type", "image/jpeg")
-		http.ServeFile(w, r, thumbPath)
-		return
-	}
-
-	// 1b. Evitar que múltiples peticiones simultáneas decodifiquen la misma carátula grande en paralelo
-	s.initThumbSync()
-	for {
-		s.thumbMu.Lock()
-		waitCh, inFlight := s.thumbFlight[rawFilename]
-		if !inFlight {
-			waitCh = make(chan struct{})
-			s.thumbFlight[rawFilename] = waitCh
-			s.thumbMu.Unlock()
-			break
-		}
-		s.thumbMu.Unlock()
-
-		select {
-		case <-waitCh:
-			if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
-				w.Header().Set("Content-Type", "image/jpeg")
-				http.ServeFile(w, r, thumbPath)
-				return
-			}
-		case <-r.Context().Done():
-			return
-		}
-	}
-	defer func() {
-		s.thumbMu.Lock()
-		if ch, ok := s.thumbFlight[rawFilename]; ok {
-			delete(s.thumbFlight, rawFilename)
-			close(ch)
-		}
-		s.thumbMu.Unlock()
-	}()
-
-	// Re-comprobar caché tras adquirir turno exclusivo para este archivo
-	if info, err := os.Stat(thumbPath); err == nil && info.Size() > 0 {
-		w.Header().Set("Content-Type", "image/jpeg")
-		http.ServeFile(w, r, thumbPath)
-		return
-	}
-
-	// Limitar decodificaciones simultáneas (máx. 2) para evitar picos OOM en Raspberry Pi
-	select {
-	case s.thumbSem <- struct{}{}:
-		defer func() { <-s.thumbSem }()
-	case <-r.Context().Done():
-		return
-	}
-
-	// 2. Comprobar que existe la imagen original y no excede tamaño seguro (15 MiB)
-	origInfo, err := os.Stat(origPath)
-	if err != nil {
+	servePath, isThumbFile, exists := s.ensureThumbnail(r.Context(), rawFilename)
+	if !exists {
 		http.NotFound(w, r)
 		return
 	}
-	if origInfo.Size() > 15<<20 {
-		http.ServeFile(w, r, origPath)
-		return
-	}
-
-	origFile, err := os.Open(origPath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer origFile.Close()
-
-	// 3. Validar dimensiones antes de decodificar píxeles (protección anti-bomba de descompresión)
-	cfg, _, cfgErr := image.DecodeConfig(origFile)
-	if cfgErr != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 6000 || cfg.Height > 6000 || int64(cfg.Width)*int64(cfg.Height) > 25_000_000 {
-		http.ServeFile(w, r, origPath)
-		return
-	}
-	if _, seekErr := origFile.Seek(0, io.SeekStart); seekErr != nil {
-		http.ServeFile(w, r, origPath)
-		return
-	}
-
-	// 4. Decodificar la imagen original ya validada
-	img, _, err := image.Decode(origFile)
-	if err != nil {
-		http.ServeFile(w, r, origPath)
-		return
-	}
-
-	// 5. Escalar mediante muestreo bilineal a un máximo de 240x240 píxeles
-	thumbImg := resizeToThumbnail(img, 240)
-
-	// 5. Persistir en disco en formato JPEG calidad 80 (peso ligero 8-15KB)
-	tmpFile, err := os.CreateTemp(thumbDir, "thumb_*.tmp")
-	if err == nil {
-		tmpPath := tmpFile.Name()
-		if encErr := jpeg.Encode(tmpFile, thumbImg, &jpeg.Options{Quality: 80}); encErr == nil {
-			_ = tmpFile.Close()
-			_ = os.Rename(tmpPath, thumbPath)
-		} else {
-			_ = tmpFile.Close()
-			_ = os.Remove(tmpPath)
-		}
-	}
-
-	// 6. Servir archivo de miniatura si se guardó, o escribir en flujo directamente
-	if _, err := os.Stat(thumbPath); err == nil {
+	if isThumbFile {
 		w.Header().Set("Content-Type", "image/jpeg")
-		http.ServeFile(w, r, thumbPath)
-		return
 	}
-
-	w.Header().Set("Content-Type", "image/jpeg")
-	_ = jpeg.Encode(w, thumbImg, &jpeg.Options{Quality: 80})
+	http.ServeFile(w, r, servePath)
 }
 
 // resolvePathThroughSymlinks resuelve rutas absolutas siguiendo symlinks incluso cuando el último nodo aún no existe en disco.
@@ -2458,7 +2516,7 @@ func (s *Server) handleNASConfig(w http.ResponseWriter, r *http.Request) {
 	nasShare := s.database.GetSetting("nas_share", getEnv("NAS_SHARE", "music"))
 	nasUser := s.database.GetSetting("nas_user", getEnv("NAS_USER", ""))
 	nasAlias := s.database.GetSetting("nas_alias", getEnv("NAS_ALIAS", "mi-nas"))
-	nasOpts := s.database.GetSetting("nas_options", getEnv("NAS_OPTIONS", "vers=3.0,sec=ntlmssp,ro,iocharset=utf8"))
+	nasOpts := s.database.GetSetting("nas_options", getEnv("NAS_OPTIONS", "vers=3.0,sec=ntlmssp,ro,iocharset=utf8,rsize=65536"))
 
 	// Verificar si la carpeta /music/nas contiene archivos reales
 	mounted := false

@@ -270,6 +270,16 @@ func (d *DB) createSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pos ON playlist_tracks(playlist_id, position);
 	CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
+
+	CREATE TABLE IF NOT EXISTS lyrics_cache (
+		cache_key TEXT PRIMARY KEY,
+		found INTEGER NOT NULL DEFAULT 0,
+		instrumental INTEGER NOT NULL DEFAULT 0,
+		plain_lyrics TEXT DEFAULT '',
+		synced_json TEXT DEFAULT '[]',
+		source TEXT DEFAULT '',
+		updated_at INTEGER NOT NULL DEFAULT 0
+	);
 	`
 	if _, err := d.conn.Exec(schema); err != nil {
 		return err
@@ -3058,6 +3068,60 @@ func (d *DB) ImportPlaylistM3U(name string, m3uContent string) (*Playlist, int, 
 	}
 
 	return pl, addedCount, nil
+}
+
+// GetLyricsCache recupera letras cacheadas desde SQLite por su clave normalizada sin realizar llamadas HTTP externas.
+func (d *DB) GetLyricsCache(cacheKey string) (found bool, instrumental bool, plain string, syncedJSON string, source string, updatedAt time.Time, ok bool) {
+	if cacheKey == "" {
+		return false, false, "", "", "", time.Time{}, false
+	}
+	var foundInt, instInt int
+	var updatedUnix int64
+	err := d.reader().QueryRow(
+		`SELECT found, instrumental, plain_lyrics, synced_json, source, updated_at FROM lyrics_cache WHERE cache_key = ? LIMIT 1`,
+		cacheKey,
+	).Scan(&foundInt, &instInt, &plain, &syncedJSON, &source, &updatedUnix)
+	if err != nil {
+		return false, false, "", "", "", time.Time{}, false
+	}
+	if updatedUnix > 0 {
+		updatedAt = time.Unix(updatedUnix, 0)
+	}
+	return foundInt != 0, instInt != 0, plain, syncedJSON, source, updatedAt, true
+}
+
+// SaveLyricsCache persiste letras en SQLite de forma segura para disponibilidad offline y respuesta instantánea.
+func (d *DB) SaveLyricsCache(cacheKey string, found, instrumental bool, plain, syncedJSON, source string) error {
+	if cacheKey == "" {
+		return nil
+	}
+	foundInt := 0
+	if found {
+		foundInt = 1
+	}
+	instInt := 0
+	if instrumental {
+		instInt = 1
+	}
+	if syncedJSON == "" {
+		syncedJSON = "[]"
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	_, err := d.conn.Exec(
+		`INSERT INTO lyrics_cache (cache_key, found, instrumental, plain_lyrics, synced_json, source, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(cache_key) DO UPDATE SET
+			found = excluded.found,
+			instrumental = excluded.instrumental,
+			plain_lyrics = excluded.plain_lyrics,
+			synced_json = excluded.synced_json,
+			source = excluded.source,
+			updated_at = excluded.updated_at`,
+		cacheKey, foundInt, instInt, plain, syncedJSON, source, time.Now().Unix(),
+	)
+	return err
 }
 
 

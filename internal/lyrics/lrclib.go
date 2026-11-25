@@ -18,7 +18,8 @@ import (
 const (
 	maxLocalLRCBytes      = 512 * 1024
 	maxLyricsHTTPBytes    = 2 << 20
-	maxLyricsCacheEntries = 1000
+	maxLyricsCacheEntries = 500
+	negativeLyricsTTL     = 24 * time.Hour
 )
 
 var (
@@ -56,9 +57,16 @@ type LyricsResult struct {
 	Source       string      `json:"source"`
 }
 
-// Service gestiona las consultas y la caché de letras musicales sincronizadas.
+// LyricsStore abstrae la persistencia en SQLite para caché duradera y offline de letras musicales.
+type LyricsStore interface {
+	GetLyricsCache(cacheKey string) (found bool, instrumental bool, plain string, syncedJSON string, source string, updatedAt time.Time, ok bool)
+	SaveLyricsCache(cacheKey string, found, instrumental bool, plain, syncedJSON, source string) error
+}
+
+// Service gestiona las consultas y la caché en memoria/SQLite de letras musicales sincronizadas.
 type Service struct {
 	httpClient *http.Client
+	store      LyricsStore
 	cache      map[string]*LyricsResult
 	mu         sync.RWMutex
 }
@@ -71,6 +79,13 @@ func NewService() *Service {
 		},
 		cache: make(map[string]*LyricsResult),
 	}
+}
+
+// SetStore registra el almacenamiento persistente SQLite para cachear letras entre reinicios.
+func (s *Service) SetStore(store LyricsStore) {
+	s.mu.Lock()
+	s.store = store
+	s.mu.Unlock()
 }
 
 // cleanSongTitle limpia metadatos ruidosos como numeración de pista y sufijos de remasterización.
@@ -159,7 +174,7 @@ func (s *Service) setCachedLyrics(cacheKey string, res *LyricsResult) {
 	s.mu.Unlock()
 }
 
-// GetLyrics obtiene letras sincronizadas o texto plano consultando la API LRCLIB con caché en memoria.
+// GetLyrics obtiene letras sincronizadas o texto plano usando caché en memoria, disco (.lrc), SQLite y LRCLIB.
 func (s *Service) GetLyrics(trackName, artistName, albumName string, duration float64, audioPath string) (*LyricsResult, error) {
 	cleanTitle := cleanSongTitle(trackName)
 	cleanArtist := cleanArtistName(artistName)
@@ -171,6 +186,7 @@ func (s *Service) GetLyrics(trackName, artistName, albumName string, duration fl
 		s.mu.RUnlock()
 		return cached, nil
 	}
+	store := s.store
 	s.mu.RUnlock()
 
 	// 1. Prioridad: Archivo .lrc local en disco
@@ -179,7 +195,31 @@ func (s *Service) GetLyrics(trackName, artistName, albumName string, duration fl
 		return localRes, nil
 	}
 
-	// 2. Consulta a LRCLIB con estrategia multi-fase (get -> search track/artist -> search q general)
+	// 2. Caché persistente en SQLite (respuesta <5ms sin llamadas de red)
+	if store != nil {
+		if found, instrumental, plain, syncedJSON, source, updatedAt, ok := store.GetLyricsCache(cacheKey); ok {
+			if found || time.Since(updatedAt) < negativeLyricsTTL {
+				var lines []LyricLine
+				if syncedJSON != "" {
+					_ = json.Unmarshal([]byte(syncedJSON), &lines)
+				}
+				if lines == nil {
+					lines = []LyricLine{}
+				}
+				dbRes := &LyricsResult{
+					Found:        found,
+					Instrumental: instrumental,
+					Plain:        plain,
+					Synced:       lines,
+					Source:       source,
+				}
+				s.setCachedLyrics(cacheKey, dbRes)
+				return dbRes, nil
+			}
+		}
+	}
+
+	// 3. Consulta a LRCLIB con estrategia multi-fase (get -> search track/artist -> search q general)
 	res := s.fetchLRCLIB(cleanTitle, cleanArtist, albumName, duration)
 	if !res.Found && (cleanTitle != trackName || cleanArtist != artistName) {
 		// Fallback con nombres sin limpiar por si LRCLIB indexó el título original
@@ -187,6 +227,10 @@ func (s *Service) GetLyrics(trackName, artistName, albumName string, duration fl
 	}
 
 	s.setCachedLyrics(cacheKey, res)
+	if store != nil {
+		syncedBytes, _ := json.Marshal(res.Synced)
+		_ = store.SaveLyricsCache(cacheKey, res.Found, res.Instrumental, res.Plain, string(syncedBytes), res.Source)
+	}
 	return res, nil
 }
 

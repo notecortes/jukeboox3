@@ -332,10 +332,44 @@ function applyTheme(theme, notify = false) {
   }
 }
 
-// initThemeToggle inicializa la detección y los escuchadores del conmutador de tema claro/oscuro.
+// applyUltraLiteMode activa o desactiva los desenfoques GPU y animaciones del espectro para Raspberry Pi o tablets antiguas.
+function applyUltraLiteMode(enabled, notify = false) {
+  const isLite = Boolean(enabled);
+  if (isLite) {
+    document.documentElement.setAttribute('data-lite', 'true');
+  } else {
+    document.documentElement.removeAttribute('data-lite');
+  }
+  try {
+    localStorage.setItem('aurabox_ultra_lite', isLite ? 'true' : 'false');
+  } catch (err) {
+    console.warn('[Theme] No se pudo guardar aurabox_ultra_lite:', err);
+  }
+  const chk = document.getElementById('settingUltraLite');
+  if (chk) {
+    chk.checked = isLite;
+  }
+  notifyListeners('ultra_lite_changed', isLite);
+  if (notify) {
+    showToast(isLite ? 'Modo Ultra-Ligero activado (máxima fluidez)' : 'Modo Ultra-Ligero desactivado');
+  }
+}
+
+// initThemeToggle inicializa la detección y los escuchadores del conmutador de tema claro/oscuro y modo ultra-ligero.
 function initThemeToggle() {
   const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
   applyTheme(currentTheme, false);
+
+  let savedLite = false;
+  try {
+    savedLite = (localStorage.getItem('aurabox_ultra_lite') === 'true');
+  } catch (_) {}
+  applyUltraLiteMode(savedLite, false);
+
+  const chkLite = document.getElementById('settingUltraLite');
+  if (chkLite) {
+    chkLite.addEventListener('change', () => applyUltraLiteMode(chkLite.checked, true));
+  }
 
   const btnToggle = document.getElementById('btnThemeToggle');
   if (btnToggle) {

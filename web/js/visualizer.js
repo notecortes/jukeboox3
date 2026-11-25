@@ -122,10 +122,15 @@ function prefersReducedMotion() {
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+// isUltraLiteActive comprueba si el usuario activó el Modo Ultra-Ligero para Raspberry Pi / tablets antiguas.
+function isUltraLiteActive() {
+  return document.documentElement.getAttribute('data-lite') === 'true';
+}
+
 // startVisualizerLoop arranca el ciclo de animación regulado si no está activo y la vista está abierta.
 function startVisualizerLoop() {
   if (animFrameId !== null) return;
-  if (prefersReducedMotion()) return;
+  if (prefersReducedMotion() || isUltraLiteActive()) return;
   animFrameId = requestAnimationFrame(renderFrame);
 }
 
@@ -269,7 +274,11 @@ export function syncVisualizerState() {
         isVisualizerStreaming = true;
       }
     }
-    startVisualizerLoop();
+    if (isUltraLiteActive()) {
+      stopVisualizerLoop();
+    } else {
+      startVisualizerLoop();
+    }
   } else {
     if (!isPlaying && audioElement && !isAudible && !audioElement.paused) {
       audioElement.pause();
@@ -296,9 +305,9 @@ export function initVisualizer() {
   };
   unlockEvents.forEach((evt) => window.addEventListener(evt, handleUserGesture, { capture: true, passive: true }));
 
-  // Suscribirse a cambios reactivos de Now Playing y reproducción
+  // Suscribirse a cambios reactivos de Now Playing, reproducción y modo ultra-ligero
   subscribe((event) => {
-    if (event === 'player_updated' || event === 'now_playing_toggled') {
+    if (event === 'player_updated' || event === 'now_playing_toggled' || event === 'ultra_lite_changed') {
       syncVisualizerState();
     }
   });
