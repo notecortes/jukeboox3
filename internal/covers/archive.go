@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aurabox/internal/mpd"
 )
 
 const (
@@ -82,21 +84,9 @@ type Service struct {
 	failedCache  sync.Map // cache de búsquedas fallidas recientes para evitar sobrecargar redes
 }
 
-// NewService crea un servicio de descarga de carátulas configurado con proveedores oficiales y cliente HTTP seguro.
+// NewService crea un servicio de descarga de carátulas configurado con cliente HTTP anti-SSRF/DNS-rebinding.
 func NewService(coversDir string) *Service {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("demasiadas redirecciones al descargar carátula")
-			}
-			scheme := strings.ToLower(req.URL.Scheme)
-			if scheme != "http" && scheme != "https" {
-				return fmt.Errorf("esquema de redirección no permitido: %s", scheme)
-			}
-			return nil
-		},
-	}
+	client := mpd.NewSafeExternalHTTPClient(10 * time.Second)
 	return &Service{
 		coversDir:     coversDir,
 		mbBaseURL:     defaultMusicBrainzURL,

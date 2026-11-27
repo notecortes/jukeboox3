@@ -64,7 +64,7 @@ export function sanitizeHTTPSRedirectURL(rawURL) {
   return '';
 }
 
-// installImageFallbackListener sustituye manejadores onerror inline aplicando carátula por defecto en imágenes fallidas.
+// installImageFallbackListener sustituye manejadores onerror inline aplicando carátula, texto alternativo o contenedor hermano por defecto.
 export function installImageFallbackListener() {
   if (window.__auraboxImgFallbackInstalled) return;
   window.__auraboxImgFallbackInstalled = true;
@@ -74,8 +74,22 @@ export function installImageFallbackListener() {
     if (!target || target.tagName !== 'IMG') return;
     if (target.dataset.fallbackApplied === '1') return;
 
-    const fallback = target.dataset.fallback || DEFAULT_COVER_URL;
     target.dataset.fallbackApplied = '1';
+
+    if (target.dataset.fallbackHideNext === '1') {
+      target.style.display = 'none';
+      if (target.nextElementSibling) {
+        target.nextElementSibling.style.display = 'flex';
+      }
+      return;
+    }
+
+    if (target.dataset.fallbackText && target.parentElement) {
+      target.parentElement.textContent = target.dataset.fallbackText;
+      return;
+    }
+
+    const fallback = target.dataset.fallback || DEFAULT_COVER_URL;
     target.src = fallback;
   }, true);
 }

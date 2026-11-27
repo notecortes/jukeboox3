@@ -942,6 +942,32 @@ func TestFTS5Search(t *testing.T) {
 	}
 }
 
+// TestImportPlaylistM3ULikeWildcards verifica que % y _ en nombres de archivo M3U no actúan como comodines SQL LIKE.
+func TestImportPlaylistM3ULikeWildcards(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_m3u_like.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB falló: %v", err)
+	}
+	defer database.Close()
+
+	_ = database.UpsertTrack(&Track{
+		Path:     "/music/local/album/any_other_track.flac",
+		Filename: "any_other_track.flac",
+		Title:    "Other Track",
+		Artist:   "Artist",
+		Album:    "Album",
+	})
+
+	pl, matchedCount, err := database.ImportPlaylistM3U("Wildcard Test", "#EXTM3U\n/other/folder/%.flac\n")
+	if err != nil {
+		t.Fatalf("ImportPlaylistM3U falló: %v", err)
+	}
+	if pl == nil || matchedCount != 0 {
+		t.Fatalf("El patrón '%%.flac' no debía coincidir con archivos existentes, matchedCount=%d", matchedCount)
+	}
+}
+
 
 
 

@@ -112,3 +112,18 @@ func TestFetchAndCacheTrackCover(t *testing.T) {
 	}
 }
 
+// TestNewServiceBlocksLoopbackSSRF verifica que NewService bloquea descargas hacia direcciones loopback o privadas (anti-SSRF).
+func TestNewServiceBlocksLoopbackSSRF(t *testing.T) {
+	validJPEG := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xFF, 0xD9}
+	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(validJPEG)
+	}))
+	defer internalSrv.Close()
+
+	svc := NewService(t.TempDir())
+	if _, _, err := svc.downloadImageFromURL(context.Background(), internalSrv.URL+"/cover.jpg"); err == nil {
+		t.Fatalf("NewService debía bloquear la conexión SSRF hacia servidor loopback %s", internalSrv.URL)
+	}
+}
+

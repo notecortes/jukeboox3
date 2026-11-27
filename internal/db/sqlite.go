@@ -151,6 +151,8 @@ func (d *DB) createSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_tracks_album_nocase ON tracks(album COLLATE NOCASE);
 	CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album, artist);
 	CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE);
+	CREATE INDEX IF NOT EXISTS idx_tracks_filename ON tracks(filename);
+	CREATE INDEX IF NOT EXISTS idx_tracks_year ON tracks(year);
 	CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
 	CREATE INDEX IF NOT EXISTS idx_tracks_favorite ON tracks(favorite);
 	CREATE INDEX IF NOT EXISTS idx_tracks_created ON tracks(created_at DESC);
@@ -3049,10 +3051,11 @@ func (d *DB) ImportPlaylistM3U(name string, m3uContent string) (*Playlist, int, 
 			continue
 		}
 
-		// 2. Intento por sufijo de ruta o nombre de archivo base
+		// 2. Intento por sufijo de ruta o nombre de archivo base escapando comodines LIKE (%, _, \)
 		filename := filepath.Base(p)
 		if filename != "" && filename != "." && filename != "/" {
-			err = d.reader().QueryRow(`SELECT id FROM tracks WHERE filename = ? OR path LIKE ? LIMIT 1`, filename, "%/"+filename).Scan(&trackID)
+			suffixPattern := "%/" + escapeLikePattern(filename)
+			err = d.reader().QueryRow(`SELECT id FROM tracks WHERE filename = ? OR path LIKE ? ESCAPE '\' LIMIT 1`, filename, suffixPattern).Scan(&trackID)
 			if err == nil && trackID > 0 {
 				matchedIDs = append(matchedIDs, trackID)
 			}

@@ -55,7 +55,7 @@ NAS_HOST=192.168.1.100
 NAS_SHARE=music
 NAS_USER=tu_usuario_nas
 NAS_PASS=tu_contraseña_nas
-NAS_OPTIONS=vers=3.0,sec=ntlmssp,ro,iocharset=utf8
+NAS_OPTIONS=vers=3.0,sec=ntlmssp,ro,iocharset=utf8,rsize=65536
 PULSE_SOCKET=/run/user/1000/pulse/native
 PULSE_COOKIE=/dev/null
 EOF

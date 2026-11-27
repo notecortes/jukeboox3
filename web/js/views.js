@@ -777,12 +777,14 @@ async function openAlbumDetail(albumId, backContext = null) {
     });
 
     const list = document.getElementById('albumTracksList');
+    const fragment = document.createDocumentFragment();
     tracks.forEach((track) => {
       const row = createTrackRow(track, () => {
         api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
       });
-      list.appendChild(row);
+      fragment.appendChild(row);
     });
+    list.appendChild(fragment);
   } catch (err) {
     showToast('Error al cargar álbum');
   }
@@ -1299,12 +1301,14 @@ function renderRecentTracks(container) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   tracks.forEach((track) => {
     const row = createTrackRow(track, () => {
       api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
     });
-    list.appendChild(row);
+    fragment.appendChild(row);
   });
+  list.appendChild(fragment);
 }
 
 // renderFavoritesView dibuja la colección de pistas marcadas como favoritas con acciones de reproducción masiva.
@@ -1401,12 +1405,14 @@ async function renderFavoritesView(container) {
     });
 
     const list = document.getElementById('favoritesTracksList');
+    const fragment = document.createDocumentFragment();
     tracks.forEach((track) => {
       const row = createTrackRow(track, () => {
         api.addToQueue({ track_ids: [track.id], mode: 'play_now' });
       });
-      list.appendChild(row);
+      fragment.appendChild(row);
     });
+    list.appendChild(fragment);
 
   } catch (err) {
     container.innerHTML = `<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al cargar favoritas: ${escapeHtml(err.message)}</div>`;
@@ -1507,6 +1513,7 @@ async function renderFolderBrowser(container, path = '') {
       return;
     }
 
+    const fragment = document.createDocumentFragment();
     items.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'track-row folder-item-row';
@@ -1595,8 +1602,9 @@ async function renderFolderBrowser(container, path = '') {
         });
       }
 
-      list.appendChild(row);
+      fragment.appendChild(row);
     });
+    list.appendChild(fragment);
   } catch (err) {
     container.innerHTML = '<div style="color:var(--color-danger); padding:20px;">Error al explorar carpetas: ' + escapeHtml(err.message || 'Error de red') + '</div>';
   }
@@ -2387,8 +2395,9 @@ function renderRadiosChunked(container, radios, viewContainer) {
         ? `<button type="button" class="radio-fav-btn ${radio.favorite ? 'active' : ''}" title="${radio.favorite ? 'Quitar de favoritas' : 'Añadir a favoritas'}">${radio.favorite ? '❤️' : '🤍'}</button>`
         : '';
 
-      const logoHtml = radio.logo_url
-        ? `<img class="radio-card-logo-img" src="${escapeHtml(radio.logo_url)}" alt="${escapeHtml(radio.name)}" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.textContent='📻';" />`
+      const safeLogoURL = radio.logo_url ? sanitizeCoverURL(radio.logo_url, '') : '';
+      const logoHtml = safeLogoURL
+        ? `<img class="radio-card-logo-img" src="${escapeHtml(safeLogoURL)}" alt="${escapeHtml(radio.name)}" loading="lazy" decoding="async" data-fallback-text="📻" />`
         : '📻';
 
       card.innerHTML = `
@@ -2635,9 +2644,9 @@ function renderPlaylistsCards(container) {
     card.className = 'playlist-card';
     card.style.cssText = 'background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-lg); overflow:hidden; display:flex; flex-direction:column; cursor:pointer; transition:transform 0.15s ease, border-color 0.15s ease; box-shadow:0 4px 12px rgba(0,0,0,0.15);';
 
-    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url) : '';
+    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url, '') : '';
     const coverHTML = coverSrc
-      ? `<img src="${coverSrc}" alt="${escapeHtml(pl.name)}" style="width:100%; height:160px; object-fit:cover; display:block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"/>`
+      ? `<img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(pl.name)}" loading="lazy" decoding="async" data-fallback-hide-next="1" style="width:100%; height:160px; object-fit:cover; display:block;"/>`
       : '';
     const fallbackDisplay = coverSrc ? 'none' : 'flex';
 
@@ -2729,9 +2738,9 @@ async function openPlaylistDetail(playlistId) {
     const pl = detail;
     const tracks = detail.tracks || [];
 
-    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url) : '';
+    const coverSrc = pl.cover_url ? sanitizeCoverURL(pl.cover_url, '') : '';
     const coverHTML = coverSrc
-      ? `<img src="${coverSrc}" alt="${escapeHtml(pl.name)}" style="width:130px; height:130px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.4);" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"/>`
+      ? `<img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(pl.name)}" decoding="async" data-fallback-hide-next="1" style="width:130px; height:130px; border-radius:var(--radius-md); object-fit:cover; box-shadow:0 8px 24px rgba(0,0,0,0.4);"/>`
       : '';
     const fallbackDisplay = coverSrc ? 'none' : 'flex';
 
@@ -2857,6 +2866,7 @@ async function openPlaylistDetail(playlistId) {
       return;
     }
 
+    const fragment = document.createDocumentFragment();
     tracks.forEach((track, idx) => {
       const row = document.createElement('div');
       row.className = 'track-row playlist-track-row';
@@ -2866,11 +2876,11 @@ async function openPlaylistDetail(playlistId) {
       const isLast = idx === tracks.length - 1;
 
       row.innerHTML = `
-        <div class="pl-reorder-controls" style="display:flex; flex-direction:column; gap:2px; flex-shrink:0;" onclick="event.stopPropagation();">
-          <button class="btn-pl-up" title="Subir" ${isFirst ? 'disabled style="opacity:0.25; cursor:default;"' : 'style="cursor:pointer;"'} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1;">
+        <div class="pl-reorder-controls" style="display:flex; flex-direction:column; gap:2px; flex-shrink:0;">
+          <button type="button" class="btn-pl-up" title="Subir" ${isFirst ? 'disabled' : ''} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1; ${isFirst ? 'opacity:0.25; cursor:default;' : 'cursor:pointer;'}">
             ▲
           </button>
-          <button class="btn-pl-down" title="Bajar" ${isLast ? 'disabled style="opacity:0.25; cursor:default;"' : 'style="cursor:pointer;"'} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1;">
+          <button type="button" class="btn-pl-down" title="Bajar" ${isLast ? 'disabled' : ''} style="background:none; border:none; color:var(--text-secondary); font-size:0.75rem; padding:1px 4px; line-height:1; ${isLast ? 'opacity:0.25; cursor:default;' : 'cursor:pointer;'}">
             ▼
           </button>
         </div>
@@ -2892,10 +2902,14 @@ async function openPlaylistDetail(playlistId) {
           ${formatTime(track.duration)}
         </span>
 
-        <button class="btn-pl-remove btn-icon" title="Quitar de esta playlist" style="width:30px; height:30px; border:none; background:transparent; color:var(--text-muted); font-size:1rem; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation();">
+        <button type="button" class="btn-pl-remove btn-icon" title="Quitar de esta playlist" style="width:30px; height:30px; border:none; background:transparent; color:var(--text-muted); font-size:1rem; cursor:pointer; flex-shrink:0;">
           ✕
         </button>
       `;
+
+      row.querySelector('.pl-reorder-controls')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
 
       // Clic en la fila reproduce la playlist desde este punto
       row.addEventListener('click', async () => {
@@ -2940,8 +2954,9 @@ async function openPlaylistDetail(playlistId) {
         }
       });
 
-      listEl.appendChild(row);
+      fragment.appendChild(row);
     });
+    listEl.appendChild(fragment);
   } catch (err) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-danger);">Error al abrir la playlist: ' + escapeHtml(err.message || '') + '</div>';
   }
