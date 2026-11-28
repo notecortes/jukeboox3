@@ -159,6 +159,28 @@
   -webkit-user-select: none;
 }
 
+/* Restaurar selección, foco y edición nativa en controles editables (crítico en Safari y Firefox sobre iPadOS/iOS WebKit) */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea,
+select,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+  touch-action: manipulation;
+}
+
+/* Evitar auto-zoom y desplazamiento del viewport al enfocar inputs < 16px en pantallas táctiles iOS/iPadOS */
+@supports (-webkit-touch-callout: none) {
+  @media (any-pointer: coarse) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
+  }
+}
+
 html, body {
   width: 100%;
   height: 100%;

@@ -20,12 +20,12 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
   <!-- Inicialización inmediata de tema (Evita destello FOUC antes del primer render) -->
-  <script src="/js/theme-init.js?v=28"></script>
+  <script src="/js/theme-init.js?v=36"></script>
 
   <!-- Hojas de estilo CSS modulares -->
-  <link rel="stylesheet" href="/css/app.css?v=28"/>
-  <link rel="stylesheet" href="/css/player.css?v=28"/>
-  <link rel="stylesheet" href="/css/views.css?v=28"/>
+  <link rel="stylesheet" href="/css/app.css?v=36"/>
+  <link rel="stylesheet" href="/css/player.css?v=36"/>
+  <link rel="stylesheet" href="/css/views.css?v=36"/>
 </head>
 <body>
   <div id="app">
@@ -131,7 +131,7 @@
         <div style="position:relative; margin-bottom:16px;">
           <input type="text" id="searchInput" placeholder="Buscar canciones, álbumes, artistas o radios..." 
                  style="width:100%; height:46px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 16px 0 44px; font-size:0.95rem; outline:none;"/>
-          <svg style="position:absolute; left:16px; top:13px; color:var(--text-muted);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg style="position:absolute; left:16px; top:13px; color:var(--text-muted); pointer-events:none;" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/>
             <line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
@@ -966,7 +966,7 @@
   </div>
 
   <!-- Scripts ES Modules Nativos (Sin dependencias ni Node.js) -->
-  <script type="module" src="/js/app.js?v=32"></script>
+  <script type="module" src="/js/app.js?v=36"></script>
 </body>
 </html>
 

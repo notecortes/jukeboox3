@@ -64,6 +64,18 @@ function restoreScrollPosition(key) {
   });
 }
 
+// isActiveTextInput indica si el usuario está escribiendo actualmente en cualquier caja de texto o selector editable.
+function isActiveTextInput(el) {
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toUpperCase();
+  if (tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) return true;
+  if (tag === 'INPUT') {
+    const type = (el.type || 'text').toLowerCase();
+    return type !== 'checkbox' && type !== 'radio' && type !== 'range' && type !== 'button' && type !== 'submit';
+  }
+  return false;
+}
+
 // shouldDeferLibraryRender comprueba si el usuario interactúa con una vista que no conviene sobrescribir durante un escaneo progresivo.
 function shouldDeferLibraryRender(isScanning = false) {
   if (isSelectingAlbums) return true;
@@ -71,7 +83,7 @@ function shouldDeferLibraryRender(isScanning = false) {
   if (document.getElementById('artistDetailView') !== null) return true;
   if (document.getElementById('genreDetailView') !== null) return true;
   if (state.ui.activeSubTab === 'folders') return true;
-  if (document.activeElement && (document.activeElement.id === 'albumFilterInput' || document.activeElement.id === 'artistFilterInput')) return true;
+  if (isActiveTextInput(document.activeElement)) return true;
   if (isScanning) {
     const mainEl = document.querySelector('.main-content');
     if (mainEl && mainEl.scrollTop > 120) return true;
@@ -142,19 +154,16 @@ export function initViews() {
       debouncedLibraryRefresh(payload);
     } else if (event === 'podcasts_updated') {
       hasLoadedPodcasts = false;
-      if (state.ui.activeSubTab === 'podcasts') {
+      if (state.ui.activeSubTab === 'podcasts' && !isActiveTextInput(document.activeElement)) {
         if (state.ui.detailView && state.ui.detailView.type === 'podcast') {
-          const epSearchInput = document.getElementById('episodeSearchInput');
-          if (!epSearchInput || document.activeElement !== epSearchInput) {
-            openPodcastDetail(state.ui.detailView.id);
-          }
+          openPodcastDetail(state.ui.detailView.id);
         } else {
           renderPodcastsView(document.getElementById('libraryContent'), true);
         }
       }
     } else if (event === 'playlists_updated') {
       hasLoadedPlaylists = false;
-      if (state.ui.activeSubTab === 'playlists') {
+      if (state.ui.activeSubTab === 'playlists' && !isActiveTextInput(document.activeElement)) {
         if (state.ui.detailView && state.ui.detailView.type === 'playlist') {
           openPlaylistDetail(state.ui.detailView.id);
         } else {
@@ -2559,7 +2568,7 @@ async function renderPlaylistsView(container, forceRefresh = false) {
       <div style="position:relative; flex:1; min-width:200px; max-width:380px;">
         <input type="text" id="playlistSearchInput" value="${escapeHtml(playlistFilterQuery)}" placeholder="Buscar en mis playlists..." 
                style="width:100%; height:40px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 14px 0 38px; font-size:0.88rem; outline:none;"/>
-        <svg style="position:absolute; left:12px; top:11px; color:var(--text-muted);" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg style="position:absolute; left:12px; top:11px; color:var(--text-muted); pointer-events:none;" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
       </div>
@@ -3399,7 +3408,7 @@ let episodeFilterMode = 'all'; // 'all', 'unplayed', 'favorites'
 let episodeSortOrder = 'newest'; // 'newest', 'oldest'
 let episodeFilterQuery = '';
 
-// renderPodcastsView dibuja el catálogo de podcasts suscritos con barra de búsqueda, favoritos, importación OPML y gestión.
+// renderPodcastsView dibuja la barra de herramientas de podcasts una sola vez y delega la rejilla a renderPodcastsContent para conservar el foco de escritura.
 async function renderPodcastsView(container, forceRefresh = false) {
   if (!hasLoadedPodcasts || forceRefresh || !cachedPodcasts) {
     container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Cargando catálogo de podcasts...</div>';
@@ -3412,7 +3421,97 @@ async function renderPodcastsView(container, forceRefresh = false) {
     }
   }
 
+  let filterEl = document.getElementById('podcastFilterInput');
+  let contentArea = document.getElementById('podcastsContentArea');
+
+  if (!filterEl || !contentArea) {
+    const favTotalCount = cachedPodcasts.filter((p) => p.favorite).length;
+    container.innerHTML = `
+      <div class="podcasts-toolbar">
+        <div class="podcast-filter-chips" style="display:flex; gap:6px; align-items:center;">
+          <button type="button" class="podcast-filter-chip ${!podcastFavoritesOnly ? 'active' : ''}" id="btnPodFilterAll">
+            Todos (${cachedPodcasts.length})
+          </button>
+          <button type="button" class="podcast-filter-chip ${podcastFavoritesOnly ? 'active' : ''}" id="btnPodFilterFav">
+            ❤️ Favoritos (${favTotalCount})
+          </button>
+        </div>
+
+        <input type="text" id="podcastFilterInput" placeholder="Filtrar podcasts por título o autor..." value="${escapeHtml(podcastFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:180px;"/>
+        <span class="badge-format" id="podcastCountBadge" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem; white-space:nowrap;">0 programas</span>
+
+        <button type="button" id="btnPodcastSearchOnline" class="btn-secondary" title="Buscar nuevos podcasts en la red" style="height:38px; padding:0 14px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:700; white-space:nowrap; background:var(--accent); border-color:var(--accent); color:#ffffff;">
+          🔍 Buscar en la Red
+        </button>
+        <button type="button" id="btnPodcastImportOPML" class="btn-secondary" title="Importar archivo OPML" style="height:38px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:600; white-space:nowrap;">
+          📥 Importar OPML
+        </button>
+        <button type="button" id="btnPodcastExportOPML" class="btn-secondary" title="Exportar mis suscripciones a archivo OPML" style="height:38px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:600; white-space:nowrap;">
+          📤 Exportar
+        </button>
+        <button type="button" id="btnPodcastRefresh" class="btn-secondary" title="Actualizar episodios de los feeds" style="height:38px; width:38px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:var(--radius-full); font-size:0.9rem;">
+          🔄
+        </button>
+      </div>
+
+      <div id="podcastsContentArea"></div>
+    `;
+
+    filterEl = document.getElementById('podcastFilterInput');
+    if (filterEl) {
+      filterEl.addEventListener('input', (e) => {
+        podcastFilterQuery = e.target.value;
+        renderPodcastsContent(container);
+      });
+    }
+
+    document.getElementById('btnPodFilterAll')?.addEventListener('click', () => {
+      podcastFavoritesOnly = false;
+      renderPodcastsContent(container);
+    });
+    document.getElementById('btnPodFilterFav')?.addEventListener('click', () => {
+      podcastFavoritesOnly = true;
+      renderPodcastsContent(container);
+    });
+    document.getElementById('btnPodcastSearchOnline')?.addEventListener('click', () => openPodcastSearchModal());
+    document.getElementById('btnPodcastImportOPML')?.addEventListener('click', () => openPodcastOPMLModal());
+    document.getElementById('btnPodcastExportOPML')?.addEventListener('click', () => {
+      window.location.href = api.exportOPMLURL();
+      showToast('Descargando archivo OPML con tus suscripciones');
+    });
+    document.getElementById('btnPodcastRefresh')?.addEventListener('click', async () => {
+      showToast('Actualizando feeds de podcasts...');
+      try {
+        await api.refreshPodcasts();
+        showToast('Actualización de podcasts en curso');
+        setTimeout(() => {
+          renderPodcastsView(container, true);
+        }, 1500);
+      } catch {
+        showToast('Error al refrescar podcasts');
+      }
+    });
+  }
+
+  renderPodcastsContent(container);
+}
+
+// renderPodcastsContent actualiza las tarjetas filtradas de podcasts sin reconstruir el input ni perder el foco al escribir.
+function renderPodcastsContent(container) {
+  const contentArea = document.getElementById('podcastsContentArea');
+  if (!contentArea) return;
+
   const favTotalCount = cachedPodcasts.filter((p) => p.favorite).length;
+  const allBtn = document.getElementById('btnPodFilterAll');
+  const favBtn = document.getElementById('btnPodFilterFav');
+  if (allBtn) {
+    allBtn.classList.toggle('active', !podcastFavoritesOnly);
+    allBtn.textContent = `Todos (${cachedPodcasts.length})`;
+  }
+  if (favBtn) {
+    favBtn.classList.toggle('active', podcastFavoritesOnly);
+    favBtn.textContent = `❤️ Favoritos (${favTotalCount})`;
+  }
 
   let filtered = cachedPodcasts;
   if (podcastFavoritesOnly) {
@@ -3427,179 +3526,114 @@ async function renderPodcastsView(container, forceRefresh = false) {
     );
   }
 
-  container.innerHTML = `
-    <div class="podcasts-toolbar">
-      <div class="podcast-filter-chips" style="display:flex; gap:6px; align-items:center;">
-        <button type="button" class="podcast-filter-chip ${!podcastFavoritesOnly ? 'active' : ''}" id="btnPodFilterAll">
-          Todos (${cachedPodcasts.length})
+  const countBadge = document.getElementById('podcastCountBadge');
+  if (countBadge) {
+    countBadge.textContent = `${filtered.length} programas`;
+  }
+
+  if (filtered.length === 0) {
+    contentArea.innerHTML = `
+      <div class="empty-state-card" style="text-align:center; padding:48px 20px; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-xl); margin-top:16px;">
+        <div style="font-size:3rem; margin-bottom:12px;">🎙️</div>
+        <h3 style="font-size:1.15rem; font-weight:700; margin-bottom:8px;">
+          ${podcastFavoritesOnly ? 'No tienes canales de podcast marcados como favoritos aún' : (q ? 'No se encontraron podcasts con ese término' : 'Sin suscripciones a podcasts aún')}
+        </h3>
+        <p style="font-size:0.85rem; color:var(--text-secondary); max-width:440px; margin:0 auto 20px auto;">
+          ${podcastFavoritesOnly ? 'Pulsa sobre el icono de corazón (❤️) en cualquier canal para agregarlo a tus favoritos.' : (q ? 'Prueba con otra palabra clave o busca directamente en la red.' : 'Descubre programas en la red con el buscador de podcasts o importa tus suscripciones desde un archivo OPML.')}
+        </p>
+        <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+          <button type="button" id="btnEmptySearchOnline" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700;">
+            🔍 Buscar en la Red
+          </button>
+          <button type="button" id="btnEmptyImportOPML" class="btn-secondary" style="font-weight:600;">
+            📥 Importar Archivo OPML
+          </button>
+        </div>
+      </div>
+    `;
+    document.getElementById('btnEmptySearchOnline')?.addEventListener('click', () => openPodcastSearchModal());
+    document.getElementById('btnEmptyImportOPML')?.addEventListener('click', () => openPodcastOPMLModal());
+    return;
+  }
+
+  contentArea.innerHTML = '<div class="podcasts-grid" id="podcastsGrid"></div>';
+  const grid = document.getElementById('podcastsGrid');
+  if (!grid) return;
+
+  const fragment = document.createDocumentFragment();
+  filtered.forEach((pod) => {
+    const card = document.createElement('div');
+    card.className = 'podcast-card';
+    const cover = sanitizeCoverURL(pod.cover_url);
+    card.innerHTML = `
+      <img class="podcast-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(pod.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
+      <div class="podcast-card-info">
+        <div class="podcast-card-title">${escapeHtml(pod.title)}</div>
+        <div class="podcast-card-author">${escapeHtml(pod.author || 'Autor desconocido')}</div>
+        <div class="podcast-card-meta">
+          <span>🎙️ ${pod.episode_count || 0} capítulos</span>
+          ${pod.favorite ? '<span style="color:#ff4b72; font-size:0.75rem;">❤️ Favorito</span>' : ''}
+        </div>
+      </div>
+      <div class="podcast-card-actions">
+        <button type="button" class="podcast-card-btn fav ${pod.favorite ? 'active' : ''}" title="${pod.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos'}">
+          ${pod.favorite ? '❤️' : '🤍'}
         </button>
-        <button type="button" class="podcast-filter-chip ${podcastFavoritesOnly ? 'active' : ''}" id="btnPodFilterFav">
-          ❤️ Favoritos (${favTotalCount})
+        <button type="button" class="podcast-card-btn del" title="Eliminar / Cancelar suscripción">
+          🗑
         </button>
       </div>
+    `;
 
-      <input type="text" id="podcastFilterInput" placeholder="Filtrar podcasts por título o autor..." value="${escapeHtml(podcastFilterQuery)}" style="height:38px; padding:0 14px; font-size:0.85rem; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); outline:none; flex:1; min-width:180px;"/>
-      <span class="badge-format" style="background:var(--bg-surface); color:var(--text-secondary); font-size:0.75rem; white-space:nowrap;">${filtered.length} programas</span>
+    card.addEventListener('click', () => openPodcastDetail(pod.id));
 
-      <button type="button" id="btnPodcastSearchOnline" class="btn-secondary" title="Buscar nuevos podcasts en la red" style="height:38px; padding:0 14px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:700; white-space:nowrap; background:var(--accent); border-color:var(--accent); color:#ffffff;">
-        🔍 Buscar en la Red
-      </button>
-      <button type="button" id="btnPodcastImportOPML" class="btn-secondary" title="Importar archivo OPML" style="height:38px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:600; white-space:nowrap;">
-        📥 Importar OPML
-      </button>
-      <button type="button" id="btnPodcastExportOPML" class="btn-secondary" title="Exportar mis suscripciones a archivo OPML" style="height:38px; padding:0 12px; font-size:0.82rem; border-radius:var(--radius-full); font-weight:600; white-space:nowrap;">
-        📤 Exportar
-      </button>
-      <button type="button" id="btnPodcastRefresh" class="btn-secondary" title="Actualizar episodios de los feeds" style="height:38px; width:38px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:var(--radius-full); font-size:0.9rem;">
-        🔄
-      </button>
-    </div>
-
-    <div id="podcastsContentArea">
-      ${filtered.length === 0 ? `
-        <div class="empty-state-card" style="text-align:center; padding:48px 20px; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-xl); margin-top:16px;">
-          <div style="font-size:3rem; margin-bottom:12px;">🎙️</div>
-          <h3 style="font-size:1.15rem; font-weight:700; margin-bottom:8px;">
-            ${podcastFavoritesOnly ? 'No tienes canales de podcast marcados como favoritos aún' : (q ? 'No se encontraron podcasts con ese término' : 'Sin suscripciones a podcasts aún')}
-          </h3>
-          <p style="font-size:0.85rem; color:var(--text-secondary); max-width:440px; margin:0 auto 20px auto;">
-            ${podcastFavoritesOnly ? 'Pulsa sobre el icono de corazón (❤️) en cualquier canal para agregarlo a tus favoritos.' : (q ? 'Prueba con otra palabra clave o busca directamente en la red.' : 'Descubre programas en la red con el buscador de podcasts o importa tus suscripciones desde un archivo OPML.')}
-          </p>
-          <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
-            <button type="button" id="btnEmptySearchOnline" class="btn-secondary" style="background:var(--accent); border-color:var(--accent); color:#ffffff; font-weight:700;">
-              🔍 Buscar en la Red
-            </button>
-            <button type="button" id="btnEmptyImportOPML" class="btn-secondary" style="font-weight:600;">
-              📥 Importar Archivo OPML
-            </button>
-          </div>
-        </div>
-      ` : `
-        <div class="podcasts-grid" id="podcastsGrid"></div>
-      `}
-    </div>
-  `;
-
-  // Renderizar tarjetas de podcasts si hay datos
-  const grid = document.getElementById('podcastsGrid');
-  if (grid) {
-    filtered.forEach((pod) => {
-      const card = document.createElement('div');
-      card.className = 'podcast-card';
-      const cover = sanitizeCoverURL(pod.cover_url);
-      card.innerHTML = `
-        <img class="podcast-card-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(pod.title)}" loading="lazy" decoding="async" data-fallback="/assets/default-cover.svg"/>
-        <div class="podcast-card-info">
-          <div class="podcast-card-title">${escapeHtml(pod.title)}</div>
-          <div class="podcast-card-author">${escapeHtml(pod.author || 'Autor desconocido')}</div>
-          <div class="podcast-card-meta">
-            <span>🎙️ ${pod.episode_count || 0} capítulos</span>
-            ${pod.favorite ? '<span style="color:#ff4b72; font-size:0.75rem;">❤️ Favorito</span>' : ''}
-          </div>
-        </div>
-        <div class="podcast-card-actions">
-          <button type="button" class="podcast-card-btn fav ${pod.favorite ? 'active' : ''}" title="${pod.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos'}">
-            ${pod.favorite ? '❤️' : '🤍'}
-          </button>
-          <button type="button" class="podcast-card-btn del" title="Eliminar / Cancelar suscripción">
-            🗑
-          </button>
-        </div>
-      `;
-
-      // Navegar a la ficha del podcast al pulsar sobre la tarjeta
-      card.addEventListener('click', () => openPodcastDetail(pod.id));
-
-      // Acción rápida: alternar favorito
-      const favBtn = card.querySelector('.podcast-card-btn.fav');
-      favBtn?.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const prevFav = pod.favorite;
-        pod.favorite = !prevFav;
-        favBtn.classList.toggle('active', pod.favorite);
-        favBtn.textContent = pod.favorite ? '❤️' : '🤍';
-        try {
-          const res = await api.togglePodcastFavorite(pod.id);
-          pod.favorite = res.favorite;
-          favBtn.classList.toggle('active', pod.favorite);
-          favBtn.textContent = pod.favorite ? '❤️' : '🤍';
-          showToast(pod.favorite ? `"${pod.title}" añadido a favoritos` : `"${pod.title}" quitado de favoritos`);
-          if (podcastFavoritesOnly) {
-            renderPodcastsView(container, false);
-          } else {
-            const countFavEl = document.getElementById('btnPodFilterFav');
-            if (countFavEl) {
-              const count = cachedPodcasts.filter((p) => p.favorite).length;
-              countFavEl.textContent = `❤️ Favoritos (${count})`;
-            }
+    const cardFavBtn = card.querySelector('.podcast-card-btn.fav');
+    cardFavBtn?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const prevFav = pod.favorite;
+      pod.favorite = !prevFav;
+      cardFavBtn.classList.toggle('active', pod.favorite);
+      cardFavBtn.textContent = pod.favorite ? '❤️' : '🤍';
+      try {
+        const res = await api.togglePodcastFavorite(pod.id);
+        pod.favorite = res.favorite;
+        cardFavBtn.classList.toggle('active', pod.favorite);
+        cardFavBtn.textContent = pod.favorite ? '❤️' : '🤍';
+        showToast(pod.favorite ? `"${pod.title}" añadido a favoritos` : `"${pod.title}" quitado de favoritos`);
+        if (podcastFavoritesOnly) {
+          renderPodcastsContent(container);
+        } else {
+          const countFavEl = document.getElementById('btnPodFilterFav');
+          if (countFavEl) {
+            const count = cachedPodcasts.filter((p) => p.favorite).length;
+            countFavEl.textContent = `❤️ Favoritos (${count})`;
           }
-        } catch (err) {
-          pod.favorite = prevFav;
-          favBtn.classList.toggle('active', prevFav);
-          favBtn.textContent = prevFav ? '❤️' : '🤍';
-          showToast(`Error al actualizar favorito: ${err.message}`);
         }
-      });
-
-      // Acción rápida: eliminar suscripción
-      const delBtn = card.querySelector('.podcast-card-btn.del');
-      delBtn?.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm(`¿Eliminar suscripción del podcast "${pod.title}" y todos sus capítulos?`)) return;
-        try {
-          await api.unsubscribePodcast(pod.id);
-          cachedPodcasts = cachedPodcasts.filter((p) => p.id !== pod.id);
-          showToast(`Suscripción eliminada: "${pod.title}"`);
-          renderPodcastsView(container, false);
-        } catch (err) {
-          showToast(`Error al eliminar podcast: ${err.message}`);
-        }
-      });
-
-      grid.appendChild(card);
+      } catch (err) {
+        pod.favorite = prevFav;
+        cardFavBtn.classList.toggle('active', prevFav);
+        cardFavBtn.textContent = prevFav ? '❤️' : '🤍';
+        showToast(`Error al actualizar favorito: ${err.message}`);
+      }
     });
-  }
 
-  // Filtrado en tiempo real sin perder foco
-  const filterEl = document.getElementById('podcastFilterInput');
-  if (filterEl) {
-    filterEl.addEventListener('input', (e) => {
-      podcastFilterQuery = e.target.value;
-      renderPodcastsView(container, false);
+    const delBtn = card.querySelector('.podcast-card-btn.del');
+    delBtn?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`¿Eliminar suscripción del podcast "${pod.title}" y todos sus capítulos?`)) return;
+      try {
+        await api.unsubscribePodcast(pod.id);
+        cachedPodcasts = cachedPodcasts.filter((p) => p.id !== pod.id);
+        showToast(`Suscripción eliminada: "${pod.title}"`);
+        renderPodcastsContent(container);
+      } catch (err) {
+        showToast(`Error al eliminar podcast: ${err.message}`);
+      }
     });
-  }
 
-  // Eventos de botones de filtrado Todos / Favoritos
-  document.getElementById('btnPodFilterAll')?.addEventListener('click', () => {
-    podcastFavoritesOnly = false;
-    renderPodcastsView(container, false);
+    fragment.appendChild(card);
   });
-  document.getElementById('btnPodFilterFav')?.addEventListener('click', () => {
-    podcastFavoritesOnly = true;
-    renderPodcastsView(container, false);
-  });
-
-  // Eventos de botones de acción
-  document.getElementById('btnPodcastSearchOnline')?.addEventListener('click', () => openPodcastSearchModal());
-  document.getElementById('btnEmptySearchOnline')?.addEventListener('click', () => openPodcastSearchModal());
-  document.getElementById('btnPodcastImportOPML')?.addEventListener('click', () => openPodcastOPMLModal());
-  document.getElementById('btnEmptyImportOPML')?.addEventListener('click', () => openPodcastOPMLModal());
-  document.getElementById('btnPodcastExportOPML')?.addEventListener('click', () => {
-    window.location.href = api.exportOPMLURL();
-    showToast('Descargando archivo OPML con tus suscripciones');
-  });
-  document.getElementById('btnPodcastRefresh')?.addEventListener('click', async () => {
-    showToast('Actualizando feeds de podcasts...');
-    try {
-      await api.refreshPodcasts();
-      showToast('Actualización de podcasts en curso');
-      setTimeout(() => {
-        renderPodcastsView(container, true);
-      }, 1500);
-    } catch {
-      showToast('Error al refrescar podcasts');
-    }
-  });
+  grid.appendChild(fragment);
 }
 
 // openPodcastDetail carga los datos del podcast y muestra la lista completa de episodios con filtros y acciones.
@@ -4013,7 +4047,7 @@ function openPodcastSearchModal() {
       <div style="padding:14px 16px; border-bottom:1px solid var(--border-subtle); background:var(--bg-surface-elevated);">
         <div style="position:relative;">
           <input type="text" id="onlinePodcastInput" placeholder="Buscar por tema, nombre o autor (ej. Historia, Radio Ambulante, Música)..." style="width:100%; height:42px; border-radius:var(--radius-full); background:var(--bg-surface); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0 14px 0 38px; font-size:0.9rem; outline:none;"/>
-          <span style="position:absolute; left:12px; top:11px; font-size:1rem; opacity:0.6;">🔍</span>
+          <span style="position:absolute; left:12px; top:11px; font-size:1rem; opacity:0.6; pointer-events:none;">🔍</span>
         </div>
         <div style="margin-top:8px; font-size:0.75rem; color:var(--text-muted);">
           Búsqueda directa en el directorio abierto de Apple Podcasts con más de 2 millones de programas.
